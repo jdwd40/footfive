@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Live sports broadcast frame">
+  <defs>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1628"/>
+      <stop offset="100%" stop-color="#140820"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#b)"/>
+  <rect x="40" y="40" width="1120" height="720" fill="none" stroke="#00f0ff" stroke-width="4" opacity="0.35" rx="24"/>
+  <rect x="60" y="60" width="200" height="28" fill="#00f0ff" opacity="0.8" rx="6"/>
+  <text x="70" y="80" font-family="Orbitron,sans-serif" font-size="16" fill="#041018">LIVE</text>
+  <path d="M80 700 H1120" stroke="#ff2d95" stroke-width="2" opacity="0.4"/>
+  <circle cx="1000" cy="140" r="60" fill="none" stroke="#b8ff3c" stroke-width="2" opacity="0.3"/>
+</svg>

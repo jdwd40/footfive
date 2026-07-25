@@ -1,0 +1,35 @@
+# /etc/systemd/system/pocketbase.service
+# PocketBase 0.28.4 for FootFive — review paths/user before install.
+#
+#   sudo cp deploy/pocketbase.service.example /etc/systemd/system/pocketbase.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pocketbase
+
+[Unit]
+Description=PocketBase 0.28.4 (FootFive / Proball)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pocketbase
+Group=pocketbase
+WorkingDirectory=/opt/pocketbase
+ExecStart=/opt/pocketbase/pocketbase serve --http=127.0.0.1:8090 --dir=/opt/pocketbase/pb_data
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+# Do not put secrets in this unit file.
+# Environment= optional only for non-secret flags
+
+# Hardening (optional)
+NoNewPrivileges=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pocketbase
+
+[Install]
+WantedBy=multi-user.target

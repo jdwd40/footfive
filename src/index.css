@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Orbitron", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Rajdhani", ui-sans-serif, system-ui, sans-serif;
+  --color-ink: #070b14;
+  --color-panel: #0d1424;
+  --color-panel-2: #121c32;
+  --color-cyan: #00f0ff;
+  --color-magenta: #ff2d95;
+  --color-lime: #b8ff3c;
+  --color-amber: #ffb020;
+  --color-muted: #8b9bb8;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(0, 240, 255, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(255, 45, 149, 0.1), transparent 55%),
+    #070b14;
+  color: #e8eefc;
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+.glass {
+  background: linear-gradient(160deg, rgba(18, 28, 50, 0.92), rgba(10, 16, 30, 0.88));
+  border: 1px solid rgba(0, 240, 255, 0.18);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.btn-primary {
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-3 font-semibold uppercase tracking-wide;
+  background: linear-gradient(135deg, #00f0ff, #3d7cff);
+  color: #041018;
+  min-height: 44px;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-ghost {
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-3 font-semibold uppercase tracking-wide;
+  border: 1px solid rgba(0, 240, 255, 0.35);
+  color: #c8f7ff;
+  min-height: 44px;
+  background: rgba(0, 240, 255, 0.06);
+}
+
+.input {
+  @apply w-full rounded-xl px-3 py-3 text-base outline-none;
+  background: rgba(7, 11, 20, 0.75);
+  border: 1px solid rgba(139, 155, 184, 0.35);
+  color: #e8eefc;
+  min-height: 44px;
+}
+
+.input:focus {
+  border-color: rgba(0, 240, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.15);
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 240, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 18px 2px rgba(0, 240, 255, 0.35);
+  }
+}
+
+.live-pulse {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes goal-flash {
+  0% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  30% {
+    transform: scale(1.06);
+    filter: brightness(1.4);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+}
+
+.goal-anim {
+  animation: goal-flash 0.7s ease;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.event-enter {
+  animation: slide-in 0.35s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse,
+  .goal-anim,
+  .event-enter {
+    animation: none !important;
+  }
+}
+
+/* Live match: prevent horizontal overflow from switcher */
+main {
+  overflow-x: clip;
+  max-width: 100vw;
+}
+
+/* Safe area for mobile browser chrome */
+@supports (padding: env(safe-area-inset-bottom)) {
+  main {
+    padding-bottom: max(2.5rem, env(safe-area-inset-bottom));
+  }
+}

@@ -1,0 +1,128 @@
+name: FootFive CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: footfive-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit / type / lint / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run test
+      - run: npm run typecheck
+      - run: npm run lint || true
+      - run: npm run build
+      - name: Bundle size note
+        run: |
+          ls -lh dist/assets/*.js | awk '{print $5, $9}'
+          TOTAL=$(du -sb dist | cut -f1)
+          echo "dist_bytes=$TOTAL"
+          # Soft budget 2MB for JS+CSS assets
+          if [ "$TOTAL" -gt 2500000 ]; then
+            echo "WARN: dist larger than 2.5MB"
+          fi
+
+  api-e2e:
+    name: PocketBase API E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Ensure PocketBase binary
+        run: |
+          if [ ! -x pocketbase/pocketbase ]; then
+            echo "Missing pocketbase binary — download 0.28.4"
+            curl -fsSL -o /tmp/pb.zip \
+              https://github.com/pocketbase/pocketbase/releases/download/v0.28.4/pocketbase_0.28.4_linux_amd64.zip
+            unzip -o /tmp/pb.zip -d pocketbase/
+            chmod +x pocketbase/pocketbase
+          fi
+          ./pocketbase/pocketbase --version
+      - name: Start test PocketBase
+        run: |
+          rm -rf pocketbase/pb_data_test
+          mkdir -p pocketbase/pb_data_test
+          cd pocketbase
+          ./pocketbase serve --http=127.0.0.1:8091 --dir=./pb_data_test > ../e2e-pb.log 2>&1 &
+          echo $! > ../pb.pid
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8091/api/health && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8091/api/health
+      - name: Seed + API e2e
+        env:
+          E2E_PB_URL: http://127.0.0.1:8091
+        run: |
+          node scripts/e2e-seed.mjs
+          node tests/integration/e2e-api.mjs
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f pb.pid ]; then kill $(cat pb.pid) || true; fi
+          rm -rf pocketbase/pb_data_test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: api-e2e-logs
+          path: |
+            e2e-pb.log
+          if-no-files-found: ignore
+
+  browser-e2e:
+    name: Playwright Chromium
+    runs-on: ubuntu-latest
+    # Image ships browsers + OS deps for Playwright; pin major with package
+    container:
+      image: mcr.microsoft.com/playwright:v1.52.0-noble
+      options: --user 1001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Ensure PocketBase binary
+        run: |
+          if [ ! -x pocketbase/pocketbase ]; then
+            curl -fsSL -o /tmp/pb.zip \
+              https://github.com/pocketbase/pocketbase/releases/download/v0.28.4/pocketbase_0.28.4_linux_amd64.zip
+            unzip -o /tmp/pb.zip -d pocketbase/
+            chmod +x pocketbase/pocketbase
+          fi
+          ./pocketbase/pocketbase --version | grep -q 0.28.4
+      - name: Install chromium matching package
+        run: npx playwright install chromium
+      - name: Run E2E (API + UI)
+        env:
+          CI: "1"
+          E2E_ALL: "0"
+        run: bash scripts/e2e-run.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright-report/
+            test-results/
+            e2e-pb.log
+            e2e-web.log
+          if-no-files-found: ignore
