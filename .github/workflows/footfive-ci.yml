@@ -51,7 +51,11 @@ jobs:
             echo "Missing pocketbase binary — download 0.28.4"
             curl -fsSL -o /tmp/pb.zip \
               https://github.com/pocketbase/pocketbase/releases/download/v0.28.4/pocketbase_0.28.4_linux_amd64.zip
-            unzip -o /tmp/pb.zip -d pocketbase/
+            if command -v unzip >/dev/null 2>&1; then
+              unzip -o /tmp/pb.zip -d pocketbase/
+            else
+              python3 -c 'import zipfile; zipfile.ZipFile("/tmp/pb.zip").extractall("pocketbase")'
+            fi
             chmod +x pocketbase/pocketbase
           fi
           ./pocketbase/pocketbase --version
