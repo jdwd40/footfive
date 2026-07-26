@@ -113,10 +113,50 @@ function overview($app) {
     matchStates: eventStates,
     retentionDays: world ? world.get("retention_days") : 30,
     progressionPaused: world ? !!world.get("progression_paused") : false,
-    pace: world ? world.get("pace") : "dev",
+    pace: world ? world.get("pace") : "normal",
+    betweenRoundMinutes: world ? world.get("between_round_minutes") || 3 : 3,
+    roundIntervalMs: world ? world.get("round_interval_ms") : null,
+    matchMinuteRealSeconds: world
+      ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
+      : 15,
+    matchMinuteRealMs: world
+      ? parseInt(world.get("match_minute_real_ms"), 10) || 15000
+      : 15000,
+    estimatedNormalMatchMinutes: (function () {
+      var sec = world
+        ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
+        : 15;
+      return Math.round((90 * sec) / 60);
+    })(),
+    estimatedEtMinutes: (function () {
+      var sec = world
+        ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
+        : 15;
+      return Math.round((30 * sec) / 60);
+    })(),
+    speedAppliesTo: "unstarted_matches",
     nextActionAt: world ? world.get("next_action_at") : null,
     lastRetention: world ? world.get("last_retention_result") : null,
     recentAudit: recent,
+    serverTime: new Date().toISOString(),
+    serverTimeMs: Date.now(),
+    activeRound: (function () {
+      try {
+        var ws = require(__hooks + "/lib/worldService.js");
+        var ar = ws.getActiveRound($app);
+        if (!ar) return null;
+        return {
+          id: ar.id,
+          key: ar.get("round_key"),
+          label: ar.get("label"),
+          status: ar.get("status"),
+          scheduledAt: ar.get("scheduled_at"),
+          startedAt: ar.get("started_at"),
+        };
+      } catch (_) {
+        return null;
+      }
+    })(),
   };
 }
 
@@ -445,6 +485,9 @@ function patchWorldSettings($app, adminId, body, reason) {
     retention_days: world.get("retention_days"),
     round_interval_ms: world.get("round_interval_ms"),
     tournament_interval_ms: world.get("tournament_interval_ms"),
+    between_round_minutes: world.get("between_round_minutes"),
+    match_minute_real_seconds: world.get("match_minute_real_seconds"),
+    match_minute_real_ms: world.get("match_minute_real_ms"),
     ai_progression_enabled: world.get("ai_progression_enabled"),
     progression_paused: world.get("progression_paused"),
   };
@@ -455,8 +498,28 @@ function patchWorldSettings($app, adminId, body, reason) {
     if ([0, 7, 30, 90].indexOf(d) < 0) throw new BadRequestError("retention_days 0|7|30|90");
     world.set("retention_days", d);
   }
-  if (body.round_interval_ms != null)
-    world.set("round_interval_ms", parseInt(body.round_interval_ms, 10));
+  if (body.between_round_minutes != null) {
+    var mins = parseInt(body.between_round_minutes, 10);
+    if (isNaN(mins) || mins < 1 || mins > 1440) {
+      throw new BadRequestError("between_round_minutes must be 1–1440");
+    }
+    world.set("between_round_minutes", mins);
+    world.set("round_interval_ms", mins * 60 * 1000);
+  }
+  if (body.match_minute_real_seconds != null) {
+    var sec = parseInt(body.match_minute_real_seconds, 10);
+    if (isNaN(sec) || sec < 1 || sec > 60) {
+      throw new BadRequestError("match_minute_real_seconds must be 1–60");
+    }
+    world.set("match_minute_real_seconds", sec);
+    world.set("match_minute_real_ms", sec * 1000);
+  }
+  if (body.round_interval_ms != null && body.between_round_minutes == null) {
+    var rms = parseInt(body.round_interval_ms, 10);
+    if (isNaN(rms) || rms < 60000) throw new BadRequestError("round_interval_ms min 60000");
+    world.set("round_interval_ms", rms);
+    world.set("between_round_minutes", Math.max(1, Math.round(rms / 60000)));
+  }
   if (body.tournament_interval_ms != null)
     world.set("tournament_interval_ms", parseInt(body.tournament_interval_ms, 10));
   if (body.ai_progression_enabled != null)
@@ -464,8 +527,23 @@ function patchWorldSettings($app, adminId, body, reason) {
   if (body.progression_paused != null)
     world.set("progression_paused", !!body.progression_paused);
   $app.save(world);
-  audit($app, adminId, "world_settings", "world", world.id, before, body, reason, true);
-  return { ok: true };
+  // Do not echo secrets; body may contain only settings
+  var safeBody = {};
+  for (var k in body) {
+    if (Object.prototype.hasOwnProperty.call(body, k) && k.indexOf("password") < 0) {
+      safeBody[k] = body[k];
+    }
+  }
+  audit($app, adminId, "world_settings", "world", world.id, before, safeBody, reason, true);
+  return {
+    ok: true,
+    between_round_minutes: world.get("between_round_minutes"),
+    round_interval_ms: world.get("round_interval_ms"),
+    match_minute_real_seconds: world.get("match_minute_real_seconds"),
+    match_minute_real_ms: world.get("match_minute_real_ms"),
+    applies_to: "unstarted_matches",
+    note: "Live matches keep their kickoff speed snapshot",
+  };
 }
 
 function listAudit($app, filters) {

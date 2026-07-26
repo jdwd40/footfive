@@ -6,6 +6,7 @@ var TEAMS = [
   {
     slug: "new_metro_city",
     name: "New Metro City",
+    abbreviation: "MET",
     grade: "A++",
     primary: "#00f0ff",
     secondary: "#0a0a1a",
@@ -23,6 +24,7 @@ var TEAMS = [
   {
     slug: "mega_city_one",
     name: "Mega City One",
+    abbreviation: "MC1",
     grade: "A+",
     primary: "#ff2d55",
     secondary: "#1a0a10",
@@ -40,6 +42,7 @@ var TEAMS = [
   {
     slug: "port_hilo",
     name: "Port Hilo",
+    abbreviation: "PHL",
     grade: "A",
     primary: "#ff9f0a",
     secondary: "#1a1208",
@@ -57,6 +60,7 @@ var TEAMS = [
   {
     slug: "tripper_city",
     name: "Tripper City",
+    abbreviation: "TRI",
     grade: "A",
     primary: "#bf5af2",
     secondary: "#140a1a",
@@ -74,6 +78,7 @@ var TEAMS = [
   {
     slug: "outside_city",
     name: "Outside City",
+    abbreviation: "OUT",
     grade: "A-",
     primary: "#30d158",
     secondary: "#0a1a0e",
@@ -91,6 +96,7 @@ var TEAMS = [
   {
     slug: "green_bay",
     name: "Green Bay",
+    abbreviation: "GRN",
     grade: "B+",
     primary: "#34c759",
     secondary: "#0a140c",
@@ -108,6 +114,7 @@ var TEAMS = [
   {
     slug: "mega_city_two",
     name: "Mega City Two",
+    abbreviation: "MC2",
     grade: "B+",
     primary: "#ff6482",
     secondary: "#1a0c10",
@@ -125,6 +132,7 @@ var TEAMS = [
   {
     slug: "airway_city",
     name: "Airway City",
+    abbreviation: "AIR",
     grade: "B",
     primary: "#64d2ff",
     secondary: "#0a121a",
@@ -142,6 +150,7 @@ var TEAMS = [
   {
     slug: "virgin",
     name: "Virgin",
+    abbreviation: "VIR",
     grade: "B",
     primary: "#ffffff",
     secondary: "#1a1a1a",
@@ -159,6 +168,7 @@ var TEAMS = [
   {
     slug: "st_marry",
     name: "St Marry",
+    abbreviation: "STM",
     grade: "B-",
     primary: "#ffd60a",
     secondary: "#1a1608",
@@ -176,6 +186,7 @@ var TEAMS = [
   {
     slug: "orlean_city",
     name: "Orlean City",
+    abbreviation: "ORL",
     grade: "B-",
     primary: "#ff6b4a",
     secondary: "#1a0e0a",
@@ -193,6 +204,7 @@ var TEAMS = [
   {
     slug: "atlan",
     name: "Atlan",
+    abbreviation: "ATL",
     grade: "C+",
     primary: "#5ac8fa",
     secondary: "#0a1018",
@@ -210,6 +222,7 @@ var TEAMS = [
   {
     slug: "doge_city",
     name: "Doge City",
+    abbreviation: "DOG",
     grade: "C+",
     primary: "#ffcc00",
     secondary: "#1a1400",
@@ -227,6 +240,7 @@ var TEAMS = [
   {
     slug: "metro_bay",
     name: "Metro Bay",
+    abbreviation: "MBY",
     grade: "C",
     primary: "#0a84ff",
     secondary: "#080e1a",
@@ -244,6 +258,7 @@ var TEAMS = [
   {
     slug: "redstone",
     name: "Redstone",
+    abbreviation: "RED",
     grade: "C",
     primary: "#ff3b30",
     secondary: "#1a0808",
@@ -261,6 +276,7 @@ var TEAMS = [
   {
     slug: "swirl",
     name: "Swirl",
+    abbreviation: "SWR",
     grade: "C-",
     primary: "#ac8e68",
     secondary: "#14100c",

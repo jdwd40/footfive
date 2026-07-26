@@ -2,9 +2,10 @@
 
 Shared 24/7 cyborg Proball. Claim a team, manage the squad between rounds, coach live, bet with personal credits.
 
-**Phase 7 (RC):** browser E2E green, CI, health routes, forced password change, observability.  
-**Phase 6:** production hardening, backfill, stall recovery, VPS deploy pack.  
-**Phase 5:** records centre, administrator console, data retention, exact shootout kicks.
+**Phase 12 (live):** admin login → `/admin` (with password-change gate); Admin nav; official team abbreviations on tickers.  
+**Phase 11:** **15s per match minute**; slower live events; admin account bootstrap.
+
+**CI/CD:** push to `main` → GitHub Actions (`deploy.yml`) builds `/footfive/` and deploys SPA + PB hooks/migrations to the VPS. See `deploy/DEPLOY.md`.
 
 ## Money
 
@@ -41,8 +42,8 @@ Do **not** wipe `pb_data` for additive migrations. PocketBase **0.28.4** only �
 - All actions server-checked; normal users get 403.
 - Sensitive actions write `admin_audit_logs`.
 - Credits/treasury: transactional ledger, reason required, no negatives.
-
-Suggested routes (implemented):
+- **Between-round minutes** (default **3**): save on admin dashboard; optional apply to waiting round only.
+- Login: email **or** username via `/api/footfive/auth/login`.
 
 ```text
 GET/POST  /api/footfive/admin/users
@@ -50,12 +51,21 @@ POST      /api/footfive/admin/users/{id}/disable|enable
 DELETE    /api/footfive/admin/users/{id}
 POST      /api/footfive/admin/users/{id}/credits
 POST      /api/footfive/admin/teams/{id}/treasury|assign|release|reset
-GET/POST  /api/footfive/admin/world/*  (catch-up, pause, resume, settings)
+GET/POST  /api/footfive/admin/world/*  (catch-up, pause, resume, settings, apply-between-round)
 GET/POST  /api/footfive/admin/retention[ /preview|/run ]
 GET       /api/footfive/admin/audit
+POST      /api/footfive/auth/login   (identity = email or username)
 ```
 
-Promote an admin in dev (after register): set `users.role = 'admin'` via SQL or superuser UI.
+Trusted server promote:
+
+```bash
+export FOOTFIVE_PB_URL=http://127.0.0.1:8091
+export FOOTFIVE_SUPERUSER_EMAIL=...
+export FOOTFIVE_SUPERUSER_PASSWORD=...
+export FOOTFIVE_ADMIN_PASSWORD=...   # never commit
+node scripts/footfive-admin.mjs ensure-admin --username admin --confirm
+```
 
 ## Retention
 

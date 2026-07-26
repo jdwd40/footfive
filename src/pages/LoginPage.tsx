@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
-import { useAuth } from "../lib/auth";
+import { postLoginPath, useAuth } from "../lib/auth";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -16,9 +16,8 @@ export default function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      await login(email.trim(), password);
-      // must_change_password gate handled by routes
-      nav("/dashboard");
+      const u = await login(email.trim(), password);
+      nav(postLoginPath(u), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -40,11 +39,11 @@ export default function LoginPage() {
           </p>
         ) : null}
         <label className="block space-y-1 text-sm">
-          <span className="text-muted">Email</span>
+          <span className="text-muted">Email or username</span>
           <input
             className="input"
-            type="email"
-            autoComplete="email"
+            type="text"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required

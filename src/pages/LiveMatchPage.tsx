@@ -336,18 +336,32 @@ export default function LiveMatchPage() {
                 key={f.fixtureId}
                 type="button"
                 onClick={() => nav(`/match/${f.fixtureId}`)}
-                className="glass min-w-[8.5rem] shrink-0 rounded-xl px-3 py-2 text-left active:scale-[0.98]"
+                aria-label={`${f.home.name} ${f.scoreHome} to ${f.away.name} ${f.scoreAway}`}
+                className="glass min-w-[7.5rem] max-w-[10rem] shrink-0 rounded-xl px-2.5 py-2 text-left active:scale-[0.98]"
               >
                 <div className="text-[10px] uppercase text-muted">
-                  {f.finished ? "FT" : f.status === "shootout" ? "PEN" : `${f.minute}'`}
+                  {f.finished
+                    ? "FT"
+                    : f.status === "shootout"
+                      ? "PENS"
+                      : f.status === "half_time"
+                        ? "HT"
+                        : f.status === "extra_time"
+                          ? "ET"
+                          : `${f.minute}′`}
                 </div>
-                <div className="truncate text-xs font-semibold">
-                  {f.home.name.split(" ").slice(-1)[0]} {f.scoreHome}–{f.scoreAway}{" "}
-                  {f.away.name.split(" ").slice(-1)[0]}
+                <div className="text-xs font-semibold tabular-nums">
+                  <span title={f.home.name} aria-label={f.home.name}>
+                    {(f.home.abbreviation || f.home.name.slice(0, 3)).toUpperCase()}
+                  </span>{" "}
+                  {f.scoreHome}–{f.scoreAway}{" "}
+                  <span title={f.away.name} aria-label={f.away.name}>
+                    {(f.away.abbreviation || f.away.name.slice(0, 3)).toUpperCase()}
+                  </span>
                 </div>
                 {f.shootoutHome > 0 || f.shootoutAway > 0 ? (
                   <div className="text-[10px] text-amber">
-                    p {f.shootoutHome}–{f.shootoutAway}
+                    pens {f.shootoutHome}–{f.shootoutAway}
                   </div>
                 ) : null}
               </button>

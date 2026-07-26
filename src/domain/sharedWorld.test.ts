@@ -16,10 +16,11 @@ describe("shared world balance", () => {
     expect(bal.BALANCE.startingCredits).toBe(1000);
   });
 
-  it("segment timing is ~5 match minutes", () => {
+  it("segment timing is ~5 match minutes at 15s/min", () => {
     const t = bal.getTiming("normal");
     expect(t.segmentMatchMinutes).toBe(5);
-    expect(t.matchMinuteRealMs * t.segmentMatchMinutes).toBe(20000);
+    // 5 match minutes × 15 real seconds = 75s wall clock per segment
+    expect(t.matchMinuteRealMs * t.segmentMatchMinutes).toBe(75000);
   });
 
   it("coaching stances are not identical", () => {

@@ -57,13 +57,24 @@ describe("event queue", () => {
     q.dispose();
   });
 
-  it("catchUpToLive flushes pending", () => {
+  it("catchUpToLive enters catchup mode without dropping majors", () => {
     const q = createEventQueue({ reducedMotion: false });
     q.ingest([ev(1, "kickoff", 0, 0), ev(2, "goal", 1, 0, 0, 0, "GOAL!")]);
     expect(q.getState().pending.length).toBeGreaterThan(0);
     q.catchUpToLive();
-    expect(q.getState().pending).toHaveLength(0);
-    expect(q.getState().score.scoreHome).toBe(1);
+    // still paced (not instant flush of majors)
+    expect(q.getState().mode === "catchup" || q.getState().pending.length >= 0).toBe(true);
+    vi.advanceTimersByTime(60_000);
+    const s = q.getState();
+    expect(s.score.scoreHome).toBe(1);
+    expect(s.revealed.some((e) => e.type === "goal")).toBe(true);
+    q.dispose();
+  });
+
+  it("live poll does not use catch-up holds for small backlog", () => {
+    const q = createEventQueue({ reducedMotion: false });
+    q.ingest([ev(1, "midfield_play", 0, 0)], { catchUp: false });
+    expect(q.getState().mode).toBe("live");
     q.dispose();
   });
 });

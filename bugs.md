@@ -4,10 +4,15 @@
 
 None release-blocking.
 
-## Production (P8)
+## Fixed in Phase 12
 
-- First install live; temporary `deploy_smoke_*` users may exist — disable via admin when ready.
-- Workspace deployed without git tag (tree not a git repo at deploy time).
+- Admin screen never appeared after login — always redirected to dashboard with no Admin nav.
+- Long team names broke tickers — canonical 3-letter abbreviations on compact views.
+
+## Fixed in Phase 11
+
+- Live commentary too fast — server turbo (~200ms/min) + short frontend holds.
+- Admin login for `admin@admin.com` failed — account missing under that email; repaired.
 
 ## Design rules (not bugs)
 
@@ -16,16 +21,15 @@ None release-blocking.
 ## Non-blocking / future
 
 - Optional Firefox E2E (`E2E_FIREFOX=1`) not in default CI.
-- Long multi-round browser tournament as a single test not required for RC (API + live UI flows cover critical paths).
+- Production world may still use `pace=dev` from first install — operator can set `normal` via admin when desired (does not alter live scores).
 
-## Fixed in Phase 7
+## Fixed in Phase 10
 
-- Playwright UI blocked on missing OS libs — vendored libs + CI Playwright container.
-- `must_change_password` had no user-facing completion flow.
-- No operational health surface for catch-up/stalls.
-- Live match poll had no backoff / reconnect warning.
-- Open P6 items on Playwright/CI/password/detail/backfill addressed in P6–P7.
+- Matches stuck past 90' when `state_json` flags lost — phase recovery + safe JSON persist.
+- Championship appeared not to start/progress — R16 recovered; QF auto-started on schedule.
+- Intermittent false connection warnings — fail thresholds + ignore abort/hidden-tab.
+- Missing between-round admin control — `between_round_minutes` default 3.
 
-## Fixed earlier
+## Fixed in Phase 7–9
 
-See Phase 5–6 sections in git history / prior `bugs.md` revisions.
+- Playwright libs, password-change UI, health surface, bootstrap race, smoke users, git baseline, backups.

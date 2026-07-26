@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
-import { useAuth } from "../lib/auth";
+import { postLoginPath, useAuth } from "../lib/auth";
 import { footfiveApi, pb } from "../lib/pocketbase";
 
 export default function ChangePasswordPage() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshMe } = useAuth();
   const nav = useNavigate();
   const [currentPassword, setCurrent] = useState("");
   const [newPassword, setNew] = useState("");
@@ -35,7 +35,8 @@ export default function ChangePasswordPage() {
       if (user?.email) {
         await pb.collection("users").authWithPassword(user.email, newPassword);
       }
-      nav("/dashboard", { replace: true });
+      const refreshed = await refreshMe();
+      nav(postLoginPath(refreshed || user), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Password change failed");
     } finally {

@@ -78,6 +78,49 @@ describe("incremental match engine", () => {
     expect(r.state.simMinute as number).toBeLessThan(90);
   });
 
+  it("recovers stuck match past 90 without fullTimeDone flags", () => {
+    const state = engine.createMatchState({
+      home: sampleTeam("Alpha", "A", 90, 40),
+      away: sampleTeam("Beta", "C", 30, 40),
+      seed: 99,
+      pace: "test",
+    }) as Record<string, unknown>;
+    // Simulate lost state_json: high minute, no phase flags, unequal score
+    state.simMinute = 95;
+    state.phase = "first_half";
+    state.kickoffDone = false;
+    state.halfTimeDone = false;
+    state.fullTimeDone = false;
+    state.scoreHome = 2;
+    state.scoreAway = 0;
+    state.events = [];
+    const r = engine.advanceSegment(state, {});
+    expect(r.finished || r.state.finalised).toBe(true);
+    expect(r.state.fullTimeDone).toBe(true);
+    expect(r.state.winnerSide).toBe("home");
+  });
+
+  it("starts extra time when stuck 0-0 past 90", () => {
+    const state = engine.createMatchState({
+      home: sampleTeam("Alpha", "B", 60, 60),
+      away: sampleTeam("Beta", "B", 60, 60),
+      seed: 7,
+      pace: "test",
+    }) as Record<string, unknown>;
+    state.simMinute = 95;
+    state.phase = "first_half";
+    state.fullTimeDone = false;
+    state.halfTimeDone = false;
+    state.scoreHome = 0;
+    state.scoreAway = 0;
+    state.events = [];
+    const r = engine.advanceSegment(state, {});
+    expect(r.state.fullTimeDone).toBe(true);
+    expect(r.state.etStarted || r.state.phase === "extra_time_1" || r.state.phase === "shootout").toBe(
+      true,
+    );
+  });
+
   it("segment reprocess with same state advances cursor", () => {
     let state = engine.createMatchState({
       home: sampleTeam("Alpha", "A", 80, 70),

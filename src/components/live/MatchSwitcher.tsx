@@ -1,16 +1,12 @@
 import type { ScoreboardFixture } from "../../lib/pocketbase";
-
-function shortName(name: string) {
-  const parts = name.split(" ");
-  return parts.length > 1 ? parts[parts.length - 1] : name.slice(0, 8);
-}
+import TeamName from "../TeamName";
 
 function statusChip(f: ScoreboardFixture) {
   if (f.finished || f.status === "finished") return "FT";
-  if (f.status === "shootout") return "PEN";
-  if (f.status === "extra_time") return `ET ${f.minute}'`;
+  if (f.status === "shootout") return "PENS";
+  if (f.status === "extra_time") return `ET ${f.minute}′`;
   if (f.status === "half_time") return "HT";
-  if (f.status === "live") return `${f.minute}'`;
+  if (f.status === "live") return `${f.minute}′`;
   if (f.status === "scheduled") return "VS";
   return f.status.slice(0, 4).toUpperCase();
 }
@@ -50,8 +46,9 @@ export default function MatchSwitcher({
             type="button"
             role="tab"
             aria-selected={active}
+            aria-label={`${f.home.name} ${f.scoreHome} to ${f.away.name} ${f.scoreAway}, ${statusChip(f)}`}
             onClick={() => onSelect(f.fixtureId)}
-            className={`min-w-[9.5rem] shrink-0 rounded-xl border px-3 py-2 text-left transition active:scale-[0.98] ${
+            className={`min-w-[7.75rem] max-w-[10rem] shrink-0 rounded-xl border px-2.5 py-2 text-left transition active:scale-[0.98] ${
               active
                 ? "border-cyan bg-cyan/15 ring-1 ring-cyan/40"
                 : "border-white/10 bg-panel/80"
@@ -63,9 +60,9 @@ export default function MatchSwitcher({
                 {statusChip(f)}
               </span>
             </div>
-            <div className="mt-0.5 truncate text-xs font-semibold">
-              {shortName(f.home.name)} {f.scoreHome}–{f.scoreAway}{" "}
-              {shortName(f.away.name)}
+            <div className="mt-0.5 text-xs font-semibold tabular-nums">
+              <TeamName team={f.home} mode="short" /> {f.scoreHome}–{f.scoreAway}{" "}
+              <TeamName team={f.away} mode="short" />
             </div>
             {pens ? (
               <div className="text-[10px] text-amber">

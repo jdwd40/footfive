@@ -26,7 +26,9 @@ function usage() {
   promote --email EMAIL --confirm
   demote --email EMAIL --confirm [--force-last]
   cleanup-smoke --confirm
-Env: FOOTFIVE_PB_URL FOOTFIVE_SUPERUSER_EMAIL FOOTFIVE_SUPERUSER_PASSWORD`);
+  ensure-admin --username admin --confirm
+    Creates/updates app admin. Password from FOOTFIVE_ADMIN_PASSWORD env (never logged).
+Env: FOOTFIVE_PB_URL FOOTFIVE_SUPERUSER_EMAIL FOOTFIVE_SUPERUSER_PASSWORD FOOTFIVE_ADMIN_PASSWORD`);
 }
 
 async function json(path, opts = {}) {
@@ -214,6 +216,168 @@ async function cleanupSmoke(confirm) {
   console.log("cleanup done candidates=", candidates.length);
 }
 
+async function ensureAdmin(username, confirm) {
+  if (!confirm) throw new Error("Refusing without --confirm");
+  const uname = (username || "admin").toLowerCase();
+  const password = process.env.FOOTFIVE_ADMIN_PASSWORD || "";
+  if (!password || password.length < 6) {
+    throw new Error("Set FOOTFIVE_ADMIN_PASSWORD (min 6 chars) — never pass on CLI");
+  }
+  // Prefer explicit email; default to admin@admin.com for operator bootstrap
+  const email =
+    process.env.FOOTFIVE_ADMIN_EMAIL ||
+    (uname === "admin" ? "admin@admin.com" : `${uname}@footfive.local`);
+  const token = await superuserToken();
+
+  // Allow bootstrap passwords as short as 7 (PB default min is 8)
+  try {
+    const col = await json("/api/collections/users", { token });
+    const fields = (col.fields || []).map((f) =>
+      f.name === "password" ? { ...f, min: Math.min(f.min || 8, Math.max(7, password.length)) } : f,
+    );
+    await json("/api/collections/users", {
+      method: "PATCH",
+      token,
+      body: { fields },
+    });
+  } catch (e) {
+    console.warn("password min adjust skipped:", e.message);
+  }
+
+  // find by username or email
+  let user = null;
+  try {
+    const byUser = await json(
+      `/api/collections/users/records?filter=${encodeURIComponent(`username="${uname}"`)}&perPage=1`,
+      { token },
+    );
+    if (byUser.items?.length) user = byUser.items[0];
+  } catch {
+    /* username field may not exist yet */
+  }
+  if (!user) {
+    const byEmail = await findUserByEmail(token, email);
+    if (byEmail) user = byEmail;
+  }
+
+  // If email missing but footfive.local admin exists, rebind email (idempotent repair)
+  if (!user && email === "admin@admin.com") {
+    const legacy = await findUserByEmail(token, "admin@footfive.local");
+    if (legacy) user = legacy;
+  }
+
+  const patchBody = {
+    email,
+    role: "admin",
+    display_name: "admin",
+    disabled: false,
+    must_change_password: true,
+    password,
+    passwordConfirm: password,
+    verified: true,
+  };
+
+  if (!user) {
+    const created = await json("/api/collections/users/records", {
+      method: "POST",
+      token,
+      body: {
+        ...patchBody,
+        // username optional; avoid unique clash with legacy admin username
+        username: uname,
+        emailVisibility: false,
+      },
+    });
+    const promoted = await json(`/api/collections/users/records/${created.id}`, {
+      method: "PATCH",
+      token,
+      body: {
+        role: "admin",
+        display_name: "admin",
+        must_change_password: true,
+        disabled: false,
+        verified: true,
+      },
+    });
+    await audit(
+      token,
+      "cli_ensure_admin_create",
+      promoted,
+      null,
+      { role: "admin", email, must_change_password: true },
+      "ensure-admin",
+    );
+    console.log(
+      "created admin user id=",
+      promoted.id,
+      "email=",
+      email,
+      "role=",
+      promoted.role,
+      "must_change_password=true",
+    );
+    return;
+  }
+
+  const before = {
+    role: user.role || "user",
+    email: user.email || "",
+    disabled: !!user.disabled,
+    must_change_password: !!user.must_change_password,
+  };
+  // If another record owns username, skip username field
+  let body = { ...patchBody };
+  try {
+    const updated = await json(`/api/collections/users/records/${user.id}`, {
+      method: "PATCH",
+      token,
+      body: { ...body, username: uname },
+    });
+    await audit(
+      token,
+      "cli_ensure_admin_update",
+      user,
+      before,
+      { role: "admin", email, must_change_password: true },
+      "ensure-admin",
+    );
+    console.log(
+      "updated admin user id=",
+      updated.id,
+      "email=",
+      updated.email,
+      "role=",
+      updated.role,
+      "must_change_password=true",
+    );
+  } catch (e) {
+    // retry without username if unique conflict
+    const updated = await json(`/api/collections/users/records/${user.id}`, {
+      method: "PATCH",
+      token,
+      body,
+    });
+    await audit(
+      token,
+      "cli_ensure_admin_update",
+      user,
+      before,
+      { role: "admin", email, must_change_password: true },
+      "ensure-admin",
+    );
+    console.log(
+      "updated admin user id=",
+      updated.id,
+      "email=",
+      updated.email,
+      "role=",
+      updated.role,
+      "(username skipped)",
+      e.message || "",
+    );
+  }
+}
+
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -221,6 +385,7 @@ function parseArgs(argv) {
     if (a === "--confirm") args.confirm = true;
     else if (a === "--force-last") args.forceLast = true;
     else if (a === "--email") args.email = argv[++i];
+    else if (a === "--username") args.username = argv[++i];
     else args._.push(a);
   }
   return args;
@@ -250,6 +415,10 @@ async function main() {
   }
   if (cmd === "cleanup-smoke") {
     await cleanupSmoke(!!args.confirm);
+    return;
+  }
+  if (cmd === "ensure-admin") {
+    await ensureAdmin(args.username || "admin", !!args.confirm);
     return;
   }
   usage();

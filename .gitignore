@@ -36,3 +36,8 @@ logs/
 **/.superuser_pass
 *.pem
 *.key
+
+# Deploy keys (never commit)
+*.pem
+footfive_gha_deploy
+footfive_gha_deploy.pub

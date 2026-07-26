@@ -88,26 +88,35 @@ export function createEventQueue(opts: EventQueueOptions = {}) {
       current = null;
     }
     if (options?.catchUp) mode = "catchup";
+    else if (mode !== "catchup") mode = "live";
 
     const incoming = sortUnique(events);
     for (const e of incoming) {
       if (seen.has(e.seq)) continue;
       if (e.seq <= lastSeq && revealed.some((r) => r.seq === e.seq)) continue;
       seen.add(e.seq);
-      // If we're opening late: bulk-reveal history except last few
       pending.push(e);
     }
     pending = sortUnique(pending).filter((e) => !revealed.some((r) => r.seq === e.seq));
 
-    // Late open: dump all but last 3 into revealed immediately
-    if (options?.catchUp && pending.length > 4) {
-      const keep = pending.splice(-3);
+    // Late open only: bulk-reveal older history, keep last few for paced reveal.
+    // Never suppress major events from the paced tail.
+    if (options?.catchUp && pending.length > 6) {
+      const keepCount = 4;
+      const keep = pending.splice(-keepCount);
       for (const e of pending) {
         revealed.push(e);
         lastSeq = Math.max(lastSeq, e.seq);
       }
       pending = keep;
       revealed = sortUnique(revealed).slice(-maxHistory);
+    }
+
+    // Ordinary live polling with a small backlog stays in live mode
+    if (!options?.catchUp && pending.length <= 3) {
+      mode = "live";
+    } else if (!options?.catchUp && pending.length > 6) {
+      mode = "catchup";
     }
 
     scheduleNext();
@@ -126,8 +135,8 @@ export function createEventQueue(opts: EventQueueOptions = {}) {
     const cfg = getEventDisplay(next.type);
     const delay = opts.reducedMotion ? 0 : cfg.delayMs;
     const hold = opts.reducedMotion
-      ? 200
-      : holdForCatchUp(cfg, pending.length + (mode === "catchup" ? 5 : 0));
+      ? 350
+      : holdForCatchUp(cfg, pending.length, mode);
 
     timer = setTimeout(() => {
       timer = null;
@@ -139,7 +148,7 @@ export function createEventQueue(opts: EventQueueOptions = {}) {
       lastSeq = Math.max(lastSeq, next.seq);
       current = next;
       emit();
-      // hold then next
+      // hold then next — always one event at a time
       timer = setTimeout(() => {
         timer = null;
         scheduleNext();
@@ -148,18 +157,16 @@ export function createEventQueue(opts: EventQueueOptions = {}) {
     }, delay);
   }
 
-  /** Jump reveal queue to live — reveal all pending instantly (except force one flash of last). */
+  /**
+   * User-requested catch-up: speed through minor backlog, keep majors readable.
+   * Does not silently skip goals/cards/penalties/shootout/subs/phase transitions.
+   */
   function catchUpToLive() {
     clearTimer();
     mode = "catchup";
-    while (pending.length) {
-      const e = pending.shift()!;
-      revealed.push(e);
-      lastSeq = Math.max(lastSeq, e.seq);
-    }
-    revealed = sortUnique(revealed).slice(-maxHistory);
-    current = revealed[revealed.length - 1] || null;
-    mode = "live";
+    // Reveal all but last major-paced events quickly via scheduleNext with catchup holds
+    // Still process one-by-one so majors stay readable
+    scheduleNext();
     emit();
   }
 

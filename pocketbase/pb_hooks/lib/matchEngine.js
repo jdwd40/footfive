@@ -75,7 +75,10 @@ function createMatchState(opts) {
   var home = opts.home;
   var away = opts.away;
   var pace = opts.pace || "normal";
-  var timing = getTiming(pace);
+  var timing = getTiming(pace, opts.matchMinuteRealMs);
+  if (opts.matchMinuteRealMs != null && opts.matchMinuteRealMs > 0) {
+    timing = Object.assign({}, timing, { matchMinuteRealMs: opts.matchMinuteRealMs });
+  }
   var seed = opts.seed != null ? opts.seed : hashSeed(home.name + ":" + away.name + ":" + Date.now());
   var seedNum = typeof seed === "number" ? seed : hashSeed(String(seed));
 
@@ -812,6 +815,31 @@ function finalise(state) {
 }
 
 /**
+ * When state_json is lost, flags reset but sim_minute remains high.
+ * Reconstruct phase flags so full-time / ET / shootout can still complete.
+ */
+function recoverMissedPhases(state, timing) {
+  if (!state || state.finalised) return;
+  var m = state.simMinute || 0;
+  if (m >= 45) state.halfTimeDone = true;
+  if (m >= 90) {
+    state.halfTimeDone = true;
+    state.secondHalfDone = true;
+  }
+  if (m > 90 && !state.fullTimeDone && !state.etStarted && !state.shootoutStarted) {
+    // Past regulation without transition — force FT path next loop
+    // Leave fullTimeDone false so advanceSegment fires FT once.
+    if (m > 95) state.simMinute = 95;
+  }
+  if (m >= 105 && state.etStarted) state.etHalfDone = true;
+  if (m >= 120 && state.etStarted) {
+    // leave etEndDone false so end-of-ET fires once if needed
+  }
+  if (state.phase === "shootout") state.shootoutStarted = true;
+  if (!state.timing && timing) state.timing = timing;
+}
+
+/**
  * Advance one simulation segment. Applies current coaching for new minutes only.
  * @returns {{ newEvents: Array, finished: boolean, state: object }}
  */
@@ -912,11 +940,15 @@ function advanceSegment(state, opts) {
     return { newEvents: newEventsSo, finished: state.finalised, state: state };
   }
 
+  // Recover missed phase transitions when state_json was lost/corrupt and
+  // simMinute jumped past exact boundary minutes (45/90/105/120).
+  recoverMissedPhases(state, timing);
+
   while (minutesDone < maxMinutesThisSeg && !state.finalised) {
     var nextMin = state.simMinute + 1;
 
-    // Half-time transition after 45
-    if (nextMin === 46 && !state.halfTimeDone) {
+    // Half-time transition after 45 (also if already past 45 without flag)
+    if ((nextMin === 46 || (state.simMinute >= 45 && !state.halfTimeDone)) && !state.halfTimeDone) {
       state.phase = "half_time";
       pushEvent(state, {
         minute: 45,
@@ -943,10 +975,18 @@ function advanceSegment(state, opts) {
         message: "Second half underway.",
       });
       state.phase = "second_half";
+      if (state.simMinute < 45) {
+        // fall through to simulate; otherwise continue transitions
+      } else if (state.simMinute >= 90) {
+        // continue into full-time recovery below on next loop
+        continue;
+      } else if (state.simMinute > 45) {
+        // already in second half range — no need to re-sim past minutes
+      }
     }
 
-    // Full time after 90
-    if (nextMin === 91 && !state.fullTimeDone) {
+    // Full time after 90 (or recovered when past 90 without fullTimeDone)
+    if ((nextMin === 91 || (state.simMinute >= 90 && !state.fullTimeDone)) && !state.fullTimeDone) {
       state.phase = "full_time";
       pushEvent(state, {
         minute: 90,
@@ -966,6 +1006,8 @@ function advanceSegment(state, opts) {
       });
       state.fullTimeDone = true;
       state.secondHalfDone = true;
+      state.halfTimeDone = true;
+      if (state.simMinute < 90) state.simMinute = 90;
       if (state.scoreHome !== state.scoreAway) {
         finalise(state);
         break;
@@ -981,10 +1023,15 @@ function advanceSegment(state, opts) {
         advanceMs: timing.matchMinuteRealMs,
       });
       state.etStarted = true;
+      continue;
     }
 
     // ET half
-    if (nextMin === 106 && state.etStarted && !state.etHalfDone) {
+    if (
+      (nextMin === 106 || (state.simMinute >= 105 && state.etStarted && !state.etHalfDone)) &&
+      state.etStarted &&
+      !state.etHalfDone
+    ) {
       pushEvent(state, {
         minute: 105,
         phase: "extra_time_ht",
@@ -994,10 +1041,16 @@ function advanceSegment(state, opts) {
       });
       state.etHalfDone = true;
       state.phase = "extra_time_2";
+      if (state.simMinute < 105) state.simMinute = 105;
+      continue;
     }
 
     // End of ET
-    if (nextMin === 121 && state.etStarted && !state.etEndDone) {
+    if (
+      (nextMin === 121 || (state.simMinute >= 120 && state.etStarted && !state.etEndDone)) &&
+      state.etStarted &&
+      !state.etEndDone
+    ) {
       pushEvent(state, {
         minute: 120,
         phase: "extra_time_end",
@@ -1015,6 +1068,7 @@ function advanceSegment(state, opts) {
         advanceMs: timing.matchMinuteRealMs,
       });
       state.etEndDone = true;
+      if (state.simMinute < 120) state.simMinute = 120;
       if (state.scoreHome !== state.scoreAway) {
         finalise(state);
         break;

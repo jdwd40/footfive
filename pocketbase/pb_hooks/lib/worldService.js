@@ -21,6 +21,7 @@ try {
 var TEAMS = teamsMod.TEAMS;
 var BALANCE = balMod.BALANCE;
 var getTiming = balMod.getTiming;
+var clampMatchMinuteSeconds = balMod.clampMatchMinuteSeconds;
 var drawRoundOf16 = tourneyMod.drawRoundOf16;
 var buildNextRoundFixtures = tourneyMod.buildNextRoundFixtures;
 var nextRoundKey = tourneyMod.nextRoundKey;
@@ -53,11 +54,85 @@ function parseJson(val, fallback) {
       return fallback;
     }
   }
+  // Detect goja/Go []byte mis-decoded as number array (ASCII codes of JSON)
+  if (Array.isArray(val) && val.length > 2 && typeof val[0] === "number") {
+    try {
+      var asStr = String.fromCharCode.apply(null, val.slice(0, Math.min(val.length, 500000)));
+      if (asStr.charAt(0) === "{" || asStr.charAt(0) === "[") {
+        return JSON.parse(asStr);
+      }
+    } catch (_) {}
+  }
   try {
     return JSON.parse(JSON.stringify(val));
   } catch (_) {
     return val || fallback;
   }
+}
+
+/** Stable plain JSON for PocketBase json fields (avoid goja proxies / byte arrays). */
+function safeJson(val) {
+  if (val == null) return null;
+  try {
+    return JSON.parse(JSON.stringify(val));
+  } catch (_) {
+    return null;
+  }
+}
+
+function isPlayerList(list) {
+  if (!Array.isArray(list) || !list.length) return false;
+  var p0 = list[0];
+  return !!(p0 && typeof p0 === "object" && (p0.name || p0.id || p0.role));
+}
+
+/** Effective between-round wait in ms (admin minutes override pace defaults). */
+function effectiveRoundIntervalMs(world) {
+  var mins = parseInt(world.get("between_round_minutes"), 10);
+  if (!isNaN(mins) && mins >= 1 && mins <= 1440) {
+    return mins * 60 * 1000;
+  }
+  var stored = parseInt(world.get("round_interval_ms"), 10);
+  if (!isNaN(stored) && stored >= 60000) return stored;
+  var pace = world.get("pace") || "normal";
+  return getTiming(pace).roundIntervalMs;
+}
+
+/** Official real ms per in-game minute from world setting (default 15s). */
+function effectiveMatchMinuteMs(world) {
+  var sec = parseInt(world.get("match_minute_real_seconds"), 10);
+  if (!isNaN(sec) && sec >= 1 && sec <= 60) return sec * 1000;
+  var ms = parseInt(world.get("match_minute_real_ms"), 10);
+  // Ignore legacy turbo values below 1s unless no seconds field ever set
+  if (!isNaN(ms) && ms >= 1000) return ms;
+  return BALANCE.matchMinuteRealMs || 15000;
+}
+
+/** Segment wall-clock ms for a world (new fixtures). */
+function segmentRealMs(world) {
+  var minuteMs = effectiveMatchMinuteMs(world);
+  var pace = world.get("pace") || "normal";
+  var timing = getTiming(pace, minuteMs);
+  var mins = timing.segmentMatchMinutes || 5;
+  return mins * minuteMs;
+}
+
+/** Segment wall-clock for an existing match (uses kickoff snapshot). */
+function segmentRealMsForMatch(world, ms) {
+  var snap = parseInt(ms.get("match_minute_real_ms"), 10);
+  if (!isNaN(snap) && snap > 0) {
+    var pace = world.get("pace") || "normal";
+    var timing = getTiming(pace, snap);
+    return (timing.segmentMatchMinutes || 5) * snap;
+  }
+  try {
+    var st = parseJson(ms.get("state_json"), {});
+    if (st && st.timing && st.timing.matchMinuteRealMs > 0) {
+      var sm = st.timing.segmentMatchMinutes || 5;
+      return sm * st.timing.matchMinuteRealMs;
+    }
+  } catch (_) {}
+  return segmentRealMs(world);
 }
 
 function loadEventsFromDb($app, matchStateId) {
@@ -157,10 +232,12 @@ function ensureWorld($app) {
   w.set("key", "main");
   // Fresh installs use production-like pace (not dev turbo)
   w.set("pace", "normal");
-  w.set("round_interval_ms", BALANCE.roundIntervalMs);
+  w.set("between_round_minutes", 3);
+  w.set("round_interval_ms", 3 * 60 * 1000);
   w.set("tournament_interval_ms", BALANCE.tournamentIntervalMs);
   w.set("segment_minutes", 5);
-  w.set("match_minute_real_ms", BALANCE.matchMinuteRealMs);
+  w.set("match_minute_real_seconds", BALANCE.matchMinuteRealSeconds || 15);
+  w.set("match_minute_real_ms", (BALANCE.matchMinuteRealSeconds || 15) * 1000);
   w.set("processing_status", "idle");
   w.set("processing_version", 0);
   w.set("retention_days", 30);
@@ -175,7 +252,22 @@ function ensureWorld($app) {
 
 function ensureTeams($app) {
   var existing = $app.findRecordsByFilter("proball_teams", "id != ''", "sort_order", 50, 0);
-  if (existing && existing.length >= 16) return existing;
+  // Backfill abbreviations on existing teams without recreating
+  if (existing && existing.length >= 16) {
+    for (var bi = 0; bi < existing.length; bi++) {
+      try {
+        var et = existing[bi];
+        var curAb = et.get("abbreviation");
+        if (curAb) continue;
+        var tmpl = teamsMod.getTeamBySlug(et.get("slug"));
+        if (tmpl && tmpl.abbreviation) {
+          et.set("abbreviation", tmpl.abbreviation);
+          $app.save(et);
+        }
+      } catch (_) {}
+    }
+    return existing;
+  }
 
   var teamsCol = $app.findCollectionByNameOrId("proball_teams");
   var playersCol = $app.findCollectionByNameOrId("proball_players");
@@ -193,12 +285,19 @@ function ensureTeams($app) {
       { s: t.slug },
     );
     if (found && found.length) {
+      try {
+        if (!found[0].get("abbreviation") && t.abbreviation) {
+          found[0].set("abbreviation", t.abbreviation);
+          $app.save(found[0]);
+        }
+      } catch (_) {}
       created.push(found[0]);
       continue;
     }
     var team = new Record(teamsCol);
     team.set("slug", t.slug);
     team.set("name", t.name);
+    if (t.abbreviation) team.set("abbreviation", t.abbreviation);
     team.set("grade", t.grade);
     team.set("strength", BALANCE.gradeStrength[t.grade] || 60);
     team.set("primary_color", t.primary);
@@ -350,9 +449,23 @@ function createRound($app, tournament, roundKey, teamIds, winnersBySlot, schedul
 }
 
 function teamPublic(t, managerName) {
+  var abbr = "";
+  try {
+    abbr = String(t.get("abbreviation") || "").toUpperCase();
+  } catch (_) {
+    abbr = "";
+  }
+  if (!abbr && t.get("slug")) {
+    // fallback from template
+    try {
+      var tmpl = teamsMod.getTeamBySlug(t.get("slug"));
+      if (tmpl && tmpl.abbreviation) abbr = tmpl.abbreviation;
+    } catch (_) {}
+  }
   return {
     id: t.id,
     name: t.get("name"),
+    abbreviation: abbr || String(t.get("name") || "").slice(0, 3).toUpperCase(),
     grade: t.get("grade"),
     primary_color: t.get("primary_color"),
     secondary_color: t.get("secondary_color"),
@@ -449,13 +562,6 @@ function freezeLineups($app, fixture) {
   } catch (_) {}
 }
 
-function segmentRealMs(world) {
-  var pace = world.get("pace") || "dev";
-  var timing = getTiming(pace);
-  var mins = timing.segmentMatchMinutes || 5;
-  return mins * timing.matchMinuteRealMs;
-}
-
 /**
  * Start live fixtures for a due round: freeze lineups, create match_states.
  */
@@ -474,10 +580,17 @@ function kickOffRound($app, round, world) {
     0,
     { r: round.id },
   );
-  var pace = world.get("pace") || "dev";
+  // Use official world speed snapshot (not dev turbo) for new kickoffs
+  var pace = "normal";
+  var minuteMs = effectiveMatchMinuteMs(world);
   var startedAt = new Date(Math.max(scheduled, Date.now() - 1000));
   var msCol = $app.findCollectionByNameOrId("match_states");
   var segMs = segmentRealMs(world);
+
+  try {
+    round.set("match_minute_real_ms", minuteMs);
+    $app.save(round);
+  } catch (_) {}
 
   for (var i = 0; i < fixtures.length; i++) {
     var fx = fixtures[i];
@@ -504,6 +617,11 @@ function kickOffRound($app, round, world) {
       awayTeam.get("overclock_fixture") === fx.id ||
       !!awayTeam.get("overclock_ready");
 
+    try {
+      fx.set("match_minute_real_ms", minuteMs);
+      $app.save(fx);
+    } catch (_) {}
+
     var state = createMatchState({
       home: {
         id: homeTeam.id,
@@ -519,6 +637,7 @@ function kickOffRound($app, round, world) {
       },
       seed: hashSeed(fx.id + ":" + round.id),
       pace: pace,
+      matchMinuteRealMs: minuteMs,
       homeCoaching: "balanced",
       awayCoaching: "balanced",
       homeOverclock: homeOc,
@@ -540,9 +659,9 @@ function kickOffRound($app, round, world) {
     ms.set("shootout_away", state.shootoutAway);
     ms.set("home_coaching", state.homeCoaching);
     ms.set("away_coaching", state.awayCoaching);
-    ms.set("state_json", stripEvents(state));
-    ms.set("events_json", state.events);
-    ms.set("stats_json", state.stats);
+    ms.set("state_json", safeJson(stripEvents(state)));
+    ms.set("events_json", safeJson(state.events));
+    ms.set("stats_json", safeJson(state.stats));
     ms.set("started_at", toPbDate(startedAt));
     ms.set("next_segment_due_at", toPbDate(startedAt.getTime() + segMs));
     ms.set("last_processed_at", toPbDate(new Date()));
@@ -550,13 +669,30 @@ function kickOffRound($app, round, world) {
     ms.set("progression_settled", false);
     ms.set("segment_index", state.segmentIndex);
     ms.set("last_segment_key", fx.id + ":seg:0");
+    try {
+      ms.set("match_minute_real_ms", minuteMs);
+    } catch (_) {}
     if (state.finalised && state.winnerSide) {
       ms.set(
         "winner_team",
         state.winnerSide === "home" ? fx.get("home_team") : fx.get("away_team"),
       );
     }
-    $app.save(ms);
+    try {
+      $app.save(ms);
+    } catch (saveErr) {
+      console.log("[footfive] match_state save: " + saveErr);
+      // If unique conflict, continue (idempotent kickoff)
+      var again = $app.findRecordsByFilter(
+        "match_states",
+        "fixture = {:f}",
+        "",
+        1,
+        0,
+        { f: fx.id },
+      );
+      if (!again || !again.length) throw saveErr;
+    }
 
     fx.set("status", state.finalised ? "finished" : "live");
     if (state.finalised && state.winnerSide) {
@@ -571,10 +707,48 @@ function kickOffRound($app, round, world) {
     lockBetsForFixture($app, fx.id);
   }
 
+  // Ensure any fixture that already had match_state is live
+  for (var j = 0; j < fixtures.length; j++) {
+    var fx2 = fixtures[j];
+    if (fx2.get("status") === "scheduled") {
+      var hasMs = $app.findRecordsByFilter(
+        "match_states",
+        "fixture = {:f}",
+        "",
+        1,
+        0,
+        { f: fx2.id },
+      );
+      if (hasMs && hasMs.length && !hasMs[0].get("finalised")) {
+        fx2.set("status", "live");
+        if (!fx2.get("lineups_frozen")) freezeLineups($app, fx2);
+        else $app.save(fx2);
+      }
+    }
+  }
+
   round.set("status", "live");
   round.set("started_at", toPbDate(startedAt));
+  if (!round.get("announce_key")) {
+    round.set("announce_key", round.id + ":start:" + startedAt.getTime());
+  }
+  round.set("announced_at", toPbDate(startedAt));
   $app.save(round);
-  return { kicked: true };
+  try {
+    console.log(
+      "[footfive-json] " +
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "info",
+          event: "round_started",
+          app: "footfive",
+          round: round.get("round_key"),
+          roundId: round.id,
+          fixtures: fixtures.length,
+        }),
+    );
+  } catch (_) {}
+  return { kicked: true, startedAt: toPbDate(startedAt), roundId: round.id };
 }
 
 function stripEvents(state) {
@@ -588,7 +762,7 @@ function stripEvents(state) {
 
 function hydrateState(ms, events, app) {
   var raw = parseJson(ms.get("state_json"), {});
-  if (!raw || typeof raw !== "object") raw = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
   raw.events = events || [];
   raw.scoreHome = ms.get("score_home") || 0;
   raw.scoreAway = ms.get("score_away") || 0;
@@ -603,6 +777,9 @@ function hydrateState(ms, events, app) {
   raw.seed = ms.get("seed") || 1;
   raw.homePlayers = Array.isArray(raw.homePlayers) ? raw.homePlayers : [];
   raw.awayPlayers = Array.isArray(raw.awayPlayers) ? raw.awayPlayers : [];
+  // Fix double-encoded / byte-array player lists
+  if (!isPlayerList(raw.homePlayers)) raw.homePlayers = [];
+  if (!isPlayerList(raw.awayPlayers)) raw.awayPlayers = [];
   raw.homeName = raw.homeName || "Home";
   raw.awayName = raw.awayName || "Away";
   raw.homeGrade = raw.homeGrade || "C";
@@ -610,23 +787,44 @@ function hydrateState(ms, events, app) {
   raw.yellows = raw.yellows || {};
   raw.sentOff = raw.sentOff || {};
   raw.stats = raw.stats || {
-    home: { goals: 0 },
-    away: { goals: 0 },
+    home: { goals: raw.scoreHome || 0 },
+    away: { goals: raw.scoreAway || 0 },
   };
   if (!raw.timing) {
-    raw.timing = getTiming(raw.pace || "dev");
+    raw.timing = getTiming(raw.pace || "normal");
   }
-  // If players missing (legacy state), try lineup from fixture
-  if ((!raw.homePlayers.length || !raw.awayPlayers.length) && app) {
+  // If players missing/corrupt, reload lineup from fixture
+  if ((!isPlayerList(raw.homePlayers) || !isPlayerList(raw.awayPlayers)) && app) {
     try {
       var fx = app.findRecordById("shared_fixtures", ms.get("fixture"));
-      if (!raw.homePlayers.length) {
+      if (!isPlayerList(raw.homePlayers)) {
         raw.homePlayers = parseJson(fx.get("home_lineup_json"), []) || [];
       }
-      if (!raw.awayPlayers.length) {
+      if (!isPlayerList(raw.awayPlayers)) {
         raw.awayPlayers = parseJson(fx.get("away_lineup_json"), []) || [];
       }
+      try {
+        var ht = app.findRecordById("proball_teams", fx.get("home_team"));
+        var at = app.findRecordById("proball_teams", fx.get("away_team"));
+        raw.homeName = raw.homeName || ht.get("name");
+        raw.awayName = raw.awayName || at.get("name");
+        raw.homeGrade = raw.homeGrade || ht.get("grade");
+        raw.awayGrade = raw.awayGrade || at.get("grade");
+        raw.homeId = raw.homeId || ht.id;
+        raw.awayId = raw.awayId || at.id;
+      } catch (_) {}
     } catch (_) {}
+  }
+  // Reconstruct flags from sim minute so stuck matches can finish
+  if (raw.simMinute >= 45) raw.halfTimeDone = raw.halfTimeDone || true;
+  if (raw.simMinute >= 90) raw.secondHalfDone = raw.secondHalfDone || true;
+  if (raw.events && raw.events.length) raw.kickoffDone = true;
+  if (raw.seq == null) {
+    var maxSeq = 0;
+    for (var ei = 0; ei < (raw.events || []).length; ei++) {
+      if ((raw.events[ei].seq || 0) > maxSeq) maxSeq = raw.events[ei].seq;
+    }
+    raw.seq = maxSeq;
   }
   return raw;
 }
@@ -657,7 +855,6 @@ function advanceDueMatches($app, world, limit) {
   }
 
   var advanced = 0;
-  var segMs = segmentRealMs(world);
 
   for (var i = 0; i < (due || []).length; i++) {
     var ms = due[i];
@@ -666,7 +863,8 @@ function advanceDueMatches($app, world, limit) {
     if (!isNaN(nextDue) && nextDue > now + 50) continue;
 
     try {
-      if (advanceOneMatch($app, ms, world, segMs)) advanced++;
+      var segMsRow = segmentRealMsForMatch(world, ms);
+      if (advanceOneMatch($app, ms, world, segMsRow)) advanced++;
     } catch (err) {
       console.log("[footfive] advance match " + ms.id + ": " + err);
     }
@@ -678,6 +876,9 @@ function advanceOneMatch($app, ms, world, segMs) {
   var version = ms.get("processing_version") || 0;
   var segIndex = ms.get("segment_index") || 0;
   var segKey = ms.get("fixture") + ":seg:" + (segIndex + 1);
+  if (segMs == null || !(segMs > 0)) {
+    segMs = segmentRealMsForMatch(world, ms);
+  }
 
   if (ms.get("last_segment_key") === segKey) {
     // already processed this segment id
@@ -690,6 +891,19 @@ function advanceOneMatch($app, ms, world, segMs) {
   if (!state.homePlayers.length || !state.awayPlayers.length) {
     console.log("[footfive] skip advance — missing players for " + ms.id);
     return false;
+  }
+
+  // Lock timing to kickoff snapshot so admin speed changes do not rewrite live clocks
+  var snapMs = parseInt(ms.get("match_minute_real_ms"), 10);
+  if (!isNaN(snapMs) && snapMs > 0) {
+    state.timing = getTiming(state.pace || "normal", snapMs);
+    state.timing.matchMinuteRealMs = snapMs;
+  } else if (state.timing && state.timing.matchMinuteRealMs) {
+    // persist snapshot for legacy live matches once
+    try {
+      ms.set("match_minute_real_ms", state.timing.matchMinuteRealMs);
+      $app.save(ms);
+    } catch (_) {}
   }
 
   var result = advanceSegment(state, {
@@ -718,9 +932,9 @@ function advanceOneMatch($app, ms, world, segMs) {
     fresh.set("score_away", state.scoreAway);
     fresh.set("shootout_home", state.shootoutHome);
     fresh.set("shootout_away", state.shootoutAway);
-    fresh.set("state_json", stripEvents(state));
-    fresh.set("events_json", state.events);
-    fresh.set("stats_json", state.stats);
+    fresh.set("state_json", safeJson(stripEvents(state)));
+    fresh.set("events_json", safeJson(state.events));
+    fresh.set("stats_json", safeJson(state.stats));
     fresh.set("segment_index", state.segmentIndex);
     fresh.set("last_segment_key", segKey);
     fresh.set("last_processed_at", toPbDate(new Date()));
@@ -986,10 +1200,10 @@ function completeRoundIfReady($app, round, world) {
     }
   }
 
-  var pace = world.get("pace") || "dev";
+  var pace = world.get("pace") || "normal";
   var timing = getTiming(pace);
   var nextKey = nextRoundKey(round.get("round_key"));
-  var nextAt = new Date(Date.now() + timing.roundIntervalMs);
+  var nextAt = new Date(Date.now() + effectiveRoundIntervalMs(world));
 
   if (nextKey) {
     createRound($app, tournament, nextKey, null, winnersBySlot, nextAt, pace);
@@ -1051,6 +1265,107 @@ function updateTeamRecord(appOrTx, teamId, patch) {
 }
 
 /**
+ * Repair scheduled_at when missing/invalid on a non-started round.
+ */
+function repairRoundSchedule($app, round, world) {
+  if (!round) return { skipped: true };
+  var st = round.get("status");
+  if (st === "live" || st === "completed") return { skipped: true, reason: "already_started" };
+  var scheduled = parsePbDate(round.get("scheduled_at"));
+  if (!isNaN(scheduled) && scheduled > 0) return { ok: true, repaired: false, scheduledAt: round.get("scheduled_at") };
+
+  var waitMs = effectiveRoundIntervalMs(world);
+  var when = new Date(Date.now() + waitMs);
+  round.set("scheduled_at", toPbDate(when));
+  $app.save(round);
+  var fixtures = $app.findRecordsByFilter(
+    "shared_fixtures",
+    "round = {:r}",
+    "",
+    20,
+    0,
+    { r: round.id },
+  );
+  for (var i = 0; i < (fixtures || []).length; i++) {
+    if (fixtures[i].get("status") === "scheduled") {
+      fixtures[i].set("scheduled_at", toPbDate(when));
+      $app.save(fixtures[i]);
+    }
+  }
+  world.set("next_action_at", toPbDate(when));
+  $app.save(world);
+  console.log(
+    "[footfive-json] " +
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "info",
+        event: "round_schedule_repaired",
+        app: "footfive",
+        roundId: round.id,
+        scheduledAt: toPbDate(when),
+      }),
+  );
+  return { ok: true, repaired: true, scheduledAt: toPbDate(when) };
+}
+
+/**
+ * Admin: reschedule waiting (not live) round using between_round_minutes.
+ */
+function applyBetweenRoundToWaiting($app, adminId, reason) {
+  var world = ensureWorld($app);
+  var round = getActiveRound($app);
+  if (!round) throw new BadRequestError("No active round");
+  var st = round.get("status");
+  if (st === "live" || st === "completed") {
+    throw new BadRequestError("Cannot reschedule a live or completed round");
+  }
+  var liveFx = $app.findRecordsByFilter(
+    "shared_fixtures",
+    'round = {:r} && status = "live"',
+    "",
+    1,
+    0,
+    { r: round.id },
+  );
+  if (liveFx && liveFx.length) {
+    throw new BadRequestError("Fixtures already live");
+  }
+  var waitMs = effectiveRoundIntervalMs(world);
+  var when = new Date(Date.now() + waitMs);
+  var before = { scheduled_at: round.get("scheduled_at") };
+  round.set("scheduled_at", toPbDate(when));
+  $app.save(round);
+  var fixtures = $app.findRecordsByFilter(
+    "shared_fixtures",
+    "round = {:r}",
+    "",
+    20,
+    0,
+    { r: round.id },
+  );
+  for (var i = 0; i < (fixtures || []).length; i++) {
+    fixtures[i].set("scheduled_at", toPbDate(when));
+    $app.save(fixtures[i]);
+  }
+  world.set("next_action_at", toPbDate(when));
+  $app.save(world);
+  try {
+    audit($app, adminId, "round_reschedule", "shared_rounds", round.id, {
+      before: before,
+      scheduledAt: toPbDate(when),
+      betweenRoundMinutes: world.get("between_round_minutes"),
+      reason: reason || "",
+    });
+  } catch (_) {}
+  return {
+    ok: true,
+    roundId: round.id,
+    scheduledAt: toPbDate(when),
+    betweenRoundMinutes: world.get("between_round_minutes") || 3,
+  };
+}
+
+/**
  * Full world catch-up: kickoff due rounds, advance segments, complete rounds, restart tournaments.
  */
 function catchUpWorld($app) {
@@ -1058,6 +1373,30 @@ function catchUpWorld($app) {
   var actions = [];
   if (world.get("progression_paused")) {
     return { ok: true, paused: true, actions: [] };
+  }
+
+  // Backfill between_round_minutes if missing
+  if (world.get("between_round_minutes") == null || world.get("between_round_minutes") === 0) {
+    try {
+      world.set("between_round_minutes", 3);
+      if (!world.get("round_interval_ms") || world.get("round_interval_ms") < 60000) {
+        world.set("round_interval_ms", 3 * 60 * 1000);
+      }
+      $app.save(world);
+      world = ensureWorld($app);
+      actions.push({ backfillBetweenRoundMinutes: 3 });
+    } catch (_) {}
+  }
+  // Backfill match speed to official 15s/min when missing or legacy turbo-only
+  var secField = parseInt(world.get("match_minute_real_seconds"), 10);
+  if (isNaN(secField) || secField < 1) {
+    try {
+      world.set("match_minute_real_seconds", 15);
+      world.set("match_minute_real_ms", 15000);
+      $app.save(world);
+      world = ensureWorld($app);
+      actions.push({ backfillMatchMinuteSeconds: 15 });
+    } catch (_) {}
   }
 
   // New tournament if none active and next_action due
@@ -1084,13 +1423,16 @@ function catchUpWorld($app) {
       var r = rounds[i];
       var st = r.get("status");
       if (st === "scheduled" || st === "management") {
+        var repaired = repairRoundSchedule($app, r, world);
+        if (repaired && repaired.repaired) actions.push({ scheduleRepair: repaired });
+        r = $app.findRecordById("shared_rounds", r.id);
         var ko = kickOffRound($app, r, world);
         actions.push({ kickoff: ko, round: r.get("round_key") });
         r = $app.findRecordById("shared_rounds", r.id);
         st = r.get("status");
       }
       if (st === "live") {
-        var n = advanceDueMatches($app, world, 40);
+        var n = advanceDueMatches($app, world, 80);
         actions.push({ advanced: n });
         var done = completeRoundIfReady($app, r, world);
         actions.push({ complete: done });
@@ -1098,8 +1440,8 @@ function catchUpWorld($app) {
     }
   }
 
-  // Always advance any live matches
-  var n2 = advanceDueMatches($app, world, 40);
+  // Always advance any live matches (stuck recovery included via advanceSegment)
+  var n2 = advanceDueMatches($app, world, 80);
   if (n2) actions.push({ advancedExtra: n2 });
 
   return { ok: true, actions: actions };
@@ -1192,7 +1534,7 @@ function buildScoreboard($app) {
         var world = ensureWorld($app);
         var nd = parsePbDate(match.get("next_segment_due_at"));
         if (!match.get("finalised") && (isNaN(nd) || nd <= serverNow)) {
-          advanceOneMatch($app, match, world, segmentRealMs(world));
+          advanceOneMatch($app, match, world, segmentRealMsForMatch(world, match));
           match = $app.findRecordById("match_states", match.id);
         }
       } catch (_) {}
@@ -1202,13 +1544,20 @@ function buildScoreboard($app) {
       var events = loadEventsFromDb($app, match.id);
       if (!events.length) events = filterEvents(parseJson(match.get("events_json"), []));
       var vis = reconstructVisible(events, elapsed);
-      entry.scoreHome = vis.scoreHome;
-      entry.scoreAway = vis.scoreAway;
-      entry.shootoutHome = vis.shootoutHome;
-      entry.shootoutAway = vis.shootoutAway;
-      entry.minute = vis.minute;
-      entry.phase = vis.phase;
-      entry.status = vis.status;
+      entry.matchMinuteRealMs =
+        parseInt(match.get("match_minute_real_ms"), 10) || effectiveMatchMinuteMs(world);
+      // Prefer reconstructed scores; fall back to authoritative DB fields when events empty
+      entry.scoreHome = events.length ? vis.scoreHome : match.get("score_home") || 0;
+      entry.scoreAway = events.length ? vis.scoreAway : match.get("score_away") || 0;
+      entry.shootoutHome = events.length ? vis.shootoutHome : match.get("shootout_home") || 0;
+      entry.shootoutAway = events.length ? vis.shootoutAway : match.get("shootout_away") || 0;
+      entry.minute = events.length ? vis.minute : match.get("sim_minute") || 0;
+      entry.phase = events.length ? vis.phase : match.get("phase") || "live";
+      entry.status = match.get("finalised")
+        ? "finished"
+        : events.length
+          ? vis.status
+          : "live";
       entry.finished = vis.finished || !!match.get("finalised");
       if (entry.finished) entry.winnerTeamId = match.get("winner_team");
       entry.homeCoaching = match.get("home_coaching");
@@ -1217,9 +1566,14 @@ function buildScoreboard($app) {
     items.push(entry);
   }
 
+  var worldSb = ensureWorld($app);
   return {
     serverTime: new Date(serverNow).toISOString(),
     serverTimeMs: serverNow,
+    betweenRoundMinutes: worldSb.get("between_round_minutes") || 3,
+    matchMinuteRealSeconds:
+      parseInt(worldSb.get("match_minute_real_seconds"), 10) || 15,
+    matchMinuteRealMs: effectiveMatchMinuteMs(worldSb),
     round: {
       id: round.id,
       key: round.get("round_key"),
@@ -1227,6 +1581,9 @@ function buildScoreboard($app) {
       status: round.get("status"),
       scheduledAt: round.get("scheduled_at"),
       startedAt: round.get("started_at"),
+      announceKey: round.get("announce_key") || "",
+      announcedAt: round.get("announced_at") || "",
+      matchMinuteRealMs: parseInt(round.get("match_minute_real_ms"), 10) || null,
     },
     fixtures: items,
   };
@@ -1285,7 +1642,7 @@ function buildMatchView($app, fixtureId, sinceSeq, userId) {
     var world = ensureWorld($app);
     var nd = parsePbDate(match.get("next_segment_due_at"));
     if (!match.get("finalised") && (isNaN(nd) || nd <= serverNow)) {
-      advanceOneMatch($app, match, world, segmentRealMs(world));
+      advanceOneMatch($app, match, world, segmentRealMsForMatch(world, match));
       match = $app.findRecordById("match_states", match.id);
     }
   } catch (_) {}
@@ -1303,30 +1660,64 @@ function buildMatchView($app, fixtureId, sinceSeq, userId) {
 
   var finished = vis.finished || !!match.get("finalised");
   var stateRaw = parseJson(match.get("state_json"), {});
+  if (!stateRaw || typeof stateRaw !== "object" || Array.isArray(stateRaw)) stateRaw = {};
   var kicks = stateRaw.shootoutKicks || [];
-  // Only expose kicks that have been "played" (all stored kicks are past)
-  // Future kicks are never stored until simulated.
+  // Prefer event reconstruction; fall back to DB columns when events empty (legacy stuck)
+  var useDb = !events.length;
+  var scoreHome = useDb ? match.get("score_home") || 0 : vis.scoreHome;
+  var scoreAway = useDb ? match.get("score_away") || 0 : vis.scoreAway;
+  var minute = useDb ? match.get("sim_minute") || 0 : vis.minute;
+  var phase = useDb ? match.get("phase") || "live" : vis.phase;
+  var status = finished
+    ? "finished"
+    : useDb
+      ? match.get("finalised")
+        ? "finished"
+        : "live"
+      : vis.status;
+  var speedMs =
+    parseInt(match.get("match_minute_real_ms"), 10) ||
+    (stateRaw.timing && stateRaw.timing.matchMinuteRealMs) ||
+    effectiveMatchMinuteMs(ensureWorld($app));
 
   return {
     serverTime: new Date(serverNow).toISOString(),
     serverTimeMs: serverNow,
     fixtureId: fixtureId,
+    matchMinuteRealMs: speedMs,
     home: teamPublic(home),
     away: teamPublic(away),
-    status: vis.status,
-    scoreHome: vis.scoreHome,
-    scoreAway: vis.scoreAway,
-    shootoutHome: vis.shootoutHome,
-    shootoutAway: vis.shootoutAway,
+    status: status,
+    scoreHome: scoreHome,
+    scoreAway: scoreAway,
+    shootoutHome: useDb ? match.get("shootout_home") || 0 : vis.shootoutHome,
+    shootoutAway: useDb ? match.get("shootout_away") || 0 : vis.shootoutAway,
     shootoutTakenHome: stateRaw.shootoutTakenHome || 0,
     shootoutTakenAway: stateRaw.shootoutTakenAway || 0,
     shootoutSide: stateRaw.shootoutSide || null,
-    shootoutKicks: finished || vis.phase === "shootout" || vis.status === "shootout" ? kicks : [],
-    minute: vis.minute,
-    phase: vis.phase,
-    events: vis.events,
-    newEvents: newEvents,
-    lastSeq: vis.lastSeq,
+    shootoutKicks: finished || phase === "shootout" || status === "shootout" ? kicks : [],
+    minute: minute,
+    phase: phase,
+    events: useDb
+      ? [
+          {
+            seq: 1,
+            minute: 0,
+            phase: "first_half",
+            offsetMs: 0,
+            type: "kickoff",
+            team: "home",
+            player: null,
+            message: "Match in progress (recovered).",
+            scoreHome: scoreHome,
+            scoreAway: scoreAway,
+            shootoutHome: 0,
+            shootoutAway: 0,
+          },
+        ]
+      : vis.events,
+    newEvents: useDb ? [] : newEvents,
+    lastSeq: useDb ? 1 : vis.lastSeq,
     finished: finished,
     caughtUp: true,
     stats: finished ? parseJson(match.get("stats_json"), null) : null,
@@ -1337,10 +1728,10 @@ function buildMatchView($app, fixtureId, sinceSeq, userId) {
     canCoach:
       !!managedSide &&
       !finished &&
-      (vis.status === "live" ||
-        vis.status === "extra_time" ||
-        vis.status === "half_time" ||
-        vis.status === "shootout"),
+      (status === "live" ||
+        status === "extra_time" ||
+        status === "half_time" ||
+        status === "shootout"),
   };
 }
 
@@ -1702,5 +2093,12 @@ if (typeof module !== "undefined") {
     calcOdds: calcOdds,
     BALANCE: BALANCE,
     mgmt: mgmtMod,
+    effectiveRoundIntervalMs: effectiveRoundIntervalMs,
+    effectiveMatchMinuteMs: effectiveMatchMinuteMs,
+    segmentRealMs: segmentRealMs,
+    segmentRealMsForMatch: segmentRealMsForMatch,
+    repairRoundSchedule: repairRoundSchedule,
+    applyBetweenRoundToWaiting: applyBetweenRoundToWaiting,
+    kickOffRound: kickOffRound,
   };
 }

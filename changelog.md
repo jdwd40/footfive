@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-07-26 — GitHub Actions deploy on main
+
+- `.github/workflows/deploy.yml` — test, production build, SSH deploy to VPS on push to `main`.
+- Deploy key + repo secrets (`VPS_HOST` / `PORT` / `USER` / `SSH_PRIVATE_KEY`).
+- Helper: `scripts/setup-github-deploy-secrets.sh`.
+- Repo: https://github.com/jdwd40/footfive
+
+---
+
+## 2026-07-25 — Phase 12: admin screen + team abbreviations
+
+- Admin post-login routing to `/admin` (or `/change-password` first); Admin nav + dashboard link.
+- `RequireAdmin` guard with loading/forbidden states; admin shell + retry on API errors.
+- Official 3-letter team abbreviations (MET, MC1, … DOG) on teams + APIs.
+- Compact tickers / match switcher use abbreviations; main scoreboard keeps full names.
+- Details: `prompt outputs/prompt12_output.md`.
+
+---
+
+## 2026-07-25 — Phase 11: match pacing 15s/min + admin login repair
+
+- Official default: **1 match minute = 15 real seconds** (`world.match_minute_real_seconds`).
+- Kickoff speed snapshots on fixtures/match_states; live matches keep snapshot.
+- Admin control for match speed; applies to unstarted matches only.
+- Live event holds slowed (readable minor/medium/major/goal pacing); catch-up no longer default.
+- Repaired app admin `admin@admin.com` (must_change_password); password via env only.
+- Details: `prompt outputs/prompt11_output.md`.
+
+---
+
+## 2026-07-25 — Phase 10: tournament start, countdown, connection stability
+
+- **Root fix:** stuck matches past 90' when phase flags lost with empty `state_json` — recovery in match engine + safe JSON persist + score fallback.
+- Production R16 recovered and completed; **QF auto-started** on 3-minute schedule.
+- `between_round_minutes` (default **3**); admin save + apply-to-waiting-round.
+- Global countdown banner, 60s / 10s warnings, once-per-round start announcement.
+- Connection state: no warning on single failure; reconnecting @2; offline @3+; ignore abort/hidden-tab.
+- App admin user `admin` (username login) with forced password change; `ensure-admin` CLI.
+- Migration `1750000011_round_timing_username.js`.
+- Details: `prompt outputs/prompt10_output.md`.
+
+---
+
 ## 2026-07-25 — Phase 8: production deployment
 
 - First production install on VPS `my-vps` (host `dwarf-vps`).

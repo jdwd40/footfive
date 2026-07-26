@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
+import { useAuth } from "../lib/auth";
 import { footfiveApi, type WorldSnapshot } from "../lib/pocketbase";
 
 export default function DashboardPage() {
+  const { isAdmin } = useAuth();
   const [world, setWorld] = useState<WorldSnapshot | null>(null);
   const [bets, setBets] = useState<
     Array<{ id: string; stake: number; odds: number; status: string }>
@@ -131,6 +133,17 @@ export default function DashboardPage() {
             Catch up
           </button>
         </div>
+        {isAdmin ? (
+          <div className="mt-3">
+            <Link
+              to="/admin"
+              className="btn-primary flex w-full items-center justify-center gap-2 text-center"
+              data-testid="dashboard-admin-link"
+            >
+              Administration console
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       {finances.length ? (

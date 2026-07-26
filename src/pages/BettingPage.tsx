@@ -77,7 +77,13 @@ export default function BettingPage() {
         {fixtures.map((f) => (
           <div key={f.fixtureId} className="glass rounded-2xl p-3">
             <div className="mb-2 text-center text-sm font-semibold">
-              {f.home.name} vs {f.away.name}
+              <span className="sm:hidden">
+                {(f.home.abbreviation || f.home.name.slice(0, 3)).toUpperCase()} vs{" "}
+                {(f.away.abbreviation || f.away.name.slice(0, 3)).toUpperCase()}
+              </span>
+              <span className="hidden sm:inline">
+                {f.home.name} vs {f.away.name}
+              </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button

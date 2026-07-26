@@ -9,7 +9,7 @@ import {
 } from "react";
 import { footfiveApi, pb } from "./pocketbase";
 
-type AuthUser = {
+export type AuthUser = {
   id: string;
   email: string;
   display_name?: string;
@@ -21,94 +21,119 @@ type AuthCtx = {
   user: AuthUser | null;
   loading: boolean;
   mustChangePassword: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  isAdmin: boolean;
+  login: (email: string, password: string) => Promise<AuthUser>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
   logout: () => void;
-  refreshMe: () => Promise<void>;
+  refreshMe: () => Promise<AuthUser | null>;
 };
 
 const Ctx = createContext<AuthCtx | null>(null);
+
+function mapRecord(r: {
+  id: string;
+  email?: string;
+  display_name?: unknown;
+  role?: unknown;
+  must_change_password?: unknown;
+}): AuthUser {
+  return {
+    id: r.id,
+    email: String(r.email || ""),
+    display_name: r.display_name as string | undefined,
+    role: String(r.role || "user"),
+    must_change_password: !!r.must_change_password,
+  };
+}
+
+async function enrichFromMe(base: AuthUser): Promise<AuthUser> {
+  try {
+    const me = await footfiveApi.me();
+    return {
+      ...base,
+      must_change_password: !!me.must_change_password,
+      role: String(me.role || base.role || "user"),
+      display_name: String(me.display_name || base.display_name || ""),
+      email: String(me.email || base.email),
+    };
+  } catch {
+    return base;
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const mapRecord = (r: {
-    id: string;
-    email?: string;
-    display_name?: unknown;
-    role?: unknown;
-    must_change_password?: unknown;
-  }): AuthUser => ({
-    id: r.id,
-    email: String(r.email || ""),
-    display_name: r.display_name as string | undefined,
-    role: r.role as string | undefined,
-    must_change_password: !!r.must_change_password,
-  });
-
   const refreshMe = useCallback(async () => {
     if (!pb.authStore.isValid) {
       setUser(null);
-      return;
+      return null;
     }
     try {
       const rec = await pb.collection("users").authRefresh();
-      if (rec?.record) setUser(mapRecord(rec.record as unknown as AuthUser));
+      let mapped = mapRecord((rec?.record || pb.authStore.record) as unknown as AuthUser);
+      mapped = await enrichFromMe(mapped);
+      setUser(mapped);
+      return mapped;
     } catch {
-      // fall back to store
-      if (pb.authStore.record) setUser(mapRecord(pb.authStore.record as unknown as AuthUser));
+      if (pb.authStore.record) {
+        let mapped = mapRecord(pb.authStore.record as unknown as AuthUser);
+        mapped = await enrichFromMe(mapped);
+        setUser(mapped);
+        return mapped;
+      }
+      setUser(null);
+      return null;
     }
   }, []);
 
   useEffect(() => {
-    const sync = () => {
+    let active = true;
+    const boot = async () => {
+      if (pb.authStore.isValid && pb.authStore.record) {
+        let mapped = mapRecord(pb.authStore.record as unknown as AuthUser);
+        mapped = await enrichFromMe(mapped);
+        if (active) setUser(mapped);
+      } else if (active) {
+        setUser(null);
+      }
+      if (active) setLoading(false);
+    };
+    void boot();
+    const unsub = pb.authStore.onChange(() => {
       if (pb.authStore.isValid && pb.authStore.record) {
         setUser(mapRecord(pb.authStore.record as unknown as AuthUser));
       } else {
         setUser(null);
       }
-      setLoading(false);
+    });
+    return () => {
+      active = false;
+      unsub();
     };
-    sync();
-    // Enrich with must_change_password from /me if needed
-    if (pb.authStore.isValid) {
-      void (async () => {
-        try {
-          const me = await footfiveApi.me();
-          setUser((u) =>
-            u
-              ? {
-                  ...u,
-                  must_change_password: !!me.must_change_password,
-                  role: String(me.role || u.role),
-                  display_name: String(me.display_name || u.display_name || ""),
-                }
-              : u,
-          );
-        } catch {
-          /* ignore */
-        }
-      })();
-    }
-    return pb.authStore.onChange(() => sync());
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const auth = await pb.collection("users").authWithPassword(email, password);
-    const r = auth.record as unknown as AuthUser;
-    setUser(mapRecord(r));
+  const login = useCallback(async (identity: string, password: string) => {
+    const id = identity.trim();
+    let mapped: AuthUser;
     try {
-      const me = await footfiveApi.me();
-      setUser(
-        mapRecord({
-          ...r,
-          must_change_password: me.must_change_password,
-        }),
-      );
+      if (id.includes("@")) {
+        const auth = await pb.collection("users").authWithPassword(id, password);
+        mapped = mapRecord(auth.record as unknown as AuthUser);
+      } else {
+        const res = await footfiveApi.loginIdentity(id, password);
+        pb.authStore.save(res.token, res.record as never);
+        mapped = mapRecord(res.record as unknown as AuthUser);
+      }
     } catch {
-      /* store only */
+      const res = await footfiveApi.loginIdentity(id, password);
+      pb.authStore.save(res.token, res.record as never);
+      mapped = mapRecord(res.record as unknown as AuthUser);
     }
+    mapped = await enrichFromMe(mapped);
+    setUser(mapped);
+    return mapped;
   }, []);
 
   const register = useCallback(async (email: string, password: string, displayName: string) => {
@@ -119,6 +144,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       display_name: displayName || email.split("@")[0],
     });
     await pb.collection("users").authWithPassword(email, password);
+    const mapped = await enrichFromMe(mapRecord(pb.authStore.record as unknown as AuthUser));
+    setUser(mapped);
   }, []);
 
   const logout = useCallback(() => {
@@ -127,18 +154,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const mustChangePassword = !!user?.must_change_password;
+  const isAdmin = (user?.role || "") === "admin";
 
   const value = useMemo(
     () => ({
       user,
       loading,
       mustChangePassword,
+      isAdmin,
       login,
       register,
       logout,
       refreshMe,
     }),
-    [user, loading, mustChangePassword, login, register, logout, refreshMe],
+    [user, loading, mustChangePassword, isAdmin, login, register, logout, refreshMe],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -148,4 +177,12 @@ export function useAuth() {
   const ctx = useContext(Ctx);
   if (!ctx) throw new Error("useAuth outside provider");
   return ctx;
+}
+
+/** Post-login destination. */
+export function postLoginPath(user: AuthUser | null | undefined): string {
+  if (!user) return "/login";
+  if (user.must_change_password) return "/change-password";
+  if (user.role === "admin") return "/admin";
+  return "/dashboard";
 }

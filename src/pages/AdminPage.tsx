@@ -14,14 +14,23 @@ export default function AdminPage() {
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
+  const [betweenMins, setBetweenMins] = useState(3);
+  const [matchSec, setMatchSec] = useState(15);
   const [tab, setTab] = useState<
     "dash" | "users" | "teams" | "retention" | "tools" | "audit"
   >("dash");
 
   async function load() {
     try {
-      const [o, u, t, r, a, b, rec, h] = await Promise.all([
-        footfiveApi.adminOverview(),
+      // Load overview first so shell is never blank if a secondary call fails
+      const o = await footfiveApi.adminOverview();
+      setOverview(o);
+      const bm = Number(o.betweenRoundMinutes ?? 3);
+      if (!Number.isNaN(bm) && bm >= 1) setBetweenMins(bm);
+      const ms = Number(o.matchMinuteRealSeconds ?? 15);
+      if (!Number.isNaN(ms) && ms >= 1) setMatchSec(ms);
+
+      const results = await Promise.allSettled([
         footfiveApi.adminUsers(),
         footfiveApi.recordsTeams(),
         footfiveApi.adminRetention(),
@@ -30,17 +39,19 @@ export default function AdminPage() {
         footfiveApi.adminRecoveryStatus(),
         footfiveApi.adminHealth(),
       ]);
-      setOverview(o);
-      setUsers(u.users || []);
-      setTeams(t.teams || []);
-      setRetention(r);
-      setAudit(a.entries || []);
-      setBackfill(b);
-      setRecovery(rec);
-      setHealth(h);
-      setError("");
+      if (results[0].status === "fulfilled") setUsers(results[0].value.users || []);
+      if (results[1].status === "fulfilled") setTeams(results[1].value.teams || []);
+      if (results[2].status === "fulfilled") setRetention(results[2].value);
+      if (results[3].status === "fulfilled") setAudit(results[3].value.entries || []);
+      if (results[4].status === "fulfilled") setBackfill(results[4].value);
+      if (results[5].status === "fulfilled") setRecovery(results[5].value);
+      if (results[6].status === "fulfilled") setHealth(results[6].value);
+
+      const failed = results.filter((r) => r.status === "rejected").length;
+      setError(failed ? `${failed} admin panel(s) failed to load — retry` : "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Admin access denied");
+      setError(err instanceof Error ? err.message : "Admin API unavailable");
+      // Keep shell visible — overview null still shows header/tabs
     }
   }
 
@@ -62,12 +73,31 @@ export default function AdminPage() {
 
   return (
     <Layout title="Admin">
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-3 flex items-center justify-between gap-2" data-testid="admin-shell">
         <h1 className="font-display text-xl text-cyan">Administration</h1>
-        <Link to="/dashboard" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
-          Exit
-        </Link>
+        <div className="flex gap-1">
+          <button
+            type="button"
+            className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs"
+            onClick={() => void load()}
+            data-testid="admin-retry"
+          >
+            Retry
+          </button>
+          <Link to="/dashboard" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
+            Exit
+          </Link>
+        </div>
       </div>
+
+      {!overview && error ? (
+        <div className="glass mb-3 rounded-2xl p-4 text-sm" data-testid="admin-api-error">
+          <p className="text-magenta">{error}</p>
+          <button type="button" className="btn-primary mt-3 text-xs" onClick={() => void load()}>
+            Retry admin API
+          </button>
+        </div>
+      ) : null}
 
       <div className="mb-3 flex gap-1 overflow-x-auto">
         {(
@@ -191,6 +221,125 @@ export default function AdminPage() {
               {overview.progressionPaused ? "Resume" : "Pause"}
             </button>
           </div>
+
+          <section
+            className="glass space-y-2 rounded-2xl p-4 text-sm"
+            data-testid="admin-timing"
+          >
+            <p className="text-[11px] uppercase tracking-widest text-muted">
+              Between-round timing
+            </p>
+            <p className="text-xs text-muted">
+              Server: {String(overview.serverTime || "—")} · Next action:{" "}
+              {String(overview.nextActionAt || "—")}
+            </p>
+            {overview.activeRound ? (
+              <p className="text-xs text-cyan" data-testid="admin-active-round">
+                Round:{" "}
+                {String((overview.activeRound as { label?: string }).label || "")} ·{" "}
+                {String((overview.activeRound as { status?: string }).status || "")} ·
+                kickoff{" "}
+                {String(
+                  (overview.activeRound as { scheduledAt?: string }).scheduledAt || "—",
+                )}
+              </p>
+            ) : null}
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-muted">Minutes between rounds</span>
+              <input
+                className="input !min-h-9 !w-24 !py-1 text-sm"
+                type="number"
+                min={1}
+                max={1440}
+                value={betweenMins}
+                onChange={(e) => setBetweenMins(Number(e.target.value))}
+                data-testid="between-round-minutes"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                data-testid="save-between-round"
+                onClick={() =>
+                  run(
+                    () =>
+                      footfiveApi.adminWorldSettings({
+                        between_round_minutes: betweenMins,
+                        reason: "admin_timing",
+                      }),
+                    `Saved ${betweenMins} min interval`,
+                  )
+                }
+              >
+                Save interval
+              </button>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                data-testid="apply-between-round"
+                onClick={() =>
+                  run(
+                    () => footfiveApi.adminApplyBetweenRound("admin_apply_waiting"),
+                    "Applied to waiting round",
+                  )
+                }
+              >
+                Apply to waiting round
+              </button>
+            </div>
+            <p className="text-[11px] text-muted">
+              Apply only works when the next round has not started. Live rounds are never
+              rescheduled.
+            </p>
+          </section>
+
+          <section
+            className="glass space-y-2 rounded-2xl p-4 text-sm"
+            data-testid="admin-match-speed"
+          >
+            <p className="text-[11px] uppercase tracking-widest text-muted">
+              Real seconds per match minute
+            </p>
+            <label className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted">Seconds</span>
+              <input
+                className="input !min-h-9 !w-24 !py-1 text-sm"
+                type="number"
+                min={1}
+                max={60}
+                value={matchSec}
+                onChange={(e) => setMatchSec(Number(e.target.value))}
+                data-testid="match-minute-seconds"
+              />
+            </label>
+            <p className="text-xs text-cyan" data-testid="match-speed-estimate">
+              {matchSec}s per match minute · 90′ ≈ {Math.round((90 * matchSec) / 60)}m{" "}
+              {(90 * matchSec) % 60}s · ET (30′) ≈ {Math.round((30 * matchSec) / 60)}m{" "}
+              {(30 * matchSec) % 60}s
+            </p>
+            <p className="text-[11px] text-muted">
+              Applies to matches that have not started. Live fixtures keep their kickoff
+              speed snapshot.
+            </p>
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              data-testid="save-match-speed"
+              onClick={() =>
+                run(
+                  () =>
+                    footfiveApi.adminWorldSettings({
+                      match_minute_real_seconds: matchSec,
+                      reason: "admin_match_speed",
+                    }),
+                  `Saved ${matchSec}s per match minute (next unstarted matches)`,
+                )
+              }
+            >
+              Save match speed
+            </button>
+          </section>
         </div>
       ) : null}
 

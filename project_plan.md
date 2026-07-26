@@ -1,8 +1,8 @@
 # FootFive / Proball Manager Project Plan
 
-**Version:** 3.6  
+**Version:** 3.9  
 **Last updated:** 25 July 2026  
-**Status:** Phase 8 — **production live** at https://jdwd40.com/footfive/ (PB 0.28.4)
+**Status:** Phase 12 — **production live**; admin UI routing fixed; official team abbreviations
 
 ---
 

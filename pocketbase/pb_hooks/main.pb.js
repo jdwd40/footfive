@@ -1225,6 +1225,70 @@ routerAdd(
 );
 
 routerAdd(
+  "POST",
+  "/api/footfive/admin/world/apply-between-round",
+  (e) => {
+    const auth = e.auth;
+    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
+    const adm = require(`${__hooks}/lib/adminService.js`);
+    adm.requireAdmin(auth);
+    const svc = require(`${__hooks}/lib/worldService.js`);
+    let body = {};
+    try {
+      body = e.requestInfo().body || {};
+    } catch (_) {}
+    try {
+      return e.json(
+        200,
+        svc.applyBetweenRoundToWaiting($app, auth.id, body.reason || "apply_between_round"),
+      );
+    } catch (err) {
+      throw new BadRequestError(String(err.message || err));
+    }
+  },
+  $apis.requireAuth(),
+);
+
+// Username or email login (does not log passwords)
+routerAdd("POST", "/api/footfive/auth/login", (e) => {
+  let body = {};
+  try {
+    body = e.requestInfo().body || {};
+  } catch (_) {}
+  const identity = String(body.identity || body.email || body.username || "").trim();
+  const password = String(body.password || "");
+  if (!identity || !password) throw new BadRequestError("identity and password required");
+  let authRecord = null;
+  try {
+    if (identity.indexOf("@") >= 0) {
+      authRecord = $app.findAuthRecordByEmail("users", identity);
+    } else {
+      const rows = $app.findRecordsByFilter(
+        "users",
+        "username = {:u}",
+        "",
+        1,
+        0,
+        { u: identity },
+      );
+      if (rows && rows.length) authRecord = rows[0];
+    }
+  } catch (_) {
+    authRecord = null;
+  }
+  if (!authRecord) throw new UnauthorizedError("Invalid credentials");
+  try {
+    if (authRecord.get("disabled")) throw new ForbiddenError("Account disabled");
+  } catch (err) {
+    if (err instanceof ForbiddenError) throw err;
+  }
+  if (!authRecord.validatePassword(password)) {
+    throw new UnauthorizedError("Invalid credentials");
+  }
+  return $apis.recordAuthResponse(e, authRecord);
+});
+
+routerAdd(
   "GET",
   "/api/footfive/admin/retention",
   (e) => {

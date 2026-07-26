@@ -1,0 +1,155 @@
+name: Deploy FootFive
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-footfive-production
+  cancel-in-progress: false
+
+jobs:
+  test-and-build:
+    name: Test & production build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build (/footfive/)
+        env:
+          VITE_BASE_PATH: /footfive/
+          VITE_POCKETBASE_URL: https://jdwd40.com/footfive-pb
+        run: npm run build
+
+      - name: Guard dist secrets
+        run: |
+          set -euo pipefail
+          if grep -RInE 'ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9]{20,}|password\s*[:=]\s*["'\''][^"'\'']{8,}' dist/ 2>/dev/null; then
+            echo "Refusing deploy: possible secret in dist/"
+            exit 1
+          fi
+          echo "dist secret scan clean"
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 3
+
+      - name: Upload PocketBase code artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketbase-code
+          path: |
+            pocketbase/pb_hooks
+            pocketbase/pb_migrations
+          retention-days: 3
+
+  deploy:
+    name: Deploy to VPS
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download PocketBase code
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketbase-code
+          path: pocketbase/
+
+      - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_HOST:-}" || { echo "Missing secret VPS_HOST"; exit 1; }
+          test -n "${VPS_PORT:-}" || { echo "Missing secret VPS_PORT"; exit 1; }
+          test -n "${VPS_SSH_PRIVATE_KEY:-}" || { echo "Missing secret VPS_SSH_PRIVATE_KEY"; exit 1; }
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${VPS_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
+
+      - name: Deploy over SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_USER:-}" || { echo "Missing secret VPS_USER"; exit 1; }
+          STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          REMOTE="${VPS_USER}@${VPS_HOST}"
+          SSH=(ssh -p "${VPS_PORT}" -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes "${REMOTE}")
+
+          "${SSH[@]}" 'echo ssh_ok && whoami && test -d /home/jd/footfive'
+
+          # Timestamped release of SPA
+          "${SSH[@]}" "mkdir -p /home/jd/footfive/releases/${STAMP} /home/jd/footfive/pocketbase/pb_hooks /home/jd/footfive/pocketbase/pb_migrations /home/jd/footfive/logs /var/backups/footfive/${STAMP}"
+
+          # Backup current hooks + migrations (code only; never wipe pb_data)
+          "${SSH[@]}" "cp -a /home/jd/footfive/pocketbase/pb_hooks /var/backups/footfive/${STAMP}/pb_hooks 2>/dev/null || true"
+          "${SSH[@]}" "cp -a /home/jd/footfive/pocketbase/pb_migrations /var/backups/footfive/${STAMP}/pb_migrations 2>/dev/null || true"
+          "${SSH[@]}" "cp -a /var/www/jdwd40.com/html/footfive /var/backups/footfive/${STAMP}/web 2>/dev/null || true"
+
+          # Frontend → release dir then web root + current symlink
+          tar -C dist -czf - . | "${SSH[@]}" "tar -C /home/jd/footfive/releases/${STAMP} -xzf -"
+          "${SSH[@]}" "ln -sfn /home/jd/footfive/releases/${STAMP} /home/jd/footfive/current"
+          "${SSH[@]}" "mkdir -p /var/www/jdwd40.com/html/footfive && rsync -a --delete /home/jd/footfive/releases/${STAMP}/ /var/www/jdwd40.com/html/footfive/"
+
+          # PocketBase hooks + migrations (binary + pb_data stay on server)
+          tar -C pocketbase/pb_hooks -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_hooks/* && tar -C /home/jd/footfive/pocketbase/pb_hooks -xzf -'
+          tar -C pocketbase/pb_migrations -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_migrations/* && tar -C /home/jd/footfive/pocketbase/pb_migrations -xzf -'
+
+          # Restart system service (NOPASSWD sudo on VPS)
+          "${SSH[@]}" "echo ${STAMP} > /home/jd/footfive/DEPLOYED_STAMP && sudo systemctl restart footfive-pocketbase.service && sleep 3 && sudo systemctl is-active footfive-pocketbase.service && curl -sf http://127.0.0.1:8091/api/health && curl -sf http://127.0.0.1:8091/api/footfive/health | head -c 400"
+
+          # Prune old releases (keep last 8)
+          "${SSH[@]}" 'cd /home/jd/footfive/releases && ls -1dt */ 2>/dev/null | tail -n +9 | xargs -r rm -rf'
+
+          echo "Deploy finished stamp=${STAMP}"
+
+      - name: Smoke test production
+        run: |
+          set -euo pipefail
+          curl -sfI https://jdwd40.com/footfive/ | head -5
+          curl -sf https://jdwd40.com/footfive-pb/api/health
+          echo
+          curl -sf https://jdwd40.com/footfive-pb/api/footfive/health | head -c 400
+          echo
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://jdwd40.com/footfive-pb/api/footfive/world)
+          echo "world unauth status=${code} (expect 401)"
+          test "$code" = "401"

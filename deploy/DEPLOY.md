@@ -43,9 +43,69 @@ Frontend `VITE_POCKETBASE_URL` at **build time** must be the public API origin (
 5. Create superuser: `./pocketbase superuser upsert … --dir=pb_data`.
 6. Build frontend with correct `VITE_POCKETBASE_URL`; rsync to `/var/www/footfive/dist`.
 7. Install Nginx config; enable HTTPS; reload Nginx.
-8. Promote first admin: set `users.role='admin'` via superuser UI or SQL once.
+8. Promote / create app admin (not PB superuser):
 
-## Deploy update
+```bash
+export FOOTFIVE_PB_URL=http://127.0.0.1:8091
+export FOOTFIVE_SUPERUSER_EMAIL=...
+export FOOTFIVE_SUPERUSER_PASSWORD=...
+export FOOTFIVE_ADMIN_PASSWORD=...   # stdin/env only; never commit
+node /home/jd/footfive/scripts/footfive-admin.mjs ensure-admin --username admin --confirm
+```
+
+Weak bootstrap passwords force `must_change_password=true`.
+
+### Between-round timing
+
+- World field `between_round_minutes` (default **3** for testing).
+- Admin UI: save interval; **Apply to waiting round** only when not live.
+- Daily backups: `footfive-backup.timer` → `/var/backups/footfive/`.
+
+### Match speed
+
+- World field `match_minute_real_seconds` (default **15**).
+- 90′ ≈ 22m30s wall clock; admin range 1–60.
+- Snapshotted onto fixtures/match_states at kickoff; live matches keep snapshot.
+- Admin UI: “Real seconds per match minute”.
+
+### App admin account
+
+```bash
+export FOOTFIVE_ADMIN_EMAIL=admin@admin.com
+export FOOTFIVE_ADMIN_PASSWORD=...   # never commit
+node scripts/footfive-admin.mjs ensure-admin --username admin --confirm
+```
+
+Forces `must_change_password=true` on bootstrap.
+
+## CI/CD (GitHub Actions → VPS)
+
+Repo: https://github.com/jdwd40/footfive  
+Workflow: `.github/workflows/deploy.yml` — on **push to `main`** (and `workflow_dispatch`):
+
+1. Unit tests + typecheck + lint  
+2. Production build (`VITE_BASE_PATH=/footfive/`, `VITE_POCKETBASE_URL=https://jdwd40.com/footfive-pb`)  
+3. SSH deploy: SPA release under `/home/jd/footfive/releases/<stamp>/`, rsync to nginx web root, update hooks/migrations, restart `footfive-pocketbase`  
+4. Public smoke: SPA + PB health + unauth world = 401  
+
+**Never** deploys or wipes `pb_data`. Binary stays on the VPS.
+
+### Required repository secrets
+
+| Secret | Example |
+|---|---|
+| `VPS_HOST` | `213.165.91.221` |
+| `VPS_PORT` | `4020` |
+| `VPS_USER` | `jd` |
+| `VPS_SSH_PRIVATE_KEY` | ed25519 private key (pubkey in VPS `authorized_keys`) |
+
+One-shot helper (after `gh auth login`):
+
+```bash
+./scripts/setup-github-deploy-secrets.sh
+```
+
+### Manual deploy (operator on VPS / local with SSH)
 
 ```bash
 export FOOTFIVE_ROOT=/opt/footfive/app

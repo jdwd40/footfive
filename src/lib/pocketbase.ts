@@ -7,6 +7,7 @@ pb.autoCancellation(false);
 export type TeamPublic = {
   id: string;
   name: string;
+  abbreviation?: string;
   grade: string;
   primary_color: string;
   secondary_color: string;
@@ -71,6 +72,7 @@ export type MatchView = {
   serverTime: string;
   serverTimeMs: number;
   fixtureId: string;
+  matchMinuteRealMs?: number;
   home: TeamPublic;
   away: TeamPublic;
   status: string;
@@ -100,6 +102,7 @@ export type MatchView = {
 export type ScoreboardResponse = {
   serverTime: string;
   serverTimeMs: number;
+  betweenRoundMinutes?: number;
   round: {
     id: string;
     key: string;
@@ -107,6 +110,8 @@ export type ScoreboardResponse = {
     status: string;
     scheduledAt: string;
     startedAt?: string;
+    announceKey?: string;
+    announcedAt?: string;
   } | null;
   fixtures: ScoreboardFixture[];
 };
@@ -393,6 +398,16 @@ export const footfiveApi = {
     api("/api/footfive/admin/world/settings", {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+  adminApplyBetweenRound: (reason = "apply") =>
+    api("/api/footfive/admin/world/apply-between-round", {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  loginIdentity: (identity: string, password: string) =>
+    api<{ token: string; record: Record<string, unknown> }>("/api/footfive/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identity, password }),
     }),
   adminRetention: () => api<Record<string, unknown>>("/api/footfive/admin/retention"),
   adminRetentionPreview: () =>

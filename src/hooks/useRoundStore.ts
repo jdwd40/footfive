@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { SCOREBOARD_POLL_MS } from "../lib/config";
 import { footfiveApi, type ScoreboardFixture, type ScoreboardResponse } from "../lib/pocketbase";
+import { reportConnectionFail, reportConnectionOk } from "./useConnectionStatus";
 
 type RoundStore = {
   board: ScoreboardResponse | null;
@@ -20,9 +21,9 @@ let store: RoundStore = {
 };
 const listeners = new Set<() => void>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-let inflight = 0;
 let lastRequestId = 0;
 let subscribers = 0;
+let failStreak = 0;
 
 function emit() {
   for (const l of listeners) l();
@@ -35,19 +36,22 @@ function setStore(partial: Partial<RoundStore>) {
 
 async function fetchBoard() {
   const reqId = ++lastRequestId;
-  inflight++;
   try {
     const data = await footfiveApi.scoreboard();
     if (reqId < lastRequestId) return; // stale
     const offset = data.serverTimeMs - Date.now();
+    failStreak = 0;
+    reportConnectionOk();
     setStore({ board: data, error: "", serverOffsetMs: offset });
   } catch (err) {
-    if (reqId < lastRequestId) return;
+    if (reqId < lastRequestId) return; // stale / navigated
+    if (typeof document !== "undefined" && document.hidden) return;
+    failStreak += 1;
+    reportConnectionFail(err);
+    // Keep last board; only surface soft error after consecutive fails
     setStore({
-      error: err instanceof Error ? err.message : "Scoreboard failed",
+      error: failStreak >= 3 ? (err instanceof Error ? err.message : "Scoreboard failed") : "",
     });
-  } finally {
-    inflight--;
   }
 }
 

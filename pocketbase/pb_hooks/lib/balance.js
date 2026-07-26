@@ -3,13 +3,16 @@
  * Team treasury ≠ personal betting credits.
  */
 var BALANCE = {
-  matchMinuteRealMs: 4000,
-  halfTimeBreakMs: 15000,
-  etHalfTimeBreakMs: 10000,
-  shootoutKickSpacingMs: 8000,
-  shootoutIntroMs: 6000,
-  penaltySequenceStepMs: 2500,
+  // Official default: 1 in-game minute = 15 real seconds (~22m30s for 90')
+  matchMinuteRealMs: 15000,
+  matchMinuteRealSeconds: 15,
+  halfTimeBreakMs: 30000,
+  etHalfTimeBreakMs: 15000,
+  shootoutKickSpacingMs: 10000,
+  shootoutIntroMs: 8000,
+  penaltySequenceStepMs: 3500,
 
+  // Dev/test turbo (only when pace is dev/test AND no world override)
   devMatchMinuteRealMs: 200,
   devHalfTimeBreakMs: 600,
   devEtHalfTimeBreakMs: 400,
@@ -19,6 +22,8 @@ var BALANCE = {
 
   segmentMatchMinutes: 5,
   devSegmentMatchMinutes: 5,
+  minMatchMinuteSeconds: 1,
+  maxMatchMinuteSeconds: 60,
 
   roundIntervalMs: 10 * 60 * 1000,
   tournamentIntervalMs: 10 * 60 * 1000,
@@ -151,10 +156,20 @@ var BALANCE = {
   maxOdds: 8.0,
 };
 
-function getTiming(pace) {
+/**
+ * @param {string} pace
+ * @param {number} [matchMinuteRealMsOverride] absolute ms per match minute (from world/fixture snapshot)
+ */
+function getTiming(pace, matchMinuteRealMsOverride) {
   var dev = pace === "dev" || pace === "test";
+  var minuteMs =
+    matchMinuteRealMsOverride != null && matchMinuteRealMsOverride > 0
+      ? matchMinuteRealMsOverride
+      : dev
+        ? BALANCE.devMatchMinuteRealMs
+        : BALANCE.matchMinuteRealMs;
   return {
-    matchMinuteRealMs: dev ? BALANCE.devMatchMinuteRealMs : BALANCE.matchMinuteRealMs,
+    matchMinuteRealMs: minuteMs,
     halfTimeBreakMs: dev ? BALANCE.devHalfTimeBreakMs : BALANCE.halfTimeBreakMs,
     etHalfTimeBreakMs: dev ? BALANCE.devEtHalfTimeBreakMs : BALANCE.etHalfTimeBreakMs,
     shootoutKickSpacingMs: dev
@@ -180,6 +195,14 @@ function getTiming(pace) {
   };
 }
 
+function clampMatchMinuteSeconds(sec) {
+  var n = parseInt(sec, 10);
+  if (isNaN(n)) return BALANCE.matchMinuteRealSeconds;
+  if (n < BALANCE.minMatchMinuteSeconds) n = BALANCE.minMatchMinuteSeconds;
+  if (n > BALANCE.maxMatchMinuteSeconds) n = BALANCE.maxMatchMinuteSeconds;
+  return n;
+}
+
 function coachingMod(stance) {
   return BALANCE.coaching[stance] || BALANCE.coaching.balanced;
 }
@@ -198,6 +221,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     BALANCE: BALANCE,
     getTiming: getTiming,
+    clampMatchMinuteSeconds: clampMatchMinuteSeconds,
     coachingMod: coachingMod,
     upgradeCost: upgradeCost,
     repairCost: repairCost,

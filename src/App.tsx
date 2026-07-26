@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./lib/auth";
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
@@ -41,10 +41,42 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 function RequirePasswordChange({ children }: { children: React.ReactNode }) {
-  const { user, loading, mustChangePassword } = useAuth();
+  const { user, loading, mustChangePassword, isAdmin } = useAuth();
   if (loading) return <Fallback />;
   if (!user) return <Navigate to="/login" replace />;
-  if (!mustChangePassword) return <Navigate to="/dashboard" replace />;
+  if (!mustChangePassword) {
+    return <Navigate to={isAdmin ? "/admin" : "/dashboard"} replace />;
+  }
+  return children;
+}
+
+/** Explicit admin guard — never blank. */
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { user, loading, mustChangePassword, isAdmin } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-dvh grid place-items-center text-cyan" data-testid="admin-loading">
+        Checking administrator access…
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  if (mustChangePassword) return <Navigate to="/change-password" replace />;
+  if (!isAdmin) {
+    return (
+      <div className="min-h-dvh grid place-items-center px-4" data-testid="admin-forbidden">
+        <div className="glass max-w-md space-y-3 rounded-2xl p-6 text-center">
+          <p className="font-display text-lg text-magenta">Administrator access required</p>
+          <p className="text-sm text-muted">
+            Your account does not have the application admin role.
+          </p>
+          <Link to="/dashboard" className="btn-primary inline-block" data-testid="admin-back-dashboard">
+            Back to dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
   return children;
 }
 
@@ -146,9 +178,9 @@ export default function App() {
         <Route
           path="/admin"
           element={
-            <RequireAuth>
+            <RequireAdmin>
               <AdminPage />
-            </RequireAuth>
+            </RequireAdmin>
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

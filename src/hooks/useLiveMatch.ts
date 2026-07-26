@@ -6,6 +6,7 @@ import { MATCH_POLL_MS } from "../lib/config";
 import { createEventQueue, type EventQueue, type QueueEvent } from "../domain/eventQueue";
 import { getEventDisplay } from "../domain/eventDisplay";
 import { footfiveApi, type MatchView } from "../lib/pocketbase";
+import { reportConnectionFail, reportConnectionOk } from "./useConnectionStatus";
 
 export function useLiveMatch(fixtureId: string) {
   const [meta, setMeta] = useState<MatchView | null>(null);
@@ -42,36 +43,46 @@ export function useLiveMatch(fixtureId: string) {
       try {
         const since = full ? 0 : queueRef.current.lastSeq;
         const data = await footfiveApi.match(fixtureId, since);
-        if (reqId !== reqIdRef.current) return; // stale
+        if (reqId !== reqIdRef.current) return; // stale / navigated away
 
         setMeta(data);
         setError("");
         setOffline(false);
         failCountRef.current = 0;
         pollMsRef.current = MATCH_POLL_MS;
+        reportConnectionOk();
 
-        const incoming = (full ? data.events : data.newEvents?.length ? data.newEvents : data.events) as QueueEvent[];
+        const incoming = (full
+          ? data.events
+          : data.newEvents?.length
+            ? data.newEvents
+            : data.events) as QueueEvent[];
         if (full) {
+          // Late open: catch-up only when substantially behind server history
+          const lateOpen = (incoming?.length || 0) > 12;
           queueRef.current.ingest(incoming || [], {
             reset: true,
-            catchUp: (incoming?.length || 0) > 8,
+            catchUp: lateOpen,
           });
         } else {
-          queueRef.current.ingest(incoming || []);
+          // Ordinary polls: live pacing (queue decides if backlog is large)
+          queueRef.current.ingest(incoming || [], { catchUp: false });
         }
       } catch (err) {
-        if (reqId !== reqIdRef.current) return;
+        if (reqId !== reqIdRef.current) return; // abort/stale — not a connection failure
+        if (typeof document !== "undefined" && document.hidden) return;
         failCountRef.current += 1;
-        // Non-destructive: keep visible events; warn connection
-        setOffline(true);
+        reportConnectionFail(err);
+        // Keep last known match state; only warn after 2+ consecutive fails
+        const soft = failCountRef.current < 2;
+        setOffline(failCountRef.current >= 2);
         setError(
-          failCountRef.current > 1
-            ? "Connection issue — retrying… (scoreboard keeps last known state)"
-            : err instanceof Error
-              ? err.message
-              : "Match load failed",
+          soft
+            ? ""
+            : failCountRef.current >= 3
+              ? "Connection issue — retrying… (last score kept)"
+              : "Reconnecting…",
         );
-        // Back off up to 15s
         pollMsRef.current = Math.min(
           15000,
           MATCH_POLL_MS * Math.pow(1.5, Math.min(failCountRef.current, 5)),
