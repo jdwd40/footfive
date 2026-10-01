@@ -85,8 +85,9 @@ Workflow: `.github/workflows/deploy.yml` — on **push to `main`** (and `workflo
 
 1. Unit tests + typecheck + lint  
 2. Production build (`VITE_BASE_PATH=/footfive/`, `VITE_POCKETBASE_URL=https://jdwd40.com/footfive-pb`)  
-3. SSH deploy: SPA release under `/home/jd/footfive/releases/<stamp>/`, rsync to nginx web root, update hooks/migrations, restart `footfive-pocketbase`  
-4. Public smoke: SPA + PB health + unauth world = 401  
+3. SSH deploy: code-only backup to root-owned `/var/backups/footfive/<stamp>/` via scoped `sudo -n`, SPA release under `/home/jd/footfive/releases/<stamp>/`, rsync to nginx web root, update hooks/migrations, restart `footfive-pocketbase`
+4. Health verification: app health JSON validated on the runner (`status == "ok"` and `worldAvailable == true`, via `scripts/validate-health.mjs`); only then provenance markers `DEPLOYED_STAMP` + `DEPLOYED_SHA` (exact commit) are written in `/home/jd/footfive/`
+5. Public smoke: SPA + PB health + app health JSON validated the same way + unauth world = 401
 
 **Never** deploys or wipes `pb_data`. Binary stays on the VPS.
 
@@ -98,8 +99,19 @@ Workflow: `.github/workflows/deploy.yml` — on **push to `main`** (and `workflo
 | `VPS_PORT` | `4020` |
 | `VPS_USER` | `jd` |
 | `VPS_SSH_PRIVATE_KEY` | ed25519 private key (pubkey in VPS `authorized_keys`) |
+| `VPS_KNOWN_HOSTS` | Trusted host-key lines for `[213.165.91.221]:4020` (see below) |
 
-One-shot helper (after `gh auth login`):
+`VPS_KNOWN_HOSTS` pins the VPS host identity; the deploy workflow refuses to
+run without it and never falls back to runtime `ssh-keyscan`
+(trust-on-first-use). Provision it out-of-band by an operator who already
+trusts the host — e.g. from an existing verified SSH session or the VPS
+console, run `ssh-keyscan -p 4020 213.165.91.221` and cross-check the
+fingerprints against `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on
+the VPS, then store the verified lines (hashed or plain, one per line) as the
+secret value. Never commit the value to the repo; rotate it if the VPS host
+keys are ever regenerated.
+
+One-shot helper for the first four secrets (after `gh auth login`):
 
 ```bash
 ./scripts/setup-github-deploy-secrets.sh

@@ -9,10 +9,14 @@ concurrency:
   group: deploy-footfive-production
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   test-and-build:
     name: Test & production build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,6 +74,7 @@ jobs:
     name: Deploy to VPS
     needs: test-and-build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,16 +96,21 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
           VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "${VPS_HOST:-}" || { echo "Missing secret VPS_HOST"; exit 1; }
           test -n "${VPS_PORT:-}" || { echo "Missing secret VPS_PORT"; exit 1; }
           test -n "${VPS_SSH_PRIVATE_KEY:-}" || { echo "Missing secret VPS_SSH_PRIVATE_KEY"; exit 1; }
+          test -n "${VPS_KNOWN_HOSTS:-}" || { echo "Missing secret VPS_KNOWN_HOSTS"; exit 1; }
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${VPS_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+          # Pin host identity from controller-provisioned secret; no runtime
+          # ssh-keyscan (trust-on-first-use is not acceptable for deploys).
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
           ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
 
       - name: Deploy over SSH
@@ -113,17 +123,21 @@ jobs:
           test -n "${VPS_USER:-}" || { echo "Missing secret VPS_USER"; exit 1; }
           STAMP=$(date -u +%Y%m%dT%H%M%SZ)
           REMOTE="${VPS_USER}@${VPS_HOST}"
-          SSH=(ssh -p "${VPS_PORT}" -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes "${REMOTE}")
+          SSH=(ssh -p "${VPS_PORT}" -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes "${REMOTE}")
 
           "${SSH[@]}" 'echo ssh_ok && whoami && test -d /home/jd/footfive'
 
           # Timestamped release of SPA
-          "${SSH[@]}" "mkdir -p /home/jd/footfive/releases/${STAMP} /home/jd/footfive/pocketbase/pb_hooks /home/jd/footfive/pocketbase/pb_migrations /home/jd/footfive/logs /var/backups/footfive/${STAMP}"
+          "${SSH[@]}" "mkdir -p /home/jd/footfive/releases/${STAMP} /home/jd/footfive/pocketbase/pb_hooks /home/jd/footfive/pocketbase/pb_migrations /home/jd/footfive/logs"
 
-          # Backup current hooks + migrations (code only; never wipe pb_data)
-          "${SSH[@]}" "cp -a /home/jd/footfive/pocketbase/pb_hooks /var/backups/footfive/${STAMP}/pb_hooks 2>/dev/null || true"
-          "${SSH[@]}" "cp -a /home/jd/footfive/pocketbase/pb_migrations /var/backups/footfive/${STAMP}/pb_migrations 2>/dev/null || true"
-          "${SSH[@]}" "cp -a /var/www/jdwd40.com/html/footfive /var/backups/footfive/${STAMP}/web 2>/dev/null || true"
+          # Backup current hooks + migrations + web (code only; never pb_data).
+          # /var/backups/footfive is root:root mode 700, so jd cannot write it
+          # directly: use scoped non-interactive sudo for the backup dir + copies.
+          # Backups stay root-owned; any failure here aborts the deploy.
+          "${SSH[@]}" "sudo -n install -d -m 700 -o root -g root /var/backups/footfive/${STAMP}"
+          "${SSH[@]}" "if [ -d /home/jd/footfive/pocketbase/pb_hooks ]; then sudo -n cp -a /home/jd/footfive/pocketbase/pb_hooks /var/backups/footfive/${STAMP}/pb_hooks; else echo 'skip backup: no existing pb_hooks'; fi"
+          "${SSH[@]}" "if [ -d /home/jd/footfive/pocketbase/pb_migrations ]; then sudo -n cp -a /home/jd/footfive/pocketbase/pb_migrations /var/backups/footfive/${STAMP}/pb_migrations; else echo 'skip backup: no existing pb_migrations'; fi"
+          "${SSH[@]}" "if [ -d /var/www/jdwd40.com/html/footfive ]; then sudo -n cp -a /var/www/jdwd40.com/html/footfive /var/backups/footfive/${STAMP}/web; else echo 'skip backup: no existing web root'; fi"
 
           # Frontend → release dir then web root + current symlink
           tar -C dist -czf - . | "${SSH[@]}" "tar -C /home/jd/footfive/releases/${STAMP} -xzf -"
@@ -134,8 +148,22 @@ jobs:
           tar -C pocketbase/pb_hooks -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_hooks/* && tar -C /home/jd/footfive/pocketbase/pb_hooks -xzf -'
           tar -C pocketbase/pb_migrations -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_migrations/* && tar -C /home/jd/footfive/pocketbase/pb_migrations -xzf -'
 
-          # Restart system service (NOPASSWD sudo on VPS)
-          "${SSH[@]}" "echo ${STAMP} > /home/jd/footfive/DEPLOYED_STAMP && sudo systemctl restart footfive-pocketbase.service && sleep 3 && sudo systemctl is-active footfive-pocketbase.service && curl -sf http://127.0.0.1:8091/api/health && curl -sf http://127.0.0.1:8091/api/footfive/health | head -c 400"
+          # Restart system service (NOPASSWD sudo on VPS).
+          # Health bodies are captured, never piped: under remote set -eu a
+          # failed curl aborts the command before any marker can be written.
+          # The VPS only needs curl: the app health body is echoed between
+          # delimiters, extracted on the runner, and validated by the shared
+          # Node validator (status === "ok" && worldAvailable === true).
+          health_out="$("${SSH[@]}" "set -eu; sudo systemctl restart footfive-pocketbase.service; sleep 3; sudo systemctl is-active footfive-pocketbase.service; pb_health=\$(curl -sf http://127.0.0.1:8091/api/health); ff_health=\$(curl -sf http://127.0.0.1:8091/api/footfive/health); printf '%s\\n' \"\$pb_health\"; printf '%s\\n' 'FF_HEALTH_BEGIN'; printf '%s\\n' \"\$ff_health\"; printf '%s\\n' 'FF_HEALTH_END'")"
+          printf '%s\n' "$health_out"
+          ff_body="$(printf '%s\n' "$health_out" | awk '/^FF_HEALTH_END$/{exit} found{print} /^FF_HEALTH_BEGIN$/{found=1}')"
+          test -n "$ff_body" || { echo "app health body missing from remote output"; exit 1; }
+          printf '%s' "$ff_body" | node scripts/validate-health.mjs
+
+          # Provenance: record markers only after the validated-healthy app
+          # above. Never written for a degraded or unreachable deploy.
+          "${SSH[@]}" "echo ${STAMP} > /home/jd/footfive/DEPLOYED_STAMP"
+          "${SSH[@]}" "echo ${GITHUB_SHA} > /home/jd/footfive/DEPLOYED_SHA"
 
           # Prune old releases (keep last 8)
           "${SSH[@]}" 'cd /home/jd/footfive/releases && ls -1dt */ 2>/dev/null | tail -n +9 | xargs -r rm -rf'
@@ -145,11 +173,17 @@ jobs:
       - name: Smoke test production
         run: |
           set -euo pipefail
-          curl -sfI https://jdwd40.com/footfive/ | head -5
+          # sed consumes all input: avoids curl SIGPIPE (exit 23) under pipefail.
+          headers=$(curl -sfI https://jdwd40.com/footfive/)
+          printf '%s\n' "$headers" | sed -n '1,5p'
           curl -sf https://jdwd40.com/footfive-pb/api/health
           echo
-          curl -sf https://jdwd40.com/footfive-pb/api/footfive/health | head -c 400
+          health=$(curl -sf https://jdwd40.com/footfive-pb/api/footfive/health)
+          printf '%s' "${health:0:400}"
           echo
+          # Semantic gate: fail on degraded / missing-world / malformed bodies,
+          # not just HTTP 200. Same shared validator as the remote gate.
+          printf '%s' "$health" | node scripts/validate-health.mjs
           code=$(curl -s -o /dev/null -w "%{http_code}" https://jdwd40.com/footfive-pb/api/footfive/world)
           echo "world unauth status=${code} (expect 401)"
           test "$code" = "401"

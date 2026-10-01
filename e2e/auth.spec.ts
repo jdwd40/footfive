@@ -31,10 +31,12 @@ test.describe("auth", () => {
     await loginViaUi(page, "e2e_user_a@test.local", "testpass99");
     await expect(page).not.toHaveURL(/\/login$/);
     await page.goto("/admin");
-    // API returns Forbidden "Admin only" — UI shows that error on the admin shell
-    await expect(page.locator("body")).toContainText(/Admin only|denied|forbidden|access denied/i, {
-      timeout: 15000,
-    });
+    // Admin gate blocks the normal user — accept current App.tsx gate copy
+    // ("Administrator access required") plus legacy/API error phrasings.
+    await expect(page.locator("body")).toContainText(
+      /Admin only|administrator access|access required|denied|forbidden/i,
+      { timeout: 15000 },
+    );
   });
 
   test("admin can access console", async ({ page }) => {
