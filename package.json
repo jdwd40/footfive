@@ -17,6 +17,7 @@
     "test:e2e": "bash scripts/e2e-run.sh",
     "test:e2e:all": "E2E_ALL=1 bash scripts/e2e-run.sh",
     "test:e2e:api": "node tests/integration/e2e-api.mjs",
+    "test:scoreboard": "node tests/integration/public-scoreboard.mjs",
     "test:bootstrap": "node tests/integration/bootstrap-clean.mjs",
     "test:security": "vitest run src/domain/security.test.ts",
     "test:recovery": "node scripts/restart-recovery.mjs",

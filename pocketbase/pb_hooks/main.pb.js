@@ -250,6 +250,32 @@ routerAdd("GET", "/api/footfive/health", (e) => {
   return e.json(200, health.publicHealth($app));
 });
 
+// Public scoreboard (anonymous, read-only): current/upcoming round with revealed
+// scores for external observers such as the app dashboard. Unlike /health this
+// route NEVER advances the world — no tickIfDue/ensureWorld/writes, even
+// transitively; it answers 503 when no world exists yet instead of creating one.
+routerAdd("GET", "/api/footfive/public-scoreboard", (e) => {
+  const svc = require(`${__hooks}/lib/worldService.js`);
+  try {
+    // Live state must never be served stale from a cache.
+    e.response.header().set("Cache-Control", "no-store");
+  } catch (_) {}
+  let view = null;
+  try {
+    view = svc.publicScoreboard($app);
+  } catch (err) {
+    console.log("[footfive] public-scoreboard: " + err);
+    view = null;
+  }
+  if (!view) {
+    return e.json(503, {
+      error: "scoreboard_unavailable",
+      message: "No FootFive world is available yet — nothing was created.",
+    });
+  }
+  return e.json(200, view);
+});
+
 routerAdd(
   "GET",
   "/api/footfive/server-time",

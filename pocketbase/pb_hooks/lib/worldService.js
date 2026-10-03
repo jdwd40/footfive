@@ -1201,6 +1201,172 @@ function numbered(p, i) {
   return { name: p.name, role: p.role, is_starter: p.is_starter, no: p.role === "gk" && p.is_starter ? 1 : i + 2 };
 }
 
+// ------------------------------------------------------------------ public scoreboard
+//
+// Anonymous read-only snapshot for external observers (the JDWD40 app
+// dashboard). STRICTLY read-only: it never calls tick/tickIfDue/ensureWorld or
+// any other write/progression path, even transitively — with no existing world
+// the caller gets null (the route answers 503) and nothing is created.
+// Reveal policy mirrors liveView exactly: the next championship's draw stays
+// hidden until its fixture window opens, only events with at <= now are
+// revealed, and final columns are read only for finished fixtures.
+// Fields are whitelisted: team id/name/abbreviation, revealed score, minute,
+// status, scheduled time, finished/shootout scores, last goal. Never managers,
+// user ids, player attributes, treasury, model_json, odds or future events.
+
+/** Whitelisted team shape — reuses teamPublic's abbreviation fallback. */
+function scoreboardTeam(t) {
+  if (!t) return null;
+  var pub = teamPublic(t);
+  return { id: pub.id, name: pub.name, abbreviation: pub.abbreviation };
+}
+
+function scoreboardSide(pub) {
+  return pub ? { id: pub.id, name: pub.name, abbreviation: pub.abbreviation } : null;
+}
+
+/** Last championship + final result, narrowed to public fields. */
+function scoreboardChampion($app, t, teams) {
+  var c = championView($app, t, teams); // reuse reveal/shape logic, then narrow
+  if (!c) return null;
+  return {
+    tournamentId: c.tournamentId,
+    number: c.number,
+    team: scoreboardSide(c.team),
+    final: c.final
+      ? {
+          fixtureId: c.final.fixtureId,
+          home: scoreboardSide(c.final.home),
+          away: scoreboardSide(c.final.away),
+          score: { home: c.final.sh, away: c.final.sa },
+          shootout: c.final.soh + c.final.soa > 0 ? { home: c.final.soh, away: c.final.soa } : null,
+          by: c.final.by,
+        }
+      : null,
+    completedAt: c.completedAt,
+  };
+}
+
+/** Public card for one fixture: revealed state only, never engine internals. */
+function scoreboardCard($app, fx, teams, now, T) {
+  var status = fx.get("status");
+  var card = {
+    id: fx.id,
+    slot: fx.get("slot"),
+    index: fx.get("bracket_index"),
+    home: scoreboardTeam(teams[fx.get("home_team")]),
+    away: scoreboardTeam(teams[fx.get("away_team")]),
+    status: status,
+    kickoffAt: parsePbDate(fx.get("scheduled_at")),
+    minute: null,
+    score: null,
+    shootout: null,
+    phase: status === "scheduled" ? "pre" : null,
+    last: null,
+    result: null,
+  };
+  if (status === "scheduled") return card;
+  if (status === "finished") {
+    // Final columns are only written once the result is public (finaliseFixture).
+    var sh = fx.get("score_home");
+    var sa = fx.get("score_away");
+    var soh = fx.get("shootout_home") || 0;
+    var soa = fx.get("shootout_away") || 0;
+    card.phase = "finished";
+    card.minute = 120;
+    card.score = { home: sh, away: sa };
+    if (soh + soa > 0) card.shootout = { home: soh, away: soa };
+    card.result = {
+      home: sh,
+      away: sa,
+      shootoutHome: soh,
+      shootoutAway: soa,
+      winner: fx.get("winner_team") === fx.get("home_team") ? "home" : "away",
+      by: fx.get("decided_by") || null,
+    };
+    return card;
+  }
+  // Live: reveal only events already published (at <= now) — same boundary as liveView.
+  var ev = lastPublished($app, fx.id, now);
+  if (ev && ev.st && ev.st.sc) {
+    card.phase = ev.st.ph || null;
+    card.score = { home: ev.st.sc[0], away: ev.st.sc[1] };
+    if (ev.st.so) card.shootout = { home: ev.st.so.h, away: ev.st.so.a };
+    card.minute =
+      ev.st.ph === "finished"
+        ? 120
+        : Math.max(0, Math.floor(oddsMod.clockMinute(ev.st.clk, ev.at, now, minuteMsOf(fx, T))));
+    if (ev.t === "goal" || ev.t === "penalty_goal") {
+      card.last = { t: ev.t, text: ev.text || null, side: ev.side || null, minute: ev.min != null ? ev.min : null };
+    }
+  }
+  return card;
+}
+
+/**
+ * Read-only scoreboard snapshot. Returns null when no schema/world exists —
+ * the caller reports "unavailable" and nothing is created.
+ */
+function publicScoreboard($app) {
+  if (!isSchemaReady($app)) return null;
+  var world = one($app, "world", "key = 'main'");
+  if (!world) return null;
+  var now = Date.now();
+  var T = timing(world);
+  var teams = teamMap($app);
+  var t = activeTournament($app);
+  var last = lastCompleteTournament($app);
+  var view = {
+    serverTime: new Date(now).toISOString(),
+    serverTimeMs: now,
+    state: "idle", // idle | fixtures | live | champion (liveView vocabulary)
+    tournament: null,
+    round: null,
+    fixtures: [],
+    champion: null,
+    nextChampionshipAt: null,
+    fixturesAt: null,
+  };
+  var round = t ? currentRound($app, t.id) : null;
+  // Same hidden-draw rule as drawHidden(), evaluated against the existing world
+  // record (drawHidden itself calls ensureWorld, which is a write path).
+  var hidden =
+    round &&
+    round.get("status") === "scheduled" &&
+    round.get("round_key") === "r16" &&
+    now < drawVisibleAt(round, T);
+  if (!t || hidden) {
+    // Champion gap: latest final stays visible; the unannounced draw never leaks.
+    var start = t ? parsePbDate(t.get("starts_at")) : nextStartMs(world);
+    view.state = last && last.get("champion_team") ? "champion" : "idle";
+    view.nextChampionshipAt = isNaN(start) ? null : start;
+    view.fixturesAt = isNaN(start) ? null : start - T.windowMs;
+    if (view.state === "champion") view.champion = scoreboardChampion($app, last, teams);
+    return view;
+  }
+  view.tournament = { id: t.id, number: t.get("number"), status: t.get("status") };
+  if (!round) return view;
+  var rs = round.get("status");
+  view.state = rs === "live" ? "live" : "fixtures";
+  view.round = {
+    id: round.id,
+    key: round.get("round_key"),
+    label: round.get("label"),
+    status: rs,
+    scheduledAt: parsePbDate(round.get("scheduled_at")),
+    finishedAt: round.get("finished_ms") || null,
+  };
+  view.fixtures = fixturesOf($app, round.id).map(function (fx) {
+    return scoreboardCard($app, fx, teams, now, T);
+  });
+  // Once the next draw is out the champion stays visible during the R16 window
+  // (mirrors liveView's recentChampion).
+  if (rs === "scheduled" && round.get("round_key") === "r16" && last && last.get("champion_team")) {
+    view.recentChampion = scoreboardChampion($app, last, teams);
+  }
+  return view;
+}
+
 function liveCoachCooldownMs(T) {
   return (BALANCE.liveCoachingCooldownMinutes || 3) * T.minuteMs;
 }
@@ -1360,6 +1526,8 @@ if (typeof module !== "undefined") {
     teamMap: teamMap,
     worldSnapshot: worldSnapshot,
     liveView: liveView,
+    publicScoreboard: publicScoreboard,
+    drawVisibleAt: drawVisibleAt,
     matchView: matchView,
     setCoaching: setCoaching,
     ensureUserCredits: ensureUserCredits,
