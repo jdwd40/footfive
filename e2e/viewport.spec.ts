@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginViaUi, expectNoHorizontalOverflow } from "./helpers";
 
-const routes = ["/dashboard", "/scoreboard", "/records", "/betting"];
+const routes = ["/live", "/betting", "/my-team", "/history"];
 
 test.describe("viewport overflow", () => {
   for (const route of routes) {
@@ -15,7 +15,7 @@ test.describe("viewport overflow", () => {
 
   test("admin and records fit", async ({ page }) => {
     await loginViaUi(page, "e2e_admin@test.local", "adminpass99");
-    await page.goto("/records");
+    await page.goto("/history");
     await page.waitForTimeout(800);
     await expectNoHorizontalOverflow(page);
     await page.goto("/admin");

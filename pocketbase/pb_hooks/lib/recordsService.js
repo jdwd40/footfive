@@ -63,8 +63,9 @@ function extractCards(events) {
 
 /**
  * Upsert compact match summary after fixture completion.
+ * `extra` (engine v2): { events (legacy-shaped), wentExtraTime, wentShootout, shootoutKicks, stats }.
  */
-function ensureMatchSummary($app, fixture, matchState, roundKey, tournamentId) {
+function ensureMatchSummary($app, fixture, matchState, roundKey, tournamentId, extra) {
   var fxId = fixture.id;
   var existing = $app.findRecordsByFilter(
     "match_summaries",
@@ -79,13 +80,15 @@ function ensureMatchSummary($app, fixture, matchState, roundKey, tournamentId) {
   }
 
   var events = [];
-  try {
-    var raw = matchState.get("events_json");
-    events = parseJson(raw, []);
-    if (!Array.isArray(events)) events = [];
-  } catch (_) {}
+  if (extra) events = extra.events || [];
+  else {
+    try {
+      events = parseJson(matchState.get("events_json"), []);
+      if (!Array.isArray(events)) events = [];
+    } catch (_) {}
+  }
 
-  var state = parseJson(matchState.get("state_json"), {});
+  var state = extra ? {} : parseJson(matchState.get("state_json"), {});
   var home = $app.findRecordById("proball_teams", fixture.get("home_team"));
   var away = $app.findRecordById("proball_teams", fixture.get("away_team"));
 
@@ -104,12 +107,12 @@ function ensureMatchSummary($app, fixture, matchState, roundKey, tournamentId) {
   rec.set("shootout_home", matchState.get("shootout_home") || 0);
   rec.set("shootout_away", matchState.get("shootout_away") || 0);
   rec.set("winner_team", matchState.get("winner_team") || "");
-  rec.set("went_extra_time", !!(state.wentExtraTime));
-  rec.set("went_shootout", !!(state.wentShootout || matchState.get("shootout_home")));
-  rec.set("stats_json", matchState.get("stats_json") || state.stats || {});
+  rec.set("went_extra_time", extra ? !!extra.wentExtraTime : !!state.wentExtraTime);
+  rec.set("went_shootout", extra ? !!extra.wentShootout : !!(state.wentShootout || matchState.get("shootout_home")));
+  rec.set("stats_json", extra ? extra.stats : matchState.get("stats_json") || state.stats || {});
   rec.set("goals_json", extractGoalsFromEvents(events));
   rec.set("cards_json", extractCards(events));
-  rec.set("shootout_kicks_json", state.shootoutKicks || []);
+  rec.set("shootout_kicks_json", extra ? extra.shootoutKicks : state.shootoutKicks || []);
   rec.set("coaching_json", {
     home: matchState.get("home_coaching"),
     away: matchState.get("away_coaching"),
@@ -433,9 +436,9 @@ function listTournaments($app) {
 /**
  * Upsert permanent player stats from a completed match (idempotent via fixture flag on summary).
  */
-function settlePlayerRecordsFromMatch($app, fixture, matchState) {
-  var state = parseJson(matchState.get("state_json"), {});
-  var events = parseJson(matchState.get("events_json"), []);
+function settlePlayerRecordsFromMatch($app, fixture, matchState, extra) {
+  var state = extra ? { homePlayers: extra.players.home, awayPlayers: extra.players.away } : parseJson(matchState.get("state_json"), {});
+  var events = extra ? extra.events : parseJson(matchState.get("events_json"), []);
   if (!Array.isArray(events)) events = [];
   var sides = [
     { teamId: fixture.get("home_team"), players: state.homePlayers || [] },

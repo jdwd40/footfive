@@ -17,9 +17,12 @@ export default defineConfig({
   ],
   use: {
     baseURL,
+    // Local runs may reuse an existing Chrome (e.g. puppeteer's) instead of downloading one.
+    ...(process.env.E2E_CHROME ? { launchOptions: { executablePath: process.env.E2E_CHROME } } : {}),
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    // Video needs Playwright's ffmpeg; local runs with a reused Chrome may not have it.
+    video: process.env.E2E_CHROME ? "off" : "retain-on-failure",
   },
   projects: [
     {

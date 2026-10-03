@@ -72,13 +72,13 @@ describe("post-login admin routing", () => {
     expect(postLoginPath(u)).toBe("/admin");
   });
 
-  it("sends normal user to dashboard", () => {
+  it("sends normal user to the live round", () => {
     const u: AuthUser = {
       id: "2",
       email: "u@example.com",
       role: "user",
       must_change_password: false,
     };
-    expect(postLoginPath(u)).toBe("/dashboard");
+    expect(postLoginPath(u)).toBe("/live");
   });
 });

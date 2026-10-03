@@ -41,6 +41,53 @@ var BALANCE = {
   coachingCooldownMs: 8000,
   devCoachingCooldownMs: 1500,
 
+  // Live coaching (Defend / Balanced / Attack): limited commands per match with a
+  // recharge measured in match minutes.
+  liveCoachingMax: 4,
+  liveCoachingCooldownMinutes: 5,
+
+  // Dummy test credits: top up to this when below the floor, at most once per hour.
+  topUpAmount: 1000,
+  topUpFloor: 100,
+  topUpCooldownMs: 60 * 60 * 1000,
+
+  // Match engine v2 (per-minute model; see matchEngine.js). Tuned by
+  // scripts/engine-calibrate.mjs to ~2.1 goals per 90' (the historic average).
+  match: {
+    edgeOffset: 18, // attack − defence is ≈ −18 for evenly matched sides
+    seqBase: 0.28,
+    seqK: 0.006,
+    shotBase: 0.5,
+    shotK: 0.004,
+    onTargetBase: 0.45,
+    onTargetK: 0.003,
+    blockRate: 0.22,
+    woodworkRate: 0.12,
+    saveBase: 0.55,
+    saveK: 0.004,
+    possK: 0.004,
+    penBase: 0.006,
+    penK: 0.0002,
+    penScore: 0.76,
+    penSave: 0.16,
+    shootoutScore: 0.75,
+    foulRate: 0.1,
+    yellowRate: 0.15,
+    straightRed: 0.004,
+    // Real-time pauses (ms) — divided by FOOTFIVE_TIME_SCALE in tests.
+    halfTimeMs: 30000,
+    etBreakMs: 20000,
+    etHalfTimeMs: 10000,
+    goalPauseMs: 9000,
+    penAwardMs: 5000,
+    penSetupMs: 5000,
+    penRestartMs: 4000,
+    shootoutIntroMs: 10000,
+    shootoutKickMs: 12000,
+    shootoutRevealMs: 6500,
+    endMs: 6000,
+  },
+
   baseAttackChance: 0.22,
   attackPerStrength: 0.0018,
   defenceBlockBase: 0.28,

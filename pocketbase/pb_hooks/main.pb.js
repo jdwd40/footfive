@@ -220,56 +220,20 @@ onRecordUpdateRequest((e) => {
   } catch (_) {}
   throw new ForbiddenError("Use protected FootFive routes");
 }, "proball_teams");
+
+// The world advances on reads (throttled) and on this one-minute safety net, so the
+// championship keeps running with nobody watching.
 cronAdd("footfive_catchup", "*/1 * * * *", () => {
   const log = require(`${__hooks}/lib/logger.js`);
   const health = require(`${__hooks}/lib/healthService.js`);
   const svc = require(`${__hooks}/lib/worldService.js`);
   const t0 = Date.now();
   try {
-    if (!svc.isSchemaReady($app)) {
-      log.warn("catchup_skipped_schema", { message: "schema not ready" });
-      return;
-    }
-    // Ensure world exists (idempotent) before catch-up
-    try {
-      svc.ensureWorld($app);
-    } catch (bootErr) {
-      log.warn("catchup_ensure_world", { message: String(bootErr).slice(0, 160) });
-      return;
-    }
-    const recov = require(`${__hooks}/lib/recoveryService.js`);
-    const stalls = recov.detectStalls($app);
-    log.info("catchup_start", { hasStalls: !!stalls.hasStalls });
-    let r;
-    if (stalls.hasStalls) {
-      r = recov.recoverAll($app, { preview: false });
-      log.info("recovery_complete", {
-        durationMs: Date.now() - t0,
-        actions: (r.actions || []).length,
-        success: !r.error,
-      });
-    } else {
-      r = svc.catchUpWorld($app);
-      log.info("catchup_complete", {
-        durationMs: Date.now() - t0,
-        actions: (r.actions || []).length,
-        success: true,
-      });
-    }
-    health.recordCatchUp(
-      $app,
-      {
-        actions: r.actions || r,
-        hasStalls: !!stalls.hasStalls,
-      },
-      Date.now() - t0,
-      "",
-    );
+    if (!svc.isSchemaReady($app)) return;
+    const r = svc.tick($app, Date.now());
+    health.recordCatchUp($app, { actions: r.actions || [] }, Date.now() - t0, "");
   } catch (err) {
-    log.error("catchup_error", {
-      durationMs: Date.now() - t0,
-      message: String(err).slice(0, 200),
-    });
+    log.error("catchup_error", { durationMs: Date.now() - t0, message: String(err).slice(0, 200) });
     try {
       health.recordCatchUp($app, {}, Date.now() - t0, String(err).slice(0, 200));
     } catch (_) {}
@@ -286,13 +250,45 @@ routerAdd(
   "GET",
   "/api/footfive/server-time",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const now = Date.now();
-    return e.json(200, {
-      serverTime: new Date(now).toISOString(),
-      serverTimeMs: now,
-    });
+    return e.json(200, { serverTime: new Date(now).toISOString(), serverTimeMs: now });
+  },
+  $apis.requireAuth(),
+);
+
+// Main screen: champion / fixtures / live round. Read-only.
+routerAdd(
+  "GET",
+  "/api/footfive/live",
+  (e) => {
+    const svc = require(`${__hooks}/lib/worldService.js`);
+    try {
+      return e.json(200, svc.liveView($app));
+    } catch (err) {
+      console.log("[footfive] live: " + err);
+      throw new BadRequestError("Live view unavailable");
+    }
+  },
+  $apis.requireAuth(),
+);
+
+// Individual match. Read-only. ?since=<seq> returns only newer published events.
+routerAdd(
+  "GET",
+  "/api/footfive/match/{fixtureId}",
+  (e) => {
+    const svc = require(`${__hooks}/lib/worldService.js`);
+    const id = e.request.pathValue("fixtureId");
+    let since = 0;
+    try {
+      since = parseInt(e.request.url.query().get("since") || "0", 10) || 0;
+    } catch (_) {}
+    try {
+      return e.json(200, svc.matchView($app, id, since, e.auth.id));
+    } catch (err) {
+      console.log("[footfive] match: " + err);
+      throw new NotFoundError("Match not found");
+    }
   },
   $apis.requireAuth(),
 );
@@ -301,14 +297,12 @@ routerAdd(
   "GET",
   "/api/footfive/world",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const svc = require(`${__hooks}/lib/worldService.js`);
     try {
-      return e.json(200, svc.worldSnapshot($app, auth.id));
+      return e.json(200, svc.worldSnapshot($app, e.auth.id));
     } catch (err) {
-      console.log("[footfive] world error: " + err);
-      throw new BadRequestError("world: " + err);
+      console.log("[footfive] world: " + err);
+      throw new BadRequestError("World unavailable");
     }
   },
   $apis.requireAuth(),
@@ -318,15 +312,8 @@ routerAdd(
   "GET",
   "/api/footfive/teams",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const svc = require(`${__hooks}/lib/worldService.js`);
-    try {
-      return e.json(200, { teams: svc.listTeams($app) });
-    } catch (err) {
-      console.log("[footfive] teams error: " + err);
-      throw new BadRequestError("teams: " + err);
-    }
+    return e.json(200, { teams: svc.listTeams($app) });
   },
   $apis.requireAuth(),
 );
@@ -335,85 +322,12 @@ routerAdd(
   "POST",
   "/api/footfive/teams/{teamId}/claim",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const svc = require(`${__hooks}/lib/worldService.js`);
-    const teamId = e.request.pathValue("teamId");
     try {
-      const team = svc.claimTeam($app, auth.id, teamId);
+      const team = svc.claimTeam($app, e.auth.id, e.request.pathValue("teamId"));
       return e.json(200, { team: svc.teamPublic(team) });
     } catch (err) {
-      console.log("[footfive] claim error: " + err);
-      throw new BadRequestError(String(err.message || err));
-    }
-  },
-  $apis.requireAuth(),
-);
-
-routerAdd(
-  "POST",
-  "/api/footfive/catch-up",
-  (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    try {
-      return e.json(200, svc.catchUpWorld($app));
-    } catch (err) {
-      console.log("[footfive] catch-up error: " + err);
-      throw new BadRequestError("catch-up: " + err);
-    }
-  },
-  $apis.requireAuth(),
-);
-
-routerAdd(
-  "GET",
-  "/api/footfive/tournament",
-  (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    return e.json(200, svc.worldSnapshot($app, auth.id));
-  },
-  $apis.requireAuth(),
-);
-
-routerAdd(
-  "GET",
-  "/api/footfive/scoreboard",
-  (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    try {
-      return e.json(200, svc.buildScoreboard($app));
-    } catch (err) {
-      console.log("[footfive] scoreboard: " + err);
-      throw new BadRequestError("scoreboard: " + err);
-    }
-  },
-  $apis.requireAuth(),
-);
-
-routerAdd(
-  "GET",
-  "/api/footfive/match/{fixtureId}",
-  (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    const fixtureId = e.request.pathValue("fixtureId");
-    let sinceSeq = 0;
-    try {
-      const q = e.request.url.query().get("sinceSeq");
-      if (q) sinceSeq = parseInt(q, 10) || 0;
-    } catch (_) {}
-    try {
-      return e.json(200, svc.buildMatchView($app, fixtureId, sinceSeq, auth.id));
-    } catch (err) {
-      console.log("[footfive] match: " + err);
-      throw new BadRequestError("match: " + err);
+      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
     }
   },
   $apis.requireAuth(),
@@ -423,52 +337,30 @@ routerAdd(
   "POST",
   "/api/footfive/matches/{fixtureId}/coaching",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const svc = require(`${__hooks}/lib/worldService.js`);
-    const fixtureId = e.request.pathValue("fixtureId");
     let body = {};
     try {
-      const info = e.requestInfo();
-      if (info.body && typeof info.body === "object") body = info.body;
-      else {
-        const raw = readerToString(e.request.body);
-        body = raw ? JSON.parse(raw) : {};
-      }
+      body = e.requestInfo().body || {};
     } catch (_) {}
     try {
-      return e.json(200, svc.setCoaching($app, auth.id, fixtureId, body.stance));
+      return e.json(200, svc.setCoaching($app, e.auth.id, e.request.pathValue("fixtureId"), body.stance));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
     }
   },
   $apis.requireAuth(),
 );
 
+// --- Betting ---
 routerAdd(
-  "POST",
-  "/api/footfive/teams/{teamId}/lineup",
+  "GET",
+  "/api/footfive/markets/{fixtureId}",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    const teamId = e.request.pathValue("teamId");
-    let body = {};
+    const bet = require(`${__hooks}/lib/bettingService.js`);
     try {
-      const info = e.requestInfo();
-      if (info.body && typeof info.body === "object") body = info.body;
-      else {
-        const raw = readerToString(e.request.body);
-        body = raw ? JSON.parse(raw) : {};
-      }
-    } catch (_) {}
-    try {
-      return e.json(
-        200,
-        svc.saveLineup($app, auth.id, teamId, body.starters || [], body.subs || []),
-      );
+      return e.json(200, bet.fixtureMarkets($app, e.auth.id, e.request.pathValue("fixtureId")));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw new NotFoundError("Fixture not found");
     }
   },
   $apis.requireAuth(),
@@ -476,12 +368,10 @@ routerAdd(
 
 routerAdd(
   "GET",
-  "/api/footfive/betting/fixtures",
+  "/api/footfive/markets",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    return e.json(200, { fixtures: svc.listBettingFixtures($app, auth.id) });
+    const bet = require(`${__hooks}/lib/bettingService.js`);
+    return e.json(200, bet.wideMarkets($app, e.auth.id));
   },
   $apis.requireAuth(),
 );
@@ -490,29 +380,15 @@ routerAdd(
   "POST",
   "/api/footfive/bets",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
+    const bet = require(`${__hooks}/lib/bettingService.js`);
     let body = {};
     try {
-      const info = e.requestInfo();
-      if (info.body && typeof info.body === "object") body = info.body;
-      else {
-        const raw = readerToString(e.request.body);
-        body = raw ? JSON.parse(raw) : {};
-      }
+      body = e.requestInfo().body || {};
     } catch (_) {}
     try {
-      const bet = svc.placeBet(
-        $app,
-        auth.id,
-        body.fixtureId,
-        body.selectionTeamId,
-        body.stake,
-      );
-      return e.json(200, { bet: bet });
+      return e.json(200, bet.placeBet($app, e.auth.id, body));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
     }
   },
   $apis.requireAuth(),
@@ -522,31 +398,22 @@ routerAdd(
   "GET",
   "/api/footfive/bets/mine",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const rows = $app.findRecordsByFilter(
-      "shared_bets",
-      "user = {:u}",
-      "-created",
-      50,
-      0,
-      { u: auth.id },
-    );
-    const list = [];
-    for (let i = 0; i < (rows || []).length; i++) {
-      const b = rows[i];
-      list.push({
-        id: b.id,
-        fixtureId: b.get("fixture"),
-        selectionTeamId: b.get("selection_team"),
-        stake: b.get("stake"),
-        odds: b.get("odds"),
-        status: b.get("status"),
-        settled: !!b.get("settled"),
-        created: b.get("created"),
-      });
+    const bet = require(`${__hooks}/lib/bettingService.js`);
+    return e.json(200, bet.myBets($app, e.auth.id));
+  },
+  $apis.requireAuth(),
+);
+
+routerAdd(
+  "POST",
+  "/api/footfive/wallet/topup",
+  (e) => {
+    const bet = require(`${__hooks}/lib/bettingService.js`);
+    try {
+      return e.json(200, bet.topUp($app, e.auth.id));
+    } catch (err) {
+      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
     }
-    return e.json(200, { bets: list });
   },
   $apis.requireAuth(),
 );
@@ -555,26 +422,49 @@ routerAdd(
   "GET",
   "/api/footfive/admin/ping",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    if (auth.get("role") !== "admin") throw new ForbiddenError("Admin only");
-    return e.json(200, { ok: true, admin: auth.id });
+    if (e.auth.get("role") !== "admin") throw new ForbiddenError("Admin only");
+    return e.json(200, { ok: true, admin: e.auth.id });
+  },
+  $apis.requireAuth(),
+);
+
+// --- Team modes ---
+routerAdd(
+  "POST",
+  "/api/footfive/my-team/mode",
+  (e) => {
+    const mgmt = require(`${__hooks}/lib/managementService.js`);
+    let body = {};
+    try {
+      body = e.requestInfo().body || {};
+    } catch (_) {}
+    try {
+      return e.json(200, mgmt.setMode($app, e.auth.id, body.mode));
+    } catch (err) {
+      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+    }
   },
   $apis.requireAuth(),
 );
 
 routerAdd(
-  "GET",
-  "/api/footfive/templates",
+  "POST",
+  "/api/footfive/my-team/stance",
   (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const svc = require(`${__hooks}/lib/worldService.js`);
-    const teams = svc.listTeams($app);
-    return e.json(200, { templates: teams, teams: teams });
+    const mgmt = require(`${__hooks}/lib/managementService.js`);
+    let body = {};
+    try {
+      body = e.requestInfo().body || {};
+    } catch (_) {}
+    try {
+      return e.json(200, mgmt.setDefaultStance($app, e.auth.id, body.stance));
+    } catch (err) {
+      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+    }
   },
   $apis.requireAuth(),
 );
+
 
 // --- Phase 3 management ---
 routerAdd(

@@ -55,7 +55,7 @@ function runRetention($app, opts) {
   try {
     var summaries = $app.findRecordsByFilter(
       "match_summaries",
-      "id != ''",
+      "events_purged != true",
       "completed_at",
       200,
       0,
@@ -110,6 +110,12 @@ function runRetention($app, opts) {
             ms[0].set("events_json", []);
             $app.save(ms[0]);
           }
+          // Engine v2 event rows (summary keeps goals, cards, shootout kicks)
+          $app
+            .db()
+            .newQuery("DELETE FROM match_events WHERE fixture = {:f}")
+            .bind({ f: sum.get("fixture_id") })
+            .execute();
           sum.set("events_purged", true);
           $app.save(sum);
           // Old coaching commands for fixture

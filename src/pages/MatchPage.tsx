@@ -1,0 +1,569 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import Layout from "../components/Layout";
+import Pitch from "../components/Pitch";
+import MarketsPanel from "../components/MarketsPanel";
+import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
+import { Abbr, TeamLabel } from "../components/Team";
+import { enqueue, sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { countdown, noteServerTime, phaseInfo, useLive, useNow } from "../lib/live";
+import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
+import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
+
+const STAT_ROWS: Array<[string, number]> = [
+  ["Shots", 0],
+  ["On target", 1],
+  ["Saves", 2],
+  ["Corners", 3],
+  ["Fouls", 4],
+  ["Yellow cards", 5],
+  ["Red cards", 6],
+];
+
+const PREF_KEY = "ff_highlights";
+type Pref = "full" | "quick" | "off";
+
+/** Highlights speed preference: presentation only, never changes the match. */
+function usePref(): [Pref, (p: Pref) => void, boolean] {
+  const sysReduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) as Pref) || (sysReduced ? "off" : "full"));
+  return [
+    p,
+    (v) => {
+      localStorage.setItem(PREF_KEY, v);
+      setP(v);
+    },
+    !!sysReduced,
+  ];
+}
+
+export default function MatchPage() {
+  const { fixtureId = "" } = useParams();
+  const navigate = useNavigate();
+  const { live } = useLive();
+  const now = useNow(250);
+  const [view, setView] = useState<MatchView | null>(null);
+  const [events, setEvents] = useState<MatchEvent[]>([]);
+  const [error, setError] = useState("");
+  const [lastOk, setLastOk] = useState(0);
+  const [pref, setPref, sysReduced] = usePref();
+  const [queue, setQueue] = useState<Scene[]>([]);
+  const [scene, setScene] = useState<Scene | null>(null);
+  const [replay, setReplay] = useState(false);
+  const lastSeq = useRef(0);
+  const lastBall = useRef<Pt>([50, 32]);
+  const joined = useRef(false);
+  const lastActive = useRef(Date.now());
+
+  // Reset when switching fixtures.
+  useEffect(() => {
+    setView(null);
+    setEvents([]);
+    setQueue([]);
+    setScene(null);
+    setError("");
+    lastSeq.current = 0;
+    joined.current = false;
+  }, [fixtureId]);
+
+  const inflight = useRef(false);
+  const poll = useCallback(async () => {
+    if (inflight.current) return; // one request at a time: duplicate events can't double-queue
+    inflight.current = true;
+    try {
+      const v = await footfiveApi.match(fixtureId, lastSeq.current);
+      if (v.fixture.id !== fixtureId) return;
+      noteServerTime(v.serverTimeMs);
+      reportConnectionOk();
+      setLastOk(Date.now());
+      setError("");
+      setView(v);
+      const fresh = v.events.filter((e) => e.seq > lastSeq.current);
+      if (fresh.length) {
+        lastSeq.current = fresh[fresh.length - 1].seq;
+        setEvents((old) => {
+          const seen = new Set(old.map((e) => e.seq));
+          return [...old, ...fresh.filter((e) => !seen.has(e.seq))].slice(-150);
+        });
+        if (!joined.current) {
+          // Late join: show the current position, don't replay the backlog.
+          joined.current = true;
+          const lastWithBall = [...fresh].reverse().find((e) => e.ball);
+          if (lastWithBall?.ball) lastBall.current = lastWithBall.ball as Pt;
+          const latest = fresh[fresh.length - 1];
+          setScene({ key: "join", seq: latest.seq, type: "join", ms: 0, ball: [lastBall.current], actors: [], caption: latest.text, important: false });
+        } else {
+          let prev = lastBall.current;
+          const scenes: Scene[] = [];
+          for (const e of fresh) {
+            const s = sceneFor(e, prev, { fast: pref === "quick" });
+            if (s) {
+              scenes.push(s);
+              prev = s.ball[s.ball.length - 1];
+            }
+          }
+          lastBall.current = prev;
+          if (scenes.length) setQueue((q) => enqueue(q, scenes, pref === "quick" ? 2 : 4));
+        }
+      } else if (!joined.current) {
+        joined.current = true;
+      }
+    } catch (err) {
+      reportConnectionFail(err);
+      setError(err instanceof Error ? err.message : "Match unavailable");
+    } finally {
+      inflight.current = false;
+    }
+  }, [fixtureId, pref]);
+
+  useEffect(() => {
+    void poll();
+    const id = setInterval(poll, 1200);
+    return () => clearInterval(id);
+  }, [poll]);
+
+  // Pull the next scene off the bounded queue when the pitch is idle.
+  useEffect(() => {
+    if (pref === "off") {
+      if (queue.length) setQueue([]);
+      return;
+    }
+    if ((!scene || scene.ms === 0 || replay) && queue.length && !replay) {
+      setScene(queue[0]);
+      setQueue((q) => q.slice(1));
+    }
+  }, [queue, scene, pref, replay]);
+
+  const onSceneDone = useCallback(() => {
+    if (replay) {
+      setReplay(false);
+      setScene(null);
+      return;
+    }
+    setScene((s) => (s ? { ...s, ms: 0, flash: null } : s));
+  }, [replay]);
+
+  // Return to the main screen 60 s after the final whistle if the user is idle.
+  useEffect(() => {
+    const mark = () => (lastActive.current = Date.now());
+    const evs = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
+    evs.forEach((e) => window.addEventListener(e, mark, { passive: true }));
+    return () => evs.forEach((e) => window.removeEventListener(e, mark));
+  }, []);
+  const st: PubState | null = view?.fixture.st || null;
+  const finished = st?.ph === "finished";
+  const finishedAt = useMemo(() => (finished ? Date.now() : 0), [finished]);
+  useEffect(() => {
+    if (!finished) return;
+    const id = setInterval(() => {
+      const idle = Date.now() - lastActive.current;
+      const sinceEnd = Date.now() - finishedAt;
+      const slipOpen = !!document.querySelector('[data-testid="bet-slip"]');
+      if (sinceEnd >= 60000 && idle >= 60000 && !slipOpen) navigate("/live");
+    }, 2000);
+    return () => clearInterval(id);
+  }, [finished, finishedAt, navigate]);
+
+  const stale = !lastOk || Date.now() - lastOk > 8000;
+
+  if (!view) {
+    return (
+      <Layout wide>
+        {error ? (
+          <div className="panel mx-auto mt-10 max-w-md p-6 text-center" role="alert">
+            <p className="font-display text-amber">Match unavailable</p>
+            <p className="mt-2 text-sm text-muted">{error}</p>
+            <Link to="/live" className="btn-ghost mt-4 inline-flex">
+              Back to the round
+            </Link>
+          </div>
+        ) : (
+          <div className="panel mt-4 h-72 animate-pulse" data-testid="match-loading" />
+        )}
+      </Layout>
+    );
+  }
+
+  const fx = view.fixture;
+  const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
+  const current = events[events.length - 1];
+  const showingOld = scene && scene.ms > 0 && current && scene.seq < current.seq - 3;
+
+  return (
+    <Layout wide>
+      <div className="mb-2 flex items-center gap-2 overflow-x-auto no-scrollbar" aria-label="Other matches">
+        <Link to="/live" className="btn-ghost !min-h-9 shrink-0 !px-3 !py-1 text-xs">
+          ← Round
+        </Link>
+        {others.map((o) => (
+          <Link key={o.id} to={`/match/${o.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs hover:border-cyan/50">
+            <Abbr team={o.home} />
+            <span className="tabular font-bold">{o.st ? `${o.st.sc[0]}–${o.st.sc[1]}` : "v"}</span>
+            <Abbr team={o.away} away />
+          </Link>
+        ))}
+      </div>
+
+      <Scoreboard view={view} now={now} stale={stale} />
+
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-3">
+          <section className="panel p-2 sm:p-3">
+            {pref === "off" ? (
+              <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
+            ) : (
+              <Pitch scene={scene} home={fx.home} away={fx.away} reduced={sysReduced} onDone={onSceneDone} replay={replay || !!showingOld} />
+            )}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
+                {current ? current.text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
+              </p>
+              <div className="flex gap-1" role="group" aria-label="Highlights">
+                {(["full", "quick", "off"] as const).map((p) => (
+                  <button key={p} type="button" className={`chip ${pref === p ? "chip-lime" : "chip-muted"}`} onClick={() => setPref(p)} aria-pressed={pref === p}>
+                    {p === "full" ? "Full" : p === "quick" ? "Quick" : "Off"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={view} events={events} /> : null}
+
+          <section className="panel p-3">
+            <h2 className="panel-title mb-2">Match events</h2>
+            <EventFeed events={events} view={view} onReplay={(e) => {
+              const s = sceneFor(e, (e.from as Pt) || lastBall.current);
+              if (s && pref !== "off") {
+                setReplay(true);
+                setScene({ ...s, key: `replay-${e.seq}-${Date.now()}` });
+              }
+            }} />
+          </section>
+        </div>
+
+        <aside className="space-y-3">
+          {view.coach ? <Coaching view={view} onDone={poll} /> : null}
+          <section className="panel p-3">
+            <h2 className="panel-title mb-2">Statistics</h2>
+            <Stats st={st} view={view} />
+          </section>
+          {!finished ? (
+            <section className="panel p-3">
+              <h2 className="panel-title mb-2">Bet on this match</h2>
+              <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} />
+            </section>
+          ) : null}
+          {view.lineups ? <Lineups view={view} /> : null}
+        </aside>
+      </div>
+    </Layout>
+  );
+}
+
+function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale: boolean }) {
+  const fx = view.fixture;
+  const st = fx.st;
+  const flash = useChanged(st ? st.sc.join("-") : "");
+  const finished = st?.ph === "finished";
+  const winner: Side | null = finished ? st!.win : null;
+  return (
+    <section className="panel overflow-hidden" data-testid="match-scoreboard">
+      <div className="flex items-center justify-between border-b border-line px-3 py-1.5 text-xs">
+        <span className="uppercase tracking-widest text-muted">{view.round.label}</span>
+        <div className="flex items-center gap-2">
+          {stale ? <span className="chip chip-amber">Reconnecting</span> : null}
+          <PhaseChip fx={fx} now={now} />
+        </div>
+      </div>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-3 sm:gap-4 sm:px-5">
+        <TeamLabel team={fx.home} compact className={`text-base sm:text-xl ${winner === "away" ? "opacity-50" : ""}`} align="right" />
+        <div className="text-center">
+          {st ? (
+            <div key={flash} className={`text-5xl font-bold leading-none tabular sm:text-6xl ${flash ? "score-pop" : ""}`} data-testid="match-score">
+              {st.sc[0]}
+              <span className="mx-1 text-muted">–</span>
+              {st.sc[1]}
+            </div>
+          ) : (
+            <div className="font-display text-2xl text-muted">vs</div>
+          )}
+          <div className="mt-0.5">
+            {st ? <MatchClock fx={fx} now={now} big /> : <span className="text-sm text-muted">Kick-off in {countdown(fx.kickoffAt - now)}</span>}
+          </div>
+          {st?.so ? (
+            <div className="mt-1 text-sm font-bold text-magenta" data-testid="match-shootout-score">
+              Pens {st.so.h}–{st.so.a}
+            </div>
+          ) : null}
+        </div>
+        <TeamLabel team={fx.away} away compact className={`text-base sm:text-xl ${winner === "home" ? "opacity-50" : ""}`} />
+      </div>
+      {finished && winner ? (
+        <div className="border-t border-lime/30 bg-lime/10 px-3 py-2 text-center text-sm font-bold text-lime" data-testid="final-result">
+          {(winner === "home" ? fx.home : fx.away).name} go through
+          {st!.by === "pens" && st!.so ? ` — won the shootout ${Math.max(st!.so.h, st!.so.a)}–${Math.min(st!.so.h, st!.so.a)}` : st!.by === "aet" ? " after extra time" : ""}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ShootoutBoard({ view, events }: { view: MatchView; events: MatchEvent[] }) {
+  const fx = view.fixture;
+  const so = fx.st?.so;
+  const lastSetup = [...events].reverse().find((e) => e.t === "shootout_setup" || e.t === "shootout_kick" || e.t === "shootout_end");
+  if (!so) {
+    return (
+      <section className="panel border-magenta/40 p-3" data-testid="shootout">
+        <h2 className="font-display text-lg text-magenta">Penalty shootout</h2>
+        <p className="text-sm text-muted">The teams are preparing…</p>
+      </section>
+    );
+  }
+  const rows: Array<{ side: Side; team: typeof fx.home; kicks: string[] }> = [
+    { side: "home", team: fx.home, kicks: so.k.filter((k) => k[0] === 0).map((k) => k[1]) },
+    { side: "away", team: fx.away, kicks: so.k.filter((k) => k[0] === 1).map((k) => k[1]) },
+  ];
+  const pending = lastSetup?.t === "shootout_setup" ? lastSetup : null;
+  const done = fx.st?.ph === "finished" || lastSetup?.t === "shootout_end";
+  const winner = done ? (so.h > so.a ? fx.home : fx.away) : null;
+  return (
+    <section className="panel border-magenta/40 p-3" data-testid="shootout">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="font-display text-lg text-magenta">Penalty shootout</h2>
+        <span className="text-3xl font-bold tabular" data-testid="shootout-total">
+          {so.h} – {so.a}
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {rows.map((r) => {
+          const slots = Math.max(5, so.th, so.ta);
+          return (
+            <div key={r.side} className="flex items-center gap-2">
+              <span className="w-12 shrink-0">
+                <Abbr team={r.team} away={r.side === "away"} />
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {Array.from({ length: slots }, (_, i) => {
+                  const k = r.kicks[i];
+                  const now = pending && pending.side === r.side && i === r.kicks.length;
+                  return (
+                    <span
+                      key={i}
+                      className={`grid h-6 w-6 place-items-center rounded-full border text-xs font-bold ${
+                        k === "goal" ? "border-lime bg-lime text-ink" : k ? "border-live bg-live/80 text-white" : now ? "border-amber text-amber" : "border-line text-muted"
+                      } ${i >= 5 ? "ring-1 ring-magenta/50" : ""}`}
+                      title={k ? (k === "goal" ? "Scored" : k === "save" ? "Saved" : k === "woodwork" ? "Hit the woodwork" : "Missed") : now ? "Taking now" : "To come"}
+                    >
+                      {k === "goal" ? "✓" : k ? "✕" : now ? "●" : ""}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-sm" aria-live="polite">
+        {winner ? (
+          <b className="text-lime">
+            {winner.name} win the shootout {Math.max(so.h, so.a)}–{Math.min(so.h, so.a)}!
+          </b>
+        ) : pending ? (
+          <>
+            <b>{pending.p}</b> ({(pending.side === "home" ? fx.home : fx.away).abbreviation}) is taking kick {pending.kick?.no}
+            {pending.kick?.sd ? <span className="chip chip-magenta ml-2">Sudden death</span> : null}
+            {pending.kick?.win ? <span className="ml-2 text-lime">— score to win it</span> : pending.kick?.must ? <span className="ml-2 text-amber">— must score</span> : null}
+          </>
+        ) : so.next ? (
+          <>
+            Next: <b>{(so.next === "home" ? fx.home : fx.away).name}</b>
+            {so.sd ? <span className="chip chip-magenta ml-2">Sudden death</span> : null}
+          </>
+        ) : null}
+      </p>
+      <p className="mt-1 text-[11px] text-muted">Shootout goals are separate from the match score.</p>
+    </section>
+  );
+}
+
+function Stats({ st, view }: { st: PubState | null; view: MatchView }) {
+  if (!st) return <p className="text-sm text-muted">Statistics appear at kick-off.</p>;
+  const fx = view.fixture;
+  return (
+    <div className="space-y-1.5 text-sm" data-testid="stats">
+      <div className="flex justify-between text-xs font-bold">
+        <Abbr team={fx.home} />
+        <span className="text-muted">Possession</span>
+        <Abbr team={fx.away} away />
+      </div>
+      <div className="flex h-2 overflow-hidden rounded-full bg-panel-2">
+        <div style={{ width: `${st.pos}%`, background: fx.home.primary_color }} />
+        <div style={{ width: `${100 - st.pos}%`, background: "#f4f7ff" }} />
+      </div>
+      <div className="flex justify-between tabular text-xs text-muted">
+        <span>{st.pos}%</span>
+        <span>{100 - st.pos}%</span>
+      </div>
+      {STAT_ROWS.map(([label, i]) => (
+        <div key={label} className="grid grid-cols-[2rem_1fr_2rem] items-center text-center tabular">
+          <span className="font-bold">{st.x[0][i]}</span>
+          <span className="text-xs text-muted">{label}</span>
+          <span className="font-bold">{st.x[1][i]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const FEED_TYPES = new Set([
+  "kickoff",
+  "goal",
+  "penalty_goal",
+  "penalty_awarded",
+  "penalty_saved",
+  "penalty_missed",
+  "penalty_woodwork",
+  "save",
+  "woodwork",
+  "miss",
+  "block",
+  "shot",
+  "yellow_card",
+  "red_card",
+  "half_time",
+  "second_half",
+  "end_of_normal_time",
+  "extra_time",
+  "et_half_time",
+  "et_second_half",
+  "shootout_start",
+  "shootout_kick",
+  "shootout_end",
+  "match_end",
+  "coaching",
+  "corner",
+]);
+const REPLAYABLE = new Set(["goal", "penalty_goal", "save", "woodwork", "miss", "block", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
+
+function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: MatchView; onReplay: (e: MatchEvent) => void }) {
+  const list = events.filter((e) => FEED_TYPES.has(e.t)).slice(-40).reverse();
+  if (!list.length) return <p className="text-sm text-muted">{view.fixture.status === "scheduled" ? "The match hasn't started." : "Waiting for the first action…"}</p>;
+  return (
+    <ol className="max-h-80 space-y-1 overflow-y-auto pr-1 text-sm" data-testid="event-feed">
+      {list.map((e) => {
+        const side = e.side === "home" ? view.fixture.home : e.side === "away" ? view.fixture.away : null;
+        const big = e.t === "goal" || e.t === "penalty_goal" || e.t === "red_card" || e.t === "match_end" || e.t === "shootout_end";
+        return (
+          <li key={e.seq} className={`flex items-start gap-2 rounded px-1 py-0.5 ${big ? "bg-lime/10" : ""}`}>
+            <span className="w-9 shrink-0 tabular text-xs text-muted">{e.t.startsWith("shootout") ? "P" : `${e.min}′`}</span>
+            {side ? <Abbr team={side} away={e.side === "away"} /> : <span className="w-[2.6rem] shrink-0" />}
+            <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>{e.text}</span>
+            {REPLAYABLE.has(e.t) ? (
+              <button type="button" className="shrink-0 text-xs text-cyan hover:underline" onClick={() => onReplay(e)} aria-label={`Replay: ${e.text}`}>
+                ▶ Replay
+              </button>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
+  const c = view.coach!;
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const now = useNow(1000);
+  const left = c.max - c.used;
+  const cooling = c.cooldownUntil > now;
+  const ph = view.fixture.st?.ph;
+  const open = ph && phaseInfo(view.fixture.st).live && ph !== "shootout";
+  async function send(s: "defend" | "balanced" | "attack") {
+    setBusy(true);
+    setMsg("");
+    try {
+      const r = await footfiveApi.coaching(view.fixture.id, s);
+      setMsg(`${s[0].toUpperCase() + s.slice(1)} from minute ${r.fromMinute}.`);
+      onDone();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Command failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="panel border-cyan/40 p-3" data-testid="coaching">
+      <div className="flex items-baseline justify-between">
+        <h2 className="panel-title">Touchline</h2>
+        <span className="text-xs text-muted tabular">
+          {left}/{c.max} commands left
+        </span>
+      </div>
+      {c.ai ? (
+        <p className="mt-2 text-sm text-muted">
+          Your team is on Full AI. Switch to My settings in{" "}
+          <Link to="/my-team" className="text-cyan underline">
+            My Team
+          </Link>{" "}
+          to coach live.
+        </p>
+      ) : (
+        <>
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
+            {(["defend", "balanced", "attack"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`btn-ghost !min-h-10 !px-1 text-xs ${c.stance === s ? "!border-cyan !bg-cyan/20 text-cyan" : ""}`}
+                disabled={busy || !open || left <= 0 || cooling || c.stance === s}
+                onClick={() => send(s)}
+                aria-pressed={c.stance === s}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            {c.pending ? "Change queued — applies from the next minute. " : ""}
+            {cooling ? `Recharging: ${countdown(c.cooldownUntil - now)}. ` : ""}Commands affect future play only.
+          </p>
+          {msg ? <p className="mt-1 text-sm text-cyan">{msg}</p> : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+function Lineups({ view }: { view: MatchView }) {
+  const fx = view.fixture;
+  const off = new Set(view.sentOff.map((s) => s.side + ":" + s.p));
+  return (
+    <section className="panel p-3">
+      <h2 className="panel-title mb-2">Line-ups</h2>
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        {(["home", "away"] as const).map((side) => {
+          const t = side === "home" ? fx.home : fx.away;
+          const list = (view.lineups?.[side] || []).filter((p) => p.starter);
+          return (
+            <div key={side}>
+              <div className="mb-1">
+                <Abbr team={t} away={side === "away"} />
+              </div>
+              <ul className="space-y-0.5">
+                {list.map((p) => (
+                  <li key={p.name} className={`truncate ${off.has(side + ":" + p.name) ? "text-live line-through" : ""}`}>
+                    <span className="tabular text-muted">{p.no}</span> {p.name}
+                    {p.role === "gk" ? <span className="text-muted"> (GK)</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}

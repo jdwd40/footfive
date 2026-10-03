@@ -83,6 +83,6 @@ test.describe("password change", () => {
     await page.getByTestId("new-password").fill("newpass99");
     await page.getByTestId("confirm-password").fill("newpass99");
     await page.getByTestId("change-password-submit").click();
-    await expect(page).toHaveURL(/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/live$/, { timeout: 15000 });
   });
 });

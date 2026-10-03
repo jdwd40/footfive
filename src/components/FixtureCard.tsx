@@ -1,123 +1,153 @@
 import { Link } from "react-router-dom";
-import type { ScoreboardFixture } from "../lib/pocketbase";
-import TeamBadge from "./TeamBadge";
+import { useEffect, useRef, useState } from "react";
+import type { FixtureCard as Fx } from "../lib/pocketbase";
+import { clockSeconds, clockText, countdown, phaseInfo, ukTime } from "../lib/live";
+import { TeamLabel } from "./Team";
 
-function phaseLabel(f: ScoreboardFixture) {
-  if (f.finished || f.status === "finished") return "Full-time";
-  if (f.status === "half_time") return "Half-time";
-  if (f.status === "extra_time") return `Extra time · ${f.minute}'`;
-  if (f.status === "shootout") return "Penalties";
-  if (f.status === "live") return `Live · ${f.minute}'`;
-  if (f.status === "scheduled") {
-    try {
-      const t = new Date(String(f.scheduledAt).replace(" ", "T"));
-      if (!isNaN(t.getTime()) && t.getTime() > Date.now()) {
-        const mins = Math.ceil((t.getTime() - Date.now()) / 60000);
-        return mins > 0 ? `Kickoff in ${mins}m` : "Kickoff soon";
-      }
-    } catch {
-      /* ignore */
+/** Counter that bumps when `value` changes (never on first render) — drives subtle flashes. */
+export function useChanged(value: string) {
+  const prev = useRef(value);
+  const [flash, setFlash] = useState(0);
+  useEffect(() => {
+    if (prev.current !== value) {
+      prev.current = value;
+      setFlash((n) => n + 1);
     }
-    return "Scheduled";
+  }, [value]);
+  return flash;
+}
+
+export function PhaseChip({ fx, now }: { fx: Fx; now: number }) {
+  if (!fx.st) {
+    if (fx.kickoffAt && now >= fx.kickoffAt) return <span className="chip chip-amber">Kick-off</span>;
+    return <span className="chip chip-muted">Scheduled</span>;
   }
-  return f.status;
+  const p = phaseInfo(fx.st);
+  return <span className={`chip chip-${p.tone}`}>{p.label}</span>;
 }
 
-function statusChip(f: ScoreboardFixture) {
-  if (f.finished || f.status === "finished") return "FT";
-  if (f.status === "half_time") return "HT";
-  if (f.status === "extra_time") return `ET ${f.minute}'`;
-  if (f.status === "shootout") return "PEN";
-  if (f.status === "live") return `${f.minute}'`;
-  return "SCHED";
+/** Clock: regulation / extra time, "PENS" in a shootout, kick-off time before the start. */
+export function MatchClock({ fx, now, big = false }: { fx: Fx; now: number; big?: boolean }) {
+  const st = fx.st;
+  if (!st) return <span className="tabular text-muted">{ukTime(fx.kickoffAt)} UK</span>;
+  if (st.ph === "shootout") return <span className={`font-display text-magenta ${big ? "text-lg" : ""}`}>PENS</span>;
+  if (st.ph === "finished") return <span className="font-display text-lime">FT</span>;
+  const s = clockSeconds(st, fx.at, now, fx.minuteMs);
+  const paused = !st.clk?.run;
+  const et = st.ph.startsWith("extra") || st.ph === "et_half_time";
+  return (
+    <span className={`tabular font-bold ${et ? "text-magenta" : "text-cyan"} ${paused ? "opacity-70" : ""} ${big ? "text-xl" : "text-sm"}`} aria-label="Match clock">
+      {clockText(s)}
+      {et ? <span className="ml-1 text-[9px]">ET</span> : null}
+    </span>
+  );
 }
 
+/** Compact scoreboard card for the round grid. Stable position; never reorders. */
 export default function FixtureCard({
-  fixture,
-  managedTeamId,
+  fx,
+  now,
+  stale,
+  onBet,
+  blocked,
 }: {
-  fixture: ScoreboardFixture;
-  managedTeamId?: string | null;
+  fx: Fx;
+  now: number;
+  stale: boolean;
+  onBet?: (fx: Fx) => void;
+  blocked?: boolean;
 }) {
-  const live =
-    fixture.status === "live" ||
-    fixture.status === "extra_time" ||
-    fixture.status === "shootout" ||
-    fixture.status === "half_time";
-  const showPens =
-    fixture.shootoutHome > 0 ||
-    fixture.shootoutAway > 0 ||
-    fixture.status === "shootout" ||
-    (fixture.finished && (fixture.shootoutHome > 0 || fixture.shootoutAway > 0));
-  const mine =
-    managedTeamId &&
-    (fixture.home.id === managedTeamId || fixture.away.id === managedTeamId);
+  const st = fx.st;
+  const scoreKey = st ? st.sc.join("-") + (st.so ? `/${st.so.h}-${st.so.a}` : "") : "";
+  const flash = useChanged(scoreKey);
+  const finished = fx.status === "finished" || st?.ph === "finished";
+  const winner = finished ? (st?.win ?? fx.result?.winner ?? null) : null;
+  const preKick = !st;
+  const toKick = fx.kickoffAt - now;
+  const oddsOpen = !!fx.odds && !fx.odds.closed && !blocked;
 
   return (
-    <Link
-      to={`/match/${fixture.fixtureId}`}
-      className={`glass block rounded-2xl p-3 transition active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan ${
-        live ? "live-pulse" : ""
-      } ${mine ? "ring-1 ring-magenta/50" : ""}`}
-      aria-label={`${fixture.home.name} ${fixture.scoreHome} ${fixture.away.name} ${fixture.scoreAway}, ${phaseLabel(fixture)}`}
+    <article
+      data-testid="fixture-card"
+      data-fixture-id={fx.id}
+      className={`panel flex flex-col gap-2 p-3 ${stale ? "opacity-75" : ""}`}
+      aria-label={`${fx.home.name} versus ${fx.away.name}`}
     >
-      <div className="mb-2 flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider text-muted">
-        <span className="flex items-center gap-2">
-          <span>{fixture.slot}</span>
-          {mine ? <span className="text-magenta">You</span> : null}
-          {live ? (
-            <span className="inline-flex items-center gap-1 text-lime">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
-              Live
-            </span>
-          ) : null}
-        </span>
-        <span className={live ? "text-lime" : fixture.finished ? "text-cyan" : ""}>
-          {statusChip(fixture)}
-        </span>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <PhaseChip fx={fx} now={now} />
+        <MatchClock fx={fx} now={now} />
       </div>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <TeamBadge
-            badgeKey={fixture.home.badge_key}
-            color={fixture.home.primary_color}
-            name={fixture.home.name}
-            size={36}
-          />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold leading-tight">{fixture.home.name}</div>
-            <div className="text-[10px] text-muted">{fixture.home.grade}</div>
-          </div>
-        </div>
-        <div className="text-center font-display">
-          <div className="text-xl tabular-nums text-white sm:text-2xl">
-            {fixture.scoreHome}
-            <span className="mx-1 text-muted">–</span>
-            {fixture.scoreAway}
-          </div>
-          {showPens ? (
-            <div className="text-[11px] text-amber">
-              pens {fixture.shootoutHome}–{fixture.shootoutAway}
+
+      <div key={flash} className={`grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 rounded-lg ${flash ? "card-flash" : ""}`}>
+        {(["home", "away"] as const).map((side, i) => {
+          const team = side === "home" ? fx.home : fx.away;
+          const lost = winner && winner !== side;
+          return (
+            <div key={side} className="contents">
+              <TeamLabel team={team} away={side === "away"} className={`text-[15px] ${lost ? "opacity-50" : ""}`} />
+              <div className="flex items-center justify-end gap-1.5 tabular">
+                {st ? (
+                  <span className={`text-2xl font-bold leading-none ${flash ? "score-pop" : ""}`} data-testid={`score-${side}`}>
+                    {st.sc[i]}
+                  </span>
+                ) : i === 0 ? (
+                  <span className="font-display text-xs text-muted">vs</span>
+                ) : null}
+                {st?.so ? (
+                  <span className="rounded bg-magenta/15 px-1 text-xs font-bold text-magenta" title="Shootout score (not part of the football score)">
+                    ({i === 0 ? st.so.h : st.so.a})
+                  </span>
+                ) : null}
+              </div>
             </div>
-          ) : null}
-        </div>
-        <div className="flex min-w-0 items-center justify-end gap-2">
-          <div className="min-w-0 text-right">
-            <div className="truncate text-sm font-semibold leading-tight">{fixture.away.name}</div>
-            <div className="text-[10px] text-muted">{fixture.away.grade}</div>
-          </div>
-          <TeamBadge
-            badgeKey={fixture.away.badge_key}
-            color={fixture.away.primary_color}
-            name={fixture.away.name}
-            size={36}
-          />
-        </div>
+          );
+        })}
       </div>
-      <div className="mt-2 flex items-center justify-between text-xs">
-        <span className="text-muted">{phaseLabel(fixture)}</span>
-        <span className="font-semibold uppercase tracking-wide text-cyan/90">Watch →</span>
+
+      <div className="min-h-[1.25rem] truncate text-xs text-muted">
+        {finished && winner ? (
+          <span className="text-lime">
+            {(winner === "home" ? fx.home : fx.away).abbreviation} go through
+            {st?.by === "pens" && st.so ? ` · ${Math.max(st.so.h, st.so.a)}–${Math.min(st.so.h, st.so.a)} on pens` : st?.by === "aet" ? " after extra time" : ""}
+          </span>
+        ) : preKick ? (
+          toKick > 0 ? <span>Kick-off in {countdown(toKick)}</span> : <span>Kick-off…</span>
+        ) : (
+          fx.last?.text || ""
+        )}
       </div>
-    </Link>
+
+      <div className="flex items-center gap-2">
+        <Link
+          to={`/match/${fx.id}`}
+          className={`${preKick ? "btn-ghost" : "btn-primary"} !min-h-10 flex-1 !py-1.5 text-xs`}
+          data-testid="watch-match"
+        >
+          {preKick ? "Preview" : finished ? "Result" : "Watch live"}
+        </Link>
+        {fx.odds && onBet && !finished ? (
+          <button
+            type="button"
+            className="btn-odds !min-h-10 !flex-row gap-2 px-3 text-xs"
+            disabled={!oddsOpen || stale}
+            onClick={() => onBet(fx)}
+            title={blocked ? "You manage a team in this fixture" : fx.odds.closed || "Bet on this match"}
+            data-testid="bet-fixture"
+          >
+            {blocked ? (
+              "Your match"
+            ) : fx.odds.closed ? (
+              <span className="text-[11px] font-semibold">Suspended</span>
+            ) : (
+              <>
+                <span className="tabular">{fx.odds.home?.toFixed(2) ?? "–"}</span>
+                <span className="opacity-50">|</span>
+                <span className="tabular">{fx.odds.away?.toFixed(2) ?? "–"}</span>
+              </>
+            )}
+          </button>
+        ) : null}
+      </div>
+    </article>
   );
 }

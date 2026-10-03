@@ -20,10 +20,10 @@ test.describe("shared world", () => {
     expect(ja.tournament?.id || null).toEqual(jb.tournament?.id || null);
     expect(ja.tournament?.number || null).toEqual(jb.tournament?.number || null);
 
-    const sbA = await request.get(`${PB}/api/footfive/scoreboard`, {
+    const sbA = await request.get(`${PB}/api/footfive/live`, {
       headers: { Authorization: a.token },
     });
-    const sbB = await request.get(`${PB}/api/footfive/scoreboard`, {
+    const sbB = await request.get(`${PB}/api/footfive/live`, {
       headers: { Authorization: b.token },
     });
     const sa = await sbA.json();
@@ -123,9 +123,9 @@ test.describe("shared world", () => {
     }
   });
 
-  test("scoreboard UI no overflow", async ({ page }) => {
+  test("live screen no overflow", async ({ page }) => {
     await loginViaUi(page, "e2e_user_a@test.local", "testpass99");
-    await page.goto("/scoreboard");
+    await page.goto("/live");
     await page.waitForTimeout(1500);
     await expectNoHorizontalOverflow(page);
   });

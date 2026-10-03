@@ -114,7 +114,9 @@ function overview($app) {
     retentionDays: world ? world.get("retention_days") : 30,
     progressionPaused: world ? !!world.get("progression_paused") : false,
     pace: world ? world.get("pace") : "normal",
-    betweenRoundMinutes: world ? world.get("between_round_minutes") || 3 : 3,
+    betweenRoundMinutes: world ? world.get("between_round_minutes") || 1 : 1,
+    championshipGapMinutes: world ? world.get("championship_gap_minutes") || 10 : 10,
+    fixturesWindowMinutes: world ? world.get("fixtures_window_minutes") || 5 : 5,
     roundIntervalMs: world ? world.get("round_interval_ms") : null,
     matchMinuteRealSeconds: world
       ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
@@ -522,6 +524,15 @@ function patchWorldSettings($app, adminId, body, reason) {
   }
   if (body.tournament_interval_ms != null)
     world.set("tournament_interval_ms", parseInt(body.tournament_interval_ms, 10));
+  if (body.championship_gap_minutes != null || body.fixtures_window_minutes != null) {
+    var gap = parseInt(body.championship_gap_minutes != null ? body.championship_gap_minutes : world.get("championship_gap_minutes") || 10, 10);
+    var win = parseInt(body.fixtures_window_minutes != null ? body.fixtures_window_minutes : world.get("fixtures_window_minutes") || 5, 10);
+    if (isNaN(gap) || gap < 1 || gap > 1440) throw new BadRequestError("championship_gap_minutes must be 1–1440");
+    if (isNaN(win) || win < 1 || win > 1440) throw new BadRequestError("fixtures_window_minutes must be 1–1440");
+    if (win > gap) throw new BadRequestError("The fixture window cannot be longer than the gap between championships");
+    world.set("championship_gap_minutes", gap);
+    world.set("fixtures_window_minutes", win);
+  }
   if (body.ai_progression_enabled != null)
     world.set("ai_progression_enabled", !!body.ai_progression_enabled);
   if (body.progression_paused != null)
@@ -541,8 +552,10 @@ function patchWorldSettings($app, adminId, body, reason) {
     round_interval_ms: world.get("round_interval_ms"),
     match_minute_real_seconds: world.get("match_minute_real_seconds"),
     match_minute_real_ms: world.get("match_minute_real_ms"),
+    championship_gap_minutes: world.get("championship_gap_minutes"),
+    fixtures_window_minutes: world.get("fixtures_window_minutes"),
     applies_to: "unstarted_matches",
-    note: "Live matches keep their kickoff speed snapshot",
+    note: "Live matches keep their kick-off speed; new breaks use the new values.",
   };
 }
 

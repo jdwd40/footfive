@@ -7,7 +7,7 @@ pb.autoCancellation(false);
 export type TeamPublic = {
   id: string;
   name: string;
-  abbreviation?: string;
+  abbreviation: string;
   grade: string;
   primary_color: string;
   secondary_color: string;
@@ -18,138 +18,175 @@ export type TeamPublic = {
   available?: boolean;
   eliminated?: boolean;
   slug?: string;
+  mode?: "manual" | "ai";
 };
 
-export type ScoreboardFixture = {
-  fixtureId: string;
-  slot: string;
-  bracketIndex: number;
-  home: TeamPublic;
-  away: TeamPublic;
-  scheduledAt: string;
-  status: string;
-  scoreHome: number;
-  scoreAway: number;
-  shootoutHome: number;
-  shootoutAway: number;
-  minute: number;
-  phase: string;
-  finished: boolean;
-  winnerTeamId?: string | null;
-  homeCoaching?: string;
-  awayCoaching?: string;
+export type Side = "home" | "away";
+
+/** Published match state carried by every event (server-authoritative). */
+export type PubState = {
+  sc: [number, number];
+  so: {
+    h: number;
+    a: number;
+    th: number;
+    ta: number;
+    first: Side;
+    next: Side | null;
+    sd: boolean;
+    k: Array<[0 | 1, "goal" | "save" | "miss" | "woodwork", string]>;
+  } | null;
+  ph: string;
+  clk: { s: number; run: 0 | 1 } | null;
+  pos: number;
+  x: [number[], number[]];
+  d: 0 | 1;
+  win: Side | null;
+  by: "normal" | "aet" | "pens" | null;
 };
+
+export type PenPlan = { col: number; height: number; dive: number; post: string | null; run: number; outcome: string };
 
 export type MatchEvent = {
   seq: number;
-  minute: number;
-  phase: string;
-  offsetMs: number;
-  type: string;
-  team: "home" | "away" | null;
-  player: string | null;
-  message: string;
-  scoreHome: number;
-  scoreAway: number;
-  shootoutHome: number;
-  shootoutAway: number;
+  at: number;
+  t: string;
+  min: number;
+  side?: Side | null;
+  p?: string;
+  p2?: string;
+  ball?: [number, number];
+  from?: [number, number] | null;
+  target?: [number, number];
+  chain?: number;
+  header?: number;
+  post?: string;
+  pen?: PenPlan;
+  kick?: { no: number; sd: number; must?: number; win?: number; outcome?: string; decisive?: number };
+  major?: number;
+  text: string;
+  tick?: string;
+  st: PubState;
 };
 
-export type ShootoutKick = {
-  kickIndex: number;
-  team: "home" | "away";
-  kickNumber: number;
-  suddenDeath?: boolean;
-  player?: string;
-  outcome: "goal" | "save" | "miss";
-  mustScore?: boolean;
-  decisive?: boolean;
-  takenHome?: number;
-  takenAway?: number;
-};
-
-export type MatchView = {
-  serverTime: string;
-  serverTimeMs: number;
-  fixtureId: string;
-  matchMinuteRealMs?: number;
+export type FixtureCard = {
+  id: string;
+  slot: string;
+  index: number;
   home: TeamPublic;
   away: TeamPublic;
-  status: string;
-  scoreHome: number;
-  scoreAway: number;
-  shootoutHome: number;
-  shootoutAway: number;
-  shootoutTakenHome?: number;
-  shootoutTakenAway?: number;
-  shootoutSide?: "home" | "away" | null;
-  shootoutKicks?: ShootoutKick[];
-  minute: number;
-  phase: string;
-  events: MatchEvent[];
-  newEvents: MatchEvent[];
-  lastSeq: number;
-  finished: boolean;
-  caughtUp?: boolean;
-  stats: Record<string, unknown> | null;
-  winnerTeamId?: string | null;
-  managedSide?: "home" | "away" | null;
-  homeCoaching?: string;
-  awayCoaching?: string;
-  canCoach?: boolean;
+  status: "scheduled" | "live" | "finished";
+  kickoffAt: number;
+  minuteMs: number;
+  st: PubState | null;
+  at: number | null;
+  seq: number;
+  last: { t: string; text: string; side: Side | null } | null;
+  odds: { home: number | null; away: number | null; closed: string | null } | null;
+  result?: { sh: number; sa: number; soh: number; soa: number; winner: Side; by: string | null };
 };
 
-export type ScoreboardResponse = {
-  serverTime: string;
+export type TickerItem = { id: string; fixtureId: string; seq: number; at: number; t: string; side: Side | null; text: string; min: number };
+
+export type BracketFixture = {
+  slot: string;
+  fixtureId?: string;
+  home: TeamPublic | null;
+  away: TeamPublic | null;
+  homePending?: string | null;
+  awayPending?: string | null;
+  status: string;
+  sh?: number | null;
+  sa?: number | null;
+  soh?: number;
+  soa?: number;
+  by?: string | null;
+  winner?: Side | null;
+};
+
+export type ChampionInfo = {
+  tournamentId: string;
+  number: number;
+  team: TeamPublic | null;
+  final: { fixtureId: string; home: TeamPublic; away: TeamPublic; sh: number; sa: number; soh: number; soa: number; by: string | null } | null;
+  completedAt: number;
+};
+
+export type LiveView = {
   serverTimeMs: number;
-  betweenRoundMinutes?: number;
-  round: {
-    id: string;
-    key: string;
-    label: string;
-    status: string;
-    scheduledAt: string;
-    startedAt?: string;
-    announceKey?: string;
-    announcedAt?: string;
-  } | null;
-  fixtures: ScoreboardFixture[];
+  paused: boolean;
+  timing: { betweenMs: number; gapMs: number; windowMs: number; minuteMs: number; betweenMinutes: number; gapMinutes: number; windowMinutes: number; minuteSec: number };
+  mode: "idle" | "champion" | "fixtures" | "live";
+  championship: { id: string; number: number; startsAt: number; status: string } | null;
+  round: { id: string; key: string; label: string; status: string; scheduledAt: number; finishedAt: number | null } | null;
+  fixtures: FixtureCard[];
+  bracket: Array<{ key: string; label: string; fixtures: BracketFixture[] }>;
+  ticker: TickerItem[];
+  champion: ChampionInfo | null;
+  recentChampion?: ChampionInfo | null;
+  nextChampionshipAt: number | null;
+  fixturesAt?: number | null;
+};
+
+export type LineupPlayer = { name: string; no: number; role: string; starter: boolean };
+
+export type MatchView = {
+  serverTimeMs: number;
+  round: { id: string; key: string; label: string; status: string };
+  fixture: FixtureCard;
+  events: MatchEvent[];
+  lineups: { home: LineupPlayer[]; away: LineupPlayer[] } | null;
+  sentOff: Array<{ side: Side; p: string }>;
+  managedSide: Side | null;
+  coach: { stance: string; pending: boolean; ai: boolean; used: number; max: number; cooldownUntil: number } | null;
+};
+
+export type Selection = { id: string; label: string; short: string; odds: number | null };
+export type Market = { key: string; title: string; rules: string; closed?: string | null; closesAt?: number; sel?: Selection[]; quarters?: Array<Array<{ id: string; label: string; short: string; p: number }>> };
+
+export type FixtureMarkets = { serverTimeMs: number; fixtureId: string; seq: number; state: { phase: string; closed: string | null }; blocked: string | null; markets: Market[] };
+export type WideMarkets = { serverTimeMs: number; blocked: string | null; markets: Market[] };
+
+export type Bet = {
+  id: string;
+  market: string;
+  title: string;
+  label: string;
+  selection: string;
+  fixtureId: string | null;
+  stake: number;
+  odds: number;
+  potential: number;
+  status: "open" | "won" | "lost" | "void";
+  payout: number;
+  note: string;
+  placedAt: number | null;
+  created: string;
+  settledAt: string | null;
+};
+
+export type MyBets = {
+  credits: number;
+  bets: Bet[];
+  settledStaked: number;
+  settledReturned: number;
+  net: number;
+  topUp: { amount: number; floor: number; available: boolean; nextAt: number | null; rule: string };
 };
 
 export type WorldSnapshot = {
-  serverTime: string;
   serverTimeMs: number;
-  world: {
-    pace: string;
-    nextActionAt?: string;
-    roundIntervalMs?: number;
-    aiProgressionEnabled?: boolean;
-  };
-  tournament: {
-    id: string;
-    number: number;
-    status: string;
-    current_round: string;
-    champion_team?: string;
-  } | null;
-  activeRound: {
-    id: string;
-    key: string;
-    label: string;
-    status: string;
-    scheduledAt: string;
-    startedAt?: string;
-  } | null;
-  managedTeam: (TeamPublic & { treasury?: number; battery_count?: number }) | null;
-  isSpectator: boolean;
-  managementOpen: boolean;
   credits: number;
-  bettingCredits?: number;
-  teamTreasury?: number | null;
   startingCredits: number;
-  squadAverages?: { energy: number; condition: number } | null;
-  commandCharge?: { points: number; max: number; nextPointInMs: number } | null;
+  managedTeam: (TeamPublic & { treasury?: number; battery_count?: number; default_stance?: string }) | null;
+  nextFixture: { fixtureId: string; status: string; kickoffAt: number; opponent: TeamPublic; home: boolean } | null;
+  tournament: { id: string; number: number; current_round: string } | null;
+  activeRound: { id: string; key: string; label: string; status: string; scheduledAt: string } | null;
+  timing: { betweenMinutes: number; gapMinutes: number; windowMinutes: number; minuteSec: number };
+  commandCharge: { points: number; max: number; nextPointInMs: number } | null;
 };
+
+export type BetRequest = { market: string; fixtureId?: string; selection: string; stake: number; odds: number; requestId: string };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
@@ -178,56 +215,23 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const footfiveApi = {
   serverTime: () => api<{ serverTime: string; serverTimeMs: number }>("/api/footfive/server-time"),
+  live: () => api<LiveView>("/api/footfive/live"),
+  match: (fixtureId: string, since = 0) => api<MatchView>(`/api/footfive/match/${fixtureId}?since=${since}`),
   world: () => api<WorldSnapshot>("/api/footfive/world"),
   teams: () => api<{ teams: TeamPublic[] }>("/api/footfive/teams"),
-  claimTeam: (teamId: string) =>
-    api<{ team: TeamPublic }>(`/api/footfive/teams/${teamId}/claim`, { method: "POST" }),
-  catchUp: () => api<{ ok: boolean }>("/api/footfive/catch-up", { method: "POST" }),
-  tournament: () => api<WorldSnapshot>("/api/footfive/tournament"),
-  scoreboard: () => api<ScoreboardResponse>("/api/footfive/scoreboard"),
-  match: (fixtureId: string, sinceSeq = 0) =>
-    api<MatchView>(`/api/footfive/match/${fixtureId}?sinceSeq=${sinceSeq}`),
+  claimTeam: (teamId: string) => api<{ team: TeamPublic }>(`/api/footfive/teams/${teamId}/claim`, { method: "POST" }),
   coaching: (fixtureId: string, stance: "defend" | "balanced" | "attack") =>
-    api<{ ok: boolean; stance: string; message: string }>(
-      `/api/footfive/matches/${fixtureId}/coaching`,
-      { method: "POST", body: JSON.stringify({ stance }) },
-    ),
-  saveLineup: (teamId: string, starters: string[], subs: string[]) =>
-    api<{ ok: boolean }>(`/api/footfive/teams/${teamId}/lineup`, {
+    api<{ ok: boolean; stance: string; fromMinute: number; used: number; max: number }>(`/api/footfive/matches/${fixtureId}/coaching`, {
       method: "POST",
-      body: JSON.stringify({ starters, subs }),
+      body: JSON.stringify({ stance }),
     }),
-  bettingFixtures: () =>
-    api<{
-      fixtures: Array<{
-        fixtureId: string;
-        home: TeamPublic;
-        away: TeamPublic;
-        scheduledAt: string;
-        homeOdds: number;
-        awayOdds: number;
-      }>;
-    }>("/api/footfive/betting/fixtures"),
-  placeBet: (fixtureId: string, selectionTeamId: string, stake: number) =>
-    api<{ bet: { id: string; stake: number; odds: number; status: string } }>(
-      "/api/footfive/bets",
-      {
-        method: "POST",
-        body: JSON.stringify({ fixtureId, selectionTeamId, stake }),
-      },
-    ),
-  myBets: () =>
-    api<{
-      bets: Array<{
-        id: string;
-        fixtureId: string;
-        selectionTeamId: string;
-        stake: number;
-        odds: number;
-        status: string;
-        settled: boolean;
-      }>;
-    }>("/api/footfive/bets/mine"),
+  fixtureMarkets: (fixtureId: string) => api<FixtureMarkets>(`/api/footfive/markets/${fixtureId}`),
+  wideMarkets: () => api<WideMarkets>("/api/footfive/markets"),
+  placeBet: (body: BetRequest) => api<{ bet: Bet; duplicate: boolean }>("/api/footfive/bets", { method: "POST", body: JSON.stringify(body) }),
+  myBets: () => api<MyBets>("/api/footfive/bets/mine"),
+  topUp: () => api<{ ok: boolean; credits: number }>("/api/footfive/wallet/topup", { method: "POST" }),
+  setMode: (mode: "manual" | "ai") => api<{ ok: boolean; mode: string; note: string }>("/api/footfive/my-team/mode", { method: "POST", body: JSON.stringify({ mode }) }),
+  setDefaultStance: (stance: string) => api<{ ok: boolean; note: string }>("/api/footfive/my-team/stance", { method: "POST", body: JSON.stringify({ stance }) }),
 
   myTeam: () =>
     api<{
@@ -235,6 +239,7 @@ export const footfiveApi = {
         treasury: number;
         battery_count: number;
         overclock_ready?: boolean;
+        default_stance: "defend" | "balanced" | "attack";
       };
       players: Array<{
         id: string;
@@ -249,9 +254,12 @@ export const footfiveApi = {
         effective_attack: number;
         effective_defence: number;
         sort_order: number;
+        upgrade_cost: { attack: number; defence: number };
       }>;
       averages: { energy: number; condition: number };
       managementOpen: boolean;
+      effectNote: string;
+      aiRules: string[];
       batteryCost: number;
       repairCostPerPoint: number;
     }>("/api/footfive/my-team"),

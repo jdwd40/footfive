@@ -1,6 +1,16 @@
 /**
- * Incremental server-authoritative match simulation.
- * Advances in segments (~5 match minutes); never pre-generates full result at kickoff.
+ * FootFive match engine v2 — server-authoritative, incremental, deterministic.
+ *
+ * - The world tick calls advanceTo(state, now). Only steps whose start time has
+ *   arrived are simulated; nothing beyond the current step is pre-generated.
+ * - One ordered event stream per match. Every event carries the resulting public
+ *   state (`st`): score, shootout, phase, clock anchor, stats, danger flag.
+ *   Scoreboards, tickers, commentary, statistics and highlights all read it.
+ * - A step narrates a match minute over its real duration, so some events have
+ *   `at` slightly in the future. The API only publishes events with at <= now,
+ *   and no event reveals the outcome of a later one (a shot never carries its
+ *   result; a penalty award never carries the kick).
+ * - Shootout goals live in `so` only and never touch `score`.
  */
 var balMod, effMod;
 try {
@@ -11,10 +21,12 @@ try {
   effMod = require("./effectiveStats.js");
 }
 var BALANCE = balMod.BALANCE;
-var getTiming = balMod.getTiming;
-var coachingMod = balMod.coachingMod;
+var M = BALANCE.match;
 var effectiveTeamStrength = effMod.effectiveTeamStrength;
-var clamp = effMod.clamp;
+
+var PERIOD_END = { first_half: 45, second_half: 90, extra_time_1: 105, extra_time_2: 120 };
+var OTHER = { home: "away", away: "home" };
+var LIVE_PHASES = ["first_half", "second_half", "extra_time_1", "extra_time_2"];
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
@@ -33,1167 +45,1013 @@ function mulberry32(seed) {
 
 function hashSeed(str) {
   var h = 2166136261;
-  for (var i = 0; i < String(str).length; i++) {
-    h ^= String(str).charCodeAt(i);
+  var s = String(str);
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
   return h >>> 0;
 }
 
-function emptyStats() {
-  return {
-    possession: 50,
-    shots: 0,
-    shots_on_target: 0,
-    saves: 0,
-    misses: 0,
-    blocks: 0,
-    corners: 0,
-    fouls: 0,
-    yellow_cards: 0,
-    red_cards: 0,
-    penalties_awarded: 0,
-    penalties_scored: 0,
-    penalties_saved: 0,
-    penalties_missed: 0,
-    goals: 0,
-  };
+/** Resumable RNG: the counter is part of the persisted state. */
+function rnd(st) {
+  st.rc = (st.rc || 0) + 1;
+  return mulberry32((st.seed + Math.imul(st.rc, 9973)) >>> 0)();
 }
 
-function effectiveStrength(team, players, coachingStance, overclock) {
-  return effectiveTeamStrength(players, {
-    grade: team.grade,
-    coachingStance: coachingStance || "balanced",
-    overclock: !!overclock,
-  });
+function pick(st, list) {
+  return list[Math.floor(rnd(st) * list.length) % list.length];
+}
+
+function emptyStats() {
+  return { sh: 0, sot: 0, sv: 0, co: 0, fo: 0, yc: 0, rc: 0, pen: 0 };
+}
+
+/** Wall-clock timings (ms). `scale` > 1 speeds everything up (tests only). */
+function buildTiming(minuteMs, scale) {
+  var k = scale && scale > 0 ? scale : 1;
+  var t = { minuteMs: Math.max(50, Math.round(minuteMs / k)) };
+  var keys = [
+    "halfTimeMs",
+    "etBreakMs",
+    "etHalfTimeMs",
+    "goalPauseMs",
+    "penAwardMs",
+    "penSetupMs",
+    "penRestartMs",
+    "shootoutIntroMs",
+    "shootoutKickMs",
+    "shootoutRevealMs",
+    "endMs",
+  ];
+  for (var i = 0; i < keys.length; i++) t[keys[i]] = Math.max(20, Math.round(M[keys[i]] / k));
+  return t;
+}
+
+function teamState(t) {
+  var src = t.players || [];
+  var players = [];
+  var no = 2;
+  for (var i = 0; i < src.length; i++) {
+    var p = src[i];
+    var starter = !!p.is_starter;
+    players.push({
+      id: p.id || "",
+      name: p.name || "Player " + (i + 1),
+      role: p.role || "util",
+      attack: p.attack || 50,
+      defence: p.defence || 50,
+      energy: p.energy != null ? p.energy : 100,
+      condition: p.condition != null ? p.condition : 100,
+      e0: p.energy != null ? p.energy : 100,
+      c0: p.condition != null ? p.condition : 100,
+      intensity: p.intensity || "balanced",
+      is_starter: starter,
+      sentOff: false,
+      no: p.role === "gk" && starter ? 1 : no++,
+    });
+  }
+  return {
+    id: t.id || "",
+    name: t.name || "Team",
+    abbr: t.abbr || String(t.name || "TEA").slice(0, 3).toUpperCase(),
+    grade: t.grade || "C",
+    stance: t.stance || "balanced",
+    ai: !!t.ai,
+    oc: !!t.oc,
+    players: players,
+  };
 }
 
 /**
- * Create initial match state (not simulated past kickoff).
+ * @param o { fixtureId, seed, kickoffAt, timing, home, away }
+ *   home/away: { id, name, abbr, grade, players[], stance, ai, oc }
  */
-function createMatchState(opts) {
-  var home = opts.home;
-  var away = opts.away;
-  var pace = opts.pace || "normal";
-  var timing = getTiming(pace, opts.matchMinuteRealMs);
-  if (opts.matchMinuteRealMs != null && opts.matchMinuteRealMs > 0) {
-    timing = Object.assign({}, timing, { matchMinuteRealMs: opts.matchMinuteRealMs });
-  }
-  var seed = opts.seed != null ? opts.seed : hashSeed(home.name + ":" + away.name + ":" + Date.now());
-  var seedNum = typeof seed === "number" ? seed : hashSeed(String(seed));
-
+function createMatch(o) {
   return {
-    simVersion: 1,
-    seed: seedNum,
-    rngCalls: 0,
-    pace: pace,
-    phase: "scheduled",
-    simMinute: 0, // minutes fully simulated
-    clockMs: 0, // match-time offset for event offsets
-    scoreHome: 0,
-    scoreAway: 0,
-    shootoutHome: 0,
-    shootoutAway: 0,
-    shootoutTakenHome: 0,
-    shootoutTakenAway: 0,
-    shootoutSide: "home",
-    shootoutKicks: [], // authoritative per-kick history
-    yellows: {},
-    sentOff: {},
-    stats: { home: emptyStats(), away: emptyStats() },
-    homeCoaching: opts.homeCoaching || "balanced",
-    awayCoaching: opts.awayCoaching || "balanced",
-    homePlayers: home.players || [],
-    awayPlayers: away.players || [],
-    homeName: home.name,
-    awayName: away.name,
-    homeGrade: home.grade,
-    awayGrade: away.grade,
-    homeId: home.id || null,
-    awayId: away.id || null,
-    homeOverclock: !!opts.homeOverclock,
-    awayOverclock: !!opts.awayOverclock,
-    homeSubsUsed: 0,
-    awaySubsUsed: 0,
+    v: 2,
+    fx: o.fixtureId || "",
+    seed: o.seed >>> 0 || 1,
+    rc: 0,
     seq: 0,
-    events: [],
-    finalised: false,
-    wentExtraTime: false,
-    wentShootout: false,
-    winnerSide: null,
-    kickoffDone: false,
-    halfTimeDone: false,
-    secondHalfDone: false,
-    fullTimeDone: false,
-    etStarted: false,
-    etHalfDone: false,
-    etEndDone: false,
-    shootoutStarted: false,
-    segmentIndex: 0,
-    timing: timing,
+    timing: o.timing || buildTiming(15000, 1),
+    teams: { home: teamState(o.home), away: teamState(o.away) },
+    phase: "pre",
+    minute: 0,
+    nextAt: o.kickoffAt,
+    score: [0, 0],
+    so: null,
+    stats: { home: emptyStats(), away: emptyStats() },
+    possMin: [0, 0],
+    ball: [50, 32],
+    counter: null,
+    pending: {},
+    danger: false,
+    winner: null,
+    by: null,
+    finishedAt: null,
   };
 }
 
-function nextRng(state) {
-  state.rngCalls = (state.rngCalls || 0) + 1;
-  var rng = mulberry32((state.seed + state.rngCalls * 9973) >>> 0);
-  return rng();
+// ---------------------------------------------------------------- strength
+
+function active(st, side) {
+  return st.teams[side].players.filter(function (p) {
+    return p.is_starter && !p.sentOff;
+  });
 }
 
-function pickPlayer(state, side) {
-  var list = side === "home" ? state.homePlayers : state.awayPlayers;
-  list = (list || []).filter(function (p) {
-    return p.is_starter !== false && p.role !== "gk" && !state.sentOff[side + ":" + p.name];
+function strength(st, side) {
+  var t = st.teams[side];
+  var list = active(st, side);
+  var eff = effectiveTeamStrength(list, {
+    grade: t.grade,
+    coachingStance: t.stance,
+    overclock: t.oc,
   });
-  if (!list.length) {
-    list = (side === "home" ? state.homePlayers : state.awayPlayers) || [];
-  }
-  if (!list.length) return { name: "Unknown", role: "util", attack: 50, defence: 50 };
+  var numbers = Math.pow(Math.max(list.length, 1) / 5, 0.8);
+  return { atk: eff.attack * numbers, def: eff.defence * numbers };
+}
+
+/** Attacking edge of `side` (about 0 for evenly matched teams). */
+function edge(st, side) {
+  return strength(st, side).atk - strength(st, OTHER[side]).def + M.edgeOffset;
+}
+
+function keeper(st, side) {
+  var list = active(st, side);
+  for (var i = 0; i < list.length; i++) if (list[i].role === "gk") return list[i];
+  return list[list.length - 1] || st.teams[side].players[0];
+}
+
+function weightedPick(st, list, weightFn) {
   var total = 0;
-  for (var i = 0; i < list.length; i++) total += (list[i].attack || 50) + 10;
-  var r = nextRng(state) * total;
+  for (var i = 0; i < list.length; i++) total += weightFn(list[i]);
+  var r = rnd(st) * total;
   for (var j = 0; j < list.length; j++) {
-    r -= (list[j].attack || 50) + 10;
+    r -= weightFn(list[j]);
     if (r <= 0) return list[j];
   }
-  return list[0];
+  return list[list.length - 1];
 }
 
-function gkName(state, side) {
-  var list = side === "home" ? state.homePlayers : state.awayPlayers;
-  for (var i = 0; i < (list || []).length; i++) {
-    if (list[i].role === "gk") return list[i].name;
-  }
-  return "Keeper";
+function outfield(st, side, exclude) {
+  var list = active(st, side).filter(function (p) {
+    return p.role !== "gk" && (!exclude || p.name !== exclude.name);
+  });
+  return list.length ? list : active(st, side);
 }
 
-function teamName(state, side) {
-  return side === "home" ? state.homeName : state.awayName;
+function attacker(st, side, exclude) {
+  return weightedPick(st, outfield(st, side, exclude), function (p) {
+    return (p.attack || 50) + 10;
+  });
 }
 
-function pushEvent(state, ev) {
-  state.seq += 1;
-  var e = {
-    seq: state.seq,
-    minute: ev.minute != null ? ev.minute : state.simMinute,
-    phase: ev.phase || state.phase,
-    offsetMs: state.clockMs + (ev.extraMs || 0),
-    type: ev.type,
-    team: ev.team || null,
-    player: ev.player || null,
-    message: ev.message,
-    scoreHome: state.scoreHome,
-    scoreAway: state.scoreAway,
-    shootoutHome: state.shootoutHome,
-    shootoutAway: state.shootoutAway,
-    chainId: ev.chainId || null,
-    chainStep: ev.chainStep != null ? ev.chainStep : null,
-    meta: ev.meta || null,
+function defender(st, side) {
+  return weightedPick(st, outfield(st, side), function (p) {
+    return (p.defence || 50) + 10;
+  });
+}
+
+/** Per-minute probabilities for an attacking side. */
+function chanceModel(st, side) {
+  var e = edge(st, side);
+  return {
+    e: e,
+    pSeq: clamp(M.seqBase * Math.exp(M.seqK * e), 0.08, 0.6),
+    pShot: clamp(M.shotBase * Math.exp(M.shotK * e), 0.2, 0.85),
+    pOn: clamp(M.onTargetBase * Math.exp(M.onTargetK * e), 0.25, 0.75),
+    pPen: clamp(M.penBase + M.penK * Math.max(0, e), 0, 0.05),
   };
-  if (ev.advanceMs) state.clockMs += ev.advanceMs;
-  state.events.push(e);
+}
+
+function saveChance(st, shooter, defSide) {
+  var gk = keeper(st, defSide);
+  return clamp(M.saveBase + ((gk.defence || 60) - (shooter.attack || 60)) * M.saveK, 0.3, 0.8);
+}
+
+function homePossession(st) {
+  var h = strength(st, "home");
+  var a = strength(st, "away");
+  var p = 0.5 + ((h.atk + h.def) / 2 - (a.atk + a.def) / 2) * M.possK;
+  if (st.counter === "home") p += 0.15;
+  if (st.counter === "away") p -= 0.15;
+  return clamp(p, 0.25, 0.75);
+}
+
+/** Expected goals per match minute for each side — the odds model uses this. */
+function goalRates(st) {
+  var out = {};
+  var saved = st.counter;
+  st.counter = null;
+  var ph = homePossession(st);
+  st.counter = saved;
+  ["home", "away"].forEach(function (side) {
+    var c = chanceModel(st, side);
+    var save = saveChance(st, { attack: 72 }, OTHER[side]);
+    var poss = side === "home" ? ph : 1 - ph;
+    out[side] =
+      poss *
+      c.pSeq *
+      ((1 - c.pPen) * c.pShot * (1 - M.blockRate) * c.pOn * (1 - save) + c.pPen * M.penScore);
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------- emission
+
+function statArr(s) {
+  return [s.sh, s.sot, s.sv, s.co, s.fo, s.yc, s.rc, s.pen];
+}
+
+function snapshot(st, clk) {
+  var tot = st.possMin[0] + st.possMin[1];
+  var pos = tot ? Math.round((st.possMin[0] / tot) * 100) : 50;
+  var so = null;
+  if (st.so) {
+    so = {
+      h: st.so.h,
+      a: st.so.a,
+      th: st.so.th,
+      ta: st.so.ta,
+      first: st.so.first,
+      next: st.so.done ? null : st.so.next,
+      sd: st.so.th >= 5 && st.so.ta >= 5 && !st.so.done,
+      k: st.so.kicks.map(function (k) {
+        return [k.side === "home" ? 0 : 1, k.outcome, k.taker];
+      }),
+    };
+  }
+  return {
+    sc: [st.score[0], st.score[1]],
+    so: so,
+    ph: st.phase,
+    clk: clk,
+    pos: pos,
+    x: [statArr(st.stats.home), statArr(st.stats.away)],
+    d: st.danger ? 1 : 0,
+    win: st.winner,
+    by: st.by,
+  };
+}
+
+function emit(st, out, t, type, ev) {
+  st.seq += 1;
+  var e = ev || {};
+  e.seq = st.seq;
+  // Publication order must equal sequence order.
+  e.at = Math.max(Math.round(t), st.lastAt || 0);
+  st.lastAt = e.at;
+  e.t = type;
+  if (e.min == null) e.min = st.minute;
+  e.st = snapshot(st, e.clk === undefined ? null : e.clk);
+  delete e.clk;
+  out.push(e);
   return e;
 }
 
-function maybeAutoSub(state, side, minute, phase) {
-  var used = side === "home" ? state.homeSubsUsed : state.awaySubsUsed;
-  if (used >= BALANCE.maxSubstitutions) return;
-  var players = side === "home" ? state.homePlayers : state.awayPlayers;
-  if (!players || !players.length) return;
-  var starter = null;
-  for (var i = 0; i < players.length; i++) {
-    var p = players[i];
-    if (!p.is_starter || p.sentOff) continue;
-    if (
-      (p.energy != null && p.energy <= BALANCE.autoSubEnergy) ||
-      (p.condition != null && p.condition <= BALANCE.autoSubCondition)
-    ) {
-      starter = p;
-      break;
+function abbr(st, side) {
+  return st.teams[side].abbr;
+}
+
+function tname(st, side) {
+  return st.teams[side].name;
+}
+
+function scoreline(st) {
+  return abbr(st, "home") + " " + st.score[0] + "–" + st.score[1] + " " + abbr(st, "away");
+}
+
+function vs(st) {
+  return abbr(st, "home") + " v " + abbr(st, "away");
+}
+
+/** Pitch is 100 x 64. Home attacks towards x = 100, away towards x = 0. */
+function px(side, x) {
+  return side === "home" ? x : 100 - x;
+}
+
+function pos(side, x, y) {
+  return [Math.round(px(side, x)), Math.round(y)];
+}
+
+// ---------------------------------------------------------------- minute
+
+function applyStance(st, out, t, s, side, stance, by) {
+  var team = st.teams[side];
+  if (team.stance === stance) return;
+  team.stance = stance;
+  emit(st, out, t, "coaching", {
+    side: side,
+    stance: stance,
+    by: by,
+    min: Math.floor(s / 60) + 1, // the minute it takes effect
+    text:
+      stance === "attack"
+        ? tname(st, side) + " push forward — Attack"
+        : stance === "defend"
+          ? tname(st, side) + " drop deeper — Defend"
+          : tname(st, side) + " settle back to Balanced",
+    clk: { s: s, run: 1 },
+  });
+}
+
+function aiStance(st, side) {
+  var mine = st.score[side === "home" ? 0 : 1];
+  var theirs = st.score[side === "home" ? 1 : 0];
+  var m = st.minute + 1; // called before the minute starts
+  if (m >= 70 && mine < theirs) return "attack";
+  if (m >= 100 && mine === theirs) return "attack";
+  if (m >= 78 && mine === theirs + 1) return "defend";
+  return "balanced";
+}
+
+function wear(st) {
+  ["home", "away"].forEach(function (side) {
+    var list = active(st, side);
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      var im = BALANCE.intensity[p.intensity] || BALANCE.intensity.balanced;
+      p.energy = clamp(p.energy - BALANCE.energyDrainPerMinute * (im.energyUse || 1), 0, 100);
+      p.condition = clamp(p.condition - BALANCE.conditionWearPerMinute * (im.condition || 1), 0, 100);
     }
-  }
-  if (!starter) return;
-  var sub = null;
-  for (var j = 0; j < players.length; j++) {
-    if (!players[j].is_starter && !players[j].sentOff && !players[j]._usedAsSub) {
-      sub = players[j];
-      break;
-    }
-  }
-  if (!sub) return;
-  starter.is_starter = false;
-  starter._subbedOff = true;
-  sub.is_starter = true;
-  sub._usedAsSub = true;
-  if (side === "home") state.homeSubsUsed = used + 1;
-  else state.awaySubsUsed = used + 1;
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "substitution",
-    team: side,
-    player: sub.name,
-    message:
-      teamName(state, side) +
-      " substitution: " +
-      sub.name +
-      " replaces " +
-      starter.name +
-      ".",
   });
 }
 
-function applyMinuteWear(state, side) {
-  var players = side === "home" ? state.homePlayers : state.awayPlayers;
-  if (!players || !players.length) return;
-  for (var i = 0; i < players.length; i++) {
-    var p = players[i];
-    if (!p.is_starter || p.sentOff) continue;
-    var im = BALANCE.intensity[p.intensity || "balanced"] || BALANCE.intensity.balanced;
-    var drain = BALANCE.energyDrainPerMinute * (im.energyUse || 1);
-    p.energy = clamp((p.energy != null ? p.energy : 100) - drain, 0, 100);
-    var wear = BALANCE.conditionWearPerMinute * (im.condition || 1);
-    p.condition = clamp((p.condition != null ? p.condition : 100) - wear, 0, 100);
+/** Minute context: absolute time and clock for a fraction of the minute. */
+function Ctx(st) {
+  this.t0 = st.nextAt;
+  this.m = st.minute + 1;
+  this.s0 = (this.m - 1) * 60;
+  this.dur = st.timing.minuteMs;
+  this.pause = 0;
+}
+Ctx.prototype.at = function (f) {
+  return this.t0 + Math.round(f * this.dur) + this.pause;
+};
+Ctx.prototype.s = function (f) {
+  return this.s0 + Math.min(59, Math.floor(f * 60));
+};
+Ctx.prototype.clk = function (f) {
+  return { s: this.s(f), run: 1 };
+};
+
+function playMinute(st, out) {
+  var ctx = new Ctx(st);
+  ["home", "away"].forEach(function (side) {
+    var team = st.teams[side];
+    if (team.ai) applyStance(st, out, ctx.t0, ctx.s0, side, aiStance(st, side), "ai");
+    else if (st.pending[side]) applyStance(st, out, ctx.t0, ctx.s0, side, st.pending[side], "manager");
+    delete st.pending[side];
+  });
+  st.minute = ctx.m;
+
+  wear(st);
+  var side = rnd(st) < homePossession(st) ? "home" : "away";
+  st.counter = null;
+  st.possMin[side === "home" ? 0 : 1] += 1;
+
+  var cm = BALANCE.coaching;
+  var foulMul = ((cm[st.teams.home.stance] || cm.balanced).foul + (cm[st.teams.away.stance] || cm.balanced).foul) / 2;
+  if (rnd(st) < M.foulRate * foulMul) foulEvent(st, out, ctx, OTHER[side]);
+
+  var c = chanceModel(st, side);
+  if (rnd(st) < c.pSeq) {
+    attack(st, out, ctx, side, c);
+  } else if (rnd(st) < 0.35) {
+    var p = attacker(st, side);
+    var from = st.ball;
+    st.ball = pos(side, 30 + rnd(st) * 25, 12 + rnd(st) * 40);
+    emit(st, out, ctx.at(0.5), "possession", {
+      side: side,
+      p: p.name,
+      from: from,
+      ball: st.ball,
+      text: pick(st, [
+        tname(st, side) + " keep the ball in midfield",
+        p.name + " recycles possession for " + abbr(st, side),
+        tname(st, side) + " probe patiently",
+      ]),
+      clk: ctx.clk(0.5),
+    });
   }
+
+  st.nextAt = ctx.t0 + ctx.dur + ctx.pause;
+  if (PERIOD_END[st.phase] === ctx.m) periodEnd(st, out);
 }
 
-function atkChance(state, side) {
-  var hs = effectiveStrength(
-    { grade: state.homeGrade },
-    state.homePlayers,
-    state.homeCoaching,
-    state.homeOverclock,
-  );
-  var as_ = effectiveStrength(
-    { grade: state.awayGrade },
-    state.awayPlayers,
-    state.awayCoaching,
-    state.awayOverclock,
-  );
-  var s = side === "home" ? hs : as_;
-  var o = side === "home" ? as_ : hs;
-  var raw =
-    BALANCE.baseAttackChance +
-    (s.attack - o.defence) * 0.002 +
-    (s.base - o.base) * BALANCE.attackPerStrength;
-  var noise = (nextRng(state) - 0.5) * BALANCE.randomVariation;
-  var offCount = 0;
-  for (var k in state.sentOff) {
-    if (state.sentOff[k] && k.indexOf(side) === 0) offCount++;
+function foulEvent(st, out, ctx, side) {
+  var offender = defender(st, side);
+  var victim = attacker(st, OTHER[side]);
+  st.stats[side].fo += 1;
+  var f = 0.04;
+  emit(st, out, ctx.at(f), "foul", {
+    side: side,
+    p: offender.name,
+    p2: victim.name,
+    ball: st.ball,
+    text: "Foul by " + offender.name + " on " + victim.name,
+    clk: ctx.clk(f),
+  });
+  var r = rnd(st);
+  var card = null;
+  if (r < M.straightRed) card = "red";
+  else if (r < M.straightRed + M.yellowRate) {
+    offender.yellows = (offender.yellows || 0) + 1;
+    card = offender.yellows >= 2 ? "second_yellow" : "yellow";
   }
-  if (offCount) raw *= Math.pow(0.75, offCount);
-  return clamp(raw + noise, 0.04, 0.55);
+  if (!card) return;
+  if (card === "yellow") {
+    st.stats[side].yc += 1;
+    emit(st, out, ctx.at(f + 0.05), "yellow_card", {
+      side: side,
+      p: offender.name,
+      text: "Yellow card — " + offender.name + " (" + abbr(st, side) + ")",
+      clk: ctx.clk(f + 0.05),
+    });
+    return;
+  }
+  offender.sentOff = true;
+  st.stats[side].rc += 1;
+  emit(st, out, ctx.at(f + 0.05), "red_card", {
+    side: side,
+    p: offender.name,
+    major: 1,
+    text: (card === "red" ? "Red card! " : "Second yellow! ") + offender.name + " (" + abbr(st, side) + ") is sent off",
+    tick: vs(st) + " — Red card: " + offender.name + " (" + abbr(st, side) + "), " + ctx.m + "′.",
+    clk: ctx.clk(f + 0.05),
+  });
 }
 
-function handleFoul(state, minute, phase) {
-  var side = nextRng(state) < 0.5 ? "home" : "away";
-  var offender = pickPlayer(state, side);
-  var key = side + ":" + offender.name;
-  state.stats[side].fouls += 1;
-  var cm = coachingMod(side === "home" ? state.homeCoaching : state.awayCoaching);
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "foul",
-    team: side,
-    player: offender.name,
-    message: "Foul by " + offender.name + " of " + teamName(state, side) + ".",
-  });
-  if (nextRng(state) < BALANCE.yellowFromFoul * cm.foul) {
-    state.yellows[key] = (state.yellows[key] || 0) + 1;
-    if (state.yellows[key] >= 2 && BALANCE.secondYellowAsRed) {
-      state.sentOff[key] = true;
-      state.stats[side].red_cards += 1;
-      pushEvent(state, {
-        minute: minute,
-        phase: phase,
-        type: "red_card",
-        team: side,
-        player: offender.name,
-        message: "Second yellow! " + offender.name + " is sent off!",
-      });
-    } else {
-      state.stats[side].yellow_cards += 1;
-      pushEvent(state, {
-        minute: minute,
-        phase: phase,
-        type: "yellow_card",
-        team: side,
-        player: offender.name,
-        message: "Yellow card for " + offender.name + " of " + teamName(state, side) + ".",
-      });
-    }
-  }
-}
-
-function handlePenalty(state, side, minute, phase) {
-  var chainId = "pen-" + minute + "-" + side + "-" + state.seq;
-  var taker = pickPlayer(state, side);
-  var defSide = side === "home" ? "away" : "home";
-  var gk = gkName(state, defSide);
-  var timing = state.timing;
-  state.stats[side].penalties_awarded += 1;
-
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "penalty_awarded",
-    team: side,
-    player: taker.name,
-    message: "Penalty awarded to " + teamName(state, side) + "!",
-    chainId: chainId,
-    chainStep: 0,
-    advanceMs: timing.penaltySequenceStepMs,
-  });
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "penalty_walkup",
-    team: side,
-    player: taker.name,
-    message: taker.name + " steps up for " + teamName(state, side) + ".",
-    chainId: chainId,
-    chainStep: 1,
-    advanceMs: timing.penaltySequenceStepMs,
-  });
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "penalty_run_up",
-    team: side,
-    player: taker.name,
-    message: taker.name + " runs up…",
-    chainId: chainId,
-    chainStep: 2,
-    advanceMs: timing.penaltySequenceStepMs,
-  });
-
-  var r = nextRng(state);
+/**
+ * One coherent attacking sequence:
+ * build-up → passes → progression (through ball / dribble / cross) → outcome.
+ * The outcome is decided first so every narrated step agrees with it.
+ */
+function attack(st, out, ctx, side, c) {
+  var def = OTHER[side];
   var outcome;
-  if (r < BALANCE.penaltyScoreRate) outcome = "scored";
-  else if (r < BALANCE.penaltyScoreRate + BALANCE.penaltySaveRate) outcome = "saved";
-  else outcome = "missed";
+  if (rnd(st) < c.pPen) outcome = "penalty";
+  else if (rnd(st) < c.pShot) {
+    if (rnd(st) < M.blockRate) outcome = "block";
+    else if (rnd(st) < c.pOn) outcome = "on_target";
+    else outcome = rnd(st) < M.woodworkRate ? "woodwork" : "miss";
+  } else outcome = rnd(st) < 0.55 ? "tackle" : "interception";
 
-  if (outcome === "scored") {
-    if (side === "home") state.scoreHome += 1;
-    else state.scoreAway += 1;
-    state.stats[side].goals += 1;
-    state.stats[side].penalties_scored += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "penalty_scored",
-      team: side,
-      player: taker.name,
-      message: taker.name + " scores the penalty for " + teamName(state, side) + "!",
-      chainId: chainId,
-      chainStep: 3,
-      advanceMs: timing.penaltySequenceStepMs,
+  var chain = st.seq + 1;
+  var f = 0.12 + rnd(st) * 0.08;
+  var STEP = 0.11;
+  var passer = attacker(st, side);
+  var x = st.counter === side ? 48 : 20 + rnd(st) * 18;
+  var y = 12 + rnd(st) * 40;
+  var ball = pos(side, x, y);
+  emit(st, out, ctx.at(f), "build_up", {
+    side: side,
+    chain: chain,
+    p: passer.name,
+    from: st.ball,
+    ball: ball,
+    text:
+      st.counter === side
+        ? tname(st, side) + " break quickly through " + passer.name
+        : pick(st, [tname(st, side) + " build from the back", passer.name + " collects for " + abbr(st, side), tname(st, side) + " work it forward"]),
+    clk: ctx.clk(f),
+  });
+
+  var last = passer;
+  var passes = 1 + Math.floor(rnd(st) * 2);
+  for (var i = 0; i < passes; i++) {
+    f += STEP;
+    var back = i > 0 && rnd(st) < 0.4 && passer.name !== last.name;
+    var recv = back ? passer : attacker(st, side, last);
+    x = Math.min(x + 8 + rnd(st) * 9, 68);
+    y = clamp(y + (rnd(st) - 0.5) * 28, 6, 58);
+    var from = ball;
+    ball = pos(side, x, y);
+    emit(st, out, ctx.at(f), "pass", {
+      side: side,
+      chain: chain,
+      p: last.name,
+      p2: recv.name,
+      from: from,
+      ball: ball,
+      text: back
+        ? recv.name + " gets the return pass from " + last.name
+        : pick(st, [last.name + " finds " + recv.name, last.name + " slides it to " + recv.name, last.name + " plays it into " + recv.name]),
+      clk: ctx.clk(f),
     });
-    if (minute !== 45 && minute !== 90 && minute !== 105 && minute !== 120) {
-      pushEvent(state, {
-        minute: minute,
-        phase: phase,
-        type: "kickoff_restart",
-        team: defSide,
-        message: teamName(state, defSide) + " restart from kickoff.",
-        chainId: chainId,
-        chainStep: 4,
-      });
-    }
-  } else if (outcome === "saved") {
-    state.stats[side].penalties_saved += 1;
-    state.stats[defSide].saves += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "penalty_saved",
-      team: side,
-      player: taker.name,
-      message: gk + " saves " + taker.name + "'s penalty!",
-      chainId: chainId,
-      chainStep: 3,
+    last = recv;
+  }
+
+  if (outcome === "tackle" || outcome === "interception") {
+    f += STEP;
+    var d = defender(st, def);
+    var from2 = ball;
+    ball = pos(side, Math.min(x + 6 + rnd(st) * 10, 74), clamp(y + (rnd(st) - 0.5) * 16, 6, 58));
+    emit(st, out, ctx.at(f), outcome, {
+      side: def,
+      chain: chain,
+      p: d.name,
+      p2: last.name,
+      from: from2,
+      ball: ball,
+      text:
+        outcome === "tackle"
+          ? pick(st, [d.name + " slides in and wins it for " + abbr(st, def), d.name + " stands up " + last.name + " and takes the ball"])
+          : pick(st, [d.name + " reads it and intercepts", d.name + " steps in to cut out the pass"]),
+      clk: ctx.clk(f),
     });
+    st.ball = ball;
+    st.counter = def;
+    return;
+  }
+
+  // Progression into the final third — markets suspend until the outcome is public.
+  f += STEP;
+  var kind = outcome === "penalty" ? pick(st, ["dribble", "through_ball"]) : pick(st, ["through_ball", "dribble", "cross", "through_ball"]);
+  var runner = kind === "dribble" ? last : attacker(st, side, last);
+  var from3 = ball;
+  x = outcome === "penalty" ? 86 + rnd(st) * 4 : 74 + rnd(st) * 10;
+  y = kind === "cross" ? (y < 32 ? 5 + rnd(st) * 6 : 53 + rnd(st) * 6) : clamp(20 + rnd(st) * 24, 14, 50);
+  ball = pos(side, x, y);
+  st.danger = true;
+  emit(st, out, ctx.at(f), kind, {
+    side: side,
+    chain: chain,
+    p: kind === "dribble" ? runner.name : last.name,
+    p2: runner.name,
+    from: from3,
+    ball: ball,
+    text:
+      kind === "through_ball"
+        ? pick(st, [last.name + " threads a through ball for " + runner.name, "Defence split — " + last.name + " releases " + runner.name])
+        : kind === "dribble"
+          ? pick(st, [runner.name + " drives at the " + abbr(st, def) + " defence", runner.name + " skips past a challenge"])
+          : last.name + " goes wide to " + runner.name + ", who crosses",
+    clk: ctx.clk(f),
+  });
+
+  if (outcome === "penalty") return penalty(st, out, ctx, side, runner, f + STEP, chain);
+
+  var shooter = kind === "cross" ? attacker(st, side, runner) : runner;
+  var shotFrom = kind === "cross" ? pos(side, 84 + rnd(st) * 6, 24 + rnd(st) * 16) : ball;
+  if (outcome === "on_target") outcome = rnd(st) < saveChance(st, shooter, def) ? "save" : "goal";
+
+  f += STEP;
+  st.stats[side].sh += 1;
+  if (outcome === "save" || outcome === "goal") st.stats[side].sot += 1;
+  var gy = 28.5 + rnd(st) * 7; // goal mouth spans y 28..36
+  emit(st, out, ctx.at(f), "shot", {
+    side: side,
+    chain: chain,
+    p: shooter.name,
+    from: kind === "cross" ? ball : null,
+    ball: shotFrom,
+    header: kind === "cross" ? 1 : 0,
+    text: kind === "cross" ? shooter.name + " rises to meet it!" : pick(st, [shooter.name + " shoots!", shooter.name + " lets fly!", shooter.name + " goes for goal"]),
+    clk: ctx.clk(f),
+  });
+
+  f += 0.08;
+  var gk = keeper(st, def);
+  if (outcome === "goal") {
+    goal(st, out, ctx, f, side, shooter, gk, chain, [px(side, 100), gy], null);
+    return;
+  }
+  var res = { chain: chain, from: shotFrom, clk: ctx.clk(f) };
+  if (outcome === "save") {
+    st.stats[def].sv += 1;
+    res.side = def;
+    res.p = gk.name;
+    res.p2 = shooter.name;
+    res.target = [px(side, 100), gy];
+    res.ball = [px(side, 96), Math.round(gy)];
+    res.text = pick(st, [gk.name + " saves from " + shooter.name, "Brilliant stop by " + gk.name + "!", gk.name + " gets down to deny " + shooter.name]);
+    st.counter = rnd(st) < 0.3 ? def : null;
+  } else if (outcome === "block") {
+    var blocker = defender(st, def);
+    res.side = def;
+    res.p = blocker.name;
+    res.p2 = shooter.name;
+    res.ball = pos(side, Math.min(px(side, shotFrom[0]) + 5, 93), shotFrom[1]);
+    res.text = blocker.name + " blocks " + shooter.name + "'s shot";
+  } else if (outcome === "woodwork") {
+    var bar = rnd(st) < 0.35;
+    res.side = side;
+    res.p = shooter.name;
+    res.post = bar ? "bar" : gy < 32 ? "left" : "right";
+    res.target = [px(side, 100), bar ? 32 : gy < 32 ? 28 : 36];
+    res.ball = pos(side, 92, bar ? 32 : gy < 32 ? 24 : 40);
+    res.text = bar ? "Off the crossbar! " + shooter.name + " so close" : shooter.name + " hits the post!";
   } else {
-    state.stats[side].penalties_missed += 1;
-    state.stats[side].misses += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "penalty_missed",
-      team: side,
-      player: taker.name,
-      message: taker.name + " blazes the penalty over!",
-      chainId: chainId,
-      chainStep: 3,
+    // Wide or over: the commentary and the highlight use the same choice.
+    var over = rnd(st) < 0.4;
+    var low = rnd(st) < 0.5;
+    res.side = side;
+    res.p = shooter.name;
+    res.high = over ? 1 : 0;
+    res.target = [px(side, 100), over ? 29 + rnd(st) * 6 : low ? 22 + rnd(st) * 4 : 38 + rnd(st) * 4];
+    res.ball = res.target;
+    res.text = over
+      ? pick(st, [shooter.name + " fires over the bar", shooter.name + " can't keep it down"])
+      : pick(st, [shooter.name + " drags it wide", shooter.name + " pulls it wide of the post"]);
+  }
+  st.danger = false; // the outcome is public with this event, so markets reopen
+  emit(st, out, ctx.at(f), outcome, res);
+  st.ball = res.ball;
+  if (outcome === "block" && rnd(st) < 0.4) {
+    st.stats[side].co += 1;
+    st.ball = pos(side, 100, rnd(st) < 0.5 ? 0 : 64);
+    emit(st, out, ctx.at(f + 0.07), "corner", {
+      side: side,
+      chain: chain,
+      ball: st.ball,
+      text: "Corner to " + tname(st, side),
+      clk: ctx.clk(f + 0.07),
     });
   }
 }
 
-function handleAttack(state, side, minute, phase) {
-  var chainId = "atk-" + minute + "-" + side + "-" + state.seq;
-  var attacker = pickPlayer(state, side);
-  var defSide = side === "home" ? "away" : "home";
-  var hs = effectiveStrength(
-    { grade: state.homeGrade },
-    state.homePlayers,
-    state.homeCoaching,
-    state.homeOverclock,
+/** Goal at fraction f of the minute. The clock freezes during the celebration. */
+function goal(st, out, ctx, f, side, scorer, gk, chain, target, pen) {
+  var T = st.timing;
+  if (side === "home") st.score[0] += 1;
+  else st.score[1] += 1;
+  var s = ctx.s(f);
+  var t = ctx.at(f);
+  st.danger = true;
+  emit(st, out, t, pen ? "penalty_goal" : "goal", {
+    side: side,
+    chain: chain,
+    p: scorer.name,
+    p2: gk.name,
+    target: target,
+    ball: target,
+    pen: pen,
+    major: 1,
+    text: (pen ? "PENALTY SCORED! " : "GOAL! ") + scorer.name + " scores for " + tname(st, side),
+    tick: scoreline(st) + " — " + scorer.name + (pen ? " scores the penalty, " : " scores, ") + ctx.m + "′.",
+    clk: { s: s, run: 0 },
+  });
+  emit(st, out, t + Math.round(T.goalPauseMs * 0.35), "celebration", {
+    side: side,
+    chain: chain,
+    p: scorer.name,
+    text: pick(st, [scorer.name + " wheels away to celebrate", tname(st, side) + " mob " + scorer.name, scorer.name + " salutes the travelling fans"]),
+    clk: { s: s, run: 0 },
+  });
+  ctx.pause += T.goalPauseMs;
+  st.danger = false;
+  st.ball = [50, 32];
+  st.counter = null;
+  emit(st, out, t + T.goalPauseMs, "restart", {
+    side: OTHER[side],
+    ball: [50, 32],
+    text: tname(st, OTHER[side]) + " restart from the centre",
+    clk: { s: s, run: 1 },
+  });
+}
+
+/** Penalty kick: outcome plus a visual plan (column -1..1, height 0..2, keeper dive). */
+function penaltyShot(st, taker, gk, scoreRate) {
+  var saveRate = clamp(M.penSave + ((gk.defence || 70) - (taker.attack || 70)) * 0.002, 0.08, 0.3);
+  var r = rnd(st);
+  var outcome = r < scoreRate ? "goal" : r < scoreRate + saveRate ? "save" : rnd(st) < 0.35 ? "woodwork" : "miss";
+  var col = pick(st, [-1, -1, 0, 1, 1]);
+  var height = rnd(st) < 0.4 ? 1 : 0;
+  var dive = pick(st, [-1, 0, 1]);
+  var post = null;
+  if (outcome === "save") dive = col;
+  if (outcome === "goal" && dive === col) {
+    if (col === 0) dive = pick(st, [-1, 1]);
+    else height = 1; // right way, but beaten by pace and height
+  }
+  if (outcome === "miss") {
+    if (rnd(st) < 0.5) height = 2;
+    else col = col === 0 ? pick(st, [-2, 2]) : col * 2;
+  }
+  if (outcome === "woodwork") {
+    if (rnd(st) < 0.35) {
+      post = "bar";
+      height = 2;
+      col = col || pick(st, [-1, 1]);
+    } else {
+      col = col || pick(st, [-1, 1]);
+      post = col < 0 ? "left" : "right";
+    }
+  }
+  return { outcome: outcome, col: col, height: height, dive: dive, post: post, run: pick(st, [0, 1, 2]) };
+}
+
+function penalty(st, out, ctx, side, fouled, f, chain) {
+  var T = st.timing;
+  var def = OTHER[side];
+  var offender = defender(st, def);
+  var gk = keeper(st, def);
+  var taker = outfield(st, side)
+    .slice()
+    .sort(function (a, b) {
+      return (b.attack || 0) - (a.attack || 0);
+    })[0];
+  st.stats[side].pen += 1;
+  st.stats[def].fo += 1;
+  var s = ctx.s(f);
+  var spot = [px(side, 89), 32];
+  st.danger = true;
+  var award = emit(st, out, ctx.at(f), "penalty_awarded", {
+    side: side,
+    chain: chain,
+    p: fouled.name,
+    p2: offender.name,
+    ball: spot,
+    major: 1,
+    text: "PENALTY to " + tname(st, side) + "! " + fouled.name + " is brought down by " + offender.name,
+    tick: vs(st) + " — Penalty awarded to " + tname(st, side) + ".",
+    clk: { s: s, run: 0 },
+  });
+  var shot = penaltyShot(st, taker, gk, M.penScore);
+  var tSetup = award.at + T.penAwardMs;
+  emit(st, out, tSetup, "penalty_setup", {
+    side: side,
+    chain: chain,
+    p: taker.name,
+    p2: gk.name,
+    ball: spot,
+    text: taker.name + " places the ball. " + gk.name + " waits on the line.",
+    clk: { s: s, run: 0 },
+  });
+  var tKick = tSetup + T.penSetupMs;
+  var plan = { col: shot.col, height: shot.height, dive: shot.dive, post: shot.post, run: shot.run, outcome: shot.outcome };
+  st.stats[side].sh += 1;
+  if (shot.outcome === "goal" || shot.outcome === "save") st.stats[side].sot += 1;
+  if (shot.outcome === "goal") {
+    // Re-anchor the minute so the goal lands at the kick time.
+    ctx.pause += tKick - ctx.at(f);
+    goal(st, out, ctx, f, side, taker, gk, chain, [px(side, 100), 32 + shot.col * 2.5], plan);
+    return;
+  }
+  if (shot.outcome === "save") st.stats[def].sv += 1;
+  var what = shot.outcome === "save" ? "saved" : shot.outcome === "woodwork" ? "woodwork" : "missed";
+  var woodText = shot.post === "bar" ? "the bar" : "the post";
+  var resEv = emit(st, out, tKick, "penalty_" + what, {
+    side: side,
+    chain: chain,
+    p: taker.name,
+    p2: gk.name,
+    pen: plan,
+    ball: spot,
+    major: 1,
+    text:
+      shot.outcome === "save"
+        ? gk.name + " saves " + taker.name + "'s penalty!"
+        : shot.outcome === "woodwork"
+          ? taker.name + " hits " + woodText + " from the spot!"
+          : taker.name + " puts the penalty " + (shot.height === 2 ? "over" : "wide") + "!",
+    tick:
+      vs(st) +
+      " — " +
+      (shot.outcome === "save" ? "Penalty saved by " + gk.name + "." : shot.outcome === "woodwork" ? taker.name + " hits " + woodText + " from the spot." : taker.name + " misses the penalty."),
+    clk: { s: s, run: 0 },
+  });
+  st.ball = [px(side, 95), 32];
+  st.counter = def;
+  st.danger = false;
+  emit(st, out, resEv.at + T.penRestartMs, "restart", {
+    side: def,
+    ball: st.ball,
+    text: tname(st, def) + " clear their lines",
+    clk: { s: s, run: 1 },
+  });
+  ctx.pause += resEv.at + T.penRestartMs - ctx.at(f);
+}
+
+// ---------------------------------------------------------------- periods
+
+function periodEnd(st, out) {
+  var T = st.timing;
+  var t = st.nextAt;
+  var m = st.minute;
+  st.danger = false;
+  if (m === 45) {
+    st.phase = "half_time";
+    emit(st, out, t, "half_time", { text: "Half-time: " + scoreline(st), clk: { s: 2700, run: 0 } });
+    st.nextAt = t + T.halfTimeMs;
+  } else if (m === 90) {
+    if (st.score[0] !== st.score[1]) return finish(st, out, t, "normal");
+    st.phase = "et_break";
+    emit(st, out, t, "end_of_normal_time", {
+      major: 1,
+      text: "90 minutes up: " + scoreline(st) + " — extra time to come",
+      tick: scoreline(st) + " after 90 minutes — extra time.",
+      clk: { s: 5400, run: 0 },
+    });
+    st.nextAt = t + T.etBreakMs;
+  } else if (m === 105) {
+    st.phase = "et_half_time";
+    emit(st, out, t, "et_half_time", { text: "Extra-time half-time: " + scoreline(st), clk: { s: 6300, run: 0 } });
+    st.nextAt = t + T.etHalfTimeMs;
+  } else if (m === 120) {
+    if (st.score[0] !== st.score[1]) return finish(st, out, t, "aet");
+    st.phase = "shootout";
+    var first = rnd(st) < 0.5 ? "home" : "away";
+    st.so = { h: 0, a: 0, th: 0, ta: 0, first: first, next: first, kicks: [], done: false };
+    emit(st, out, t, "shootout_start", {
+      side: first,
+      major: 1,
+      text: "Penalty shootout! " + tname(st, first) + " kick first",
+      tick: vs(st) + " — Penalty shootout. " + abbr(st, first) + " kick first.",
+    });
+    st.nextAt = t + T.shootoutIntroMs;
+  }
+}
+
+function resume(st, out, type, phase, s, text) {
+  st.phase = phase;
+  emit(st, out, st.nextAt, type, { text: text, clk: { s: s, run: 1 } });
+}
+
+function finish(st, out, t, by) {
+  st.winner = by === "pens" ? (st.so.h > st.so.a ? "home" : "away") : st.score[0] > st.score[1] ? "home" : "away";
+  st.by = by;
+  st.phase = "finished";
+  st.danger = false;
+  var w = st.winner;
+  var soTxt = st.so ? " (" + abbr(st, w) + " win " + Math.max(st.so.h, st.so.a) + "–" + Math.min(st.so.h, st.so.a) + " on penalties)" : "";
+  var e = emit(st, out, t, "match_end", {
+    side: w,
+    major: 1,
+    text: "Full-time: " + scoreline(st) + (by === "aet" ? " after extra time" : "") + soTxt + ". " + tname(st, w) + " go through.",
+    tick: (by === "aet" ? "AET: " : "FT: ") + scoreline(st) + soTxt + ". " + abbr(st, w) + " go through.",
+    clk: { s: st.minute * 60, run: 0 },
+  });
+  st.finishedAt = e.at;
+  st.nextAt = Infinity;
+}
+
+// ---------------------------------------------------------------- shootout
+
+function shootoutOrder(st, side) {
+  var list = active(st, side);
+  var field = list
+    .filter(function (p) {
+      return p.role !== "gk";
+    })
+    .sort(function (a, b) {
+      return (b.attack || 0) - (a.attack || 0);
+    });
+  return field.concat(
+    list.filter(function (p) {
+      return p.role === "gk";
+    }),
   );
-  var as_ = effectiveStrength(
-    { grade: state.awayGrade },
-    state.awayPlayers,
-    state.awayCoaching,
-    state.awayOverclock,
-  );
-  var s = side === "home" ? hs : as_;
-  var o = side === "home" ? as_ : hs;
-  var step = 0;
-
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "midfield_play",
-    team: side,
-    player: attacker.name,
-    message: attacker.name + " drives forward for " + teamName(state, side) + ".",
-    chainId: chainId,
-    chainStep: step++,
-  });
-
-  var pressure = s.attack - o.defence;
-  var penChance =
-    pressure > 15 ? BALANCE.highPressurePenaltyChance : BALANCE.basePenaltyChance;
-  if (nextRng(state) < penChance) {
-    handlePenalty(state, side, minute, phase);
-    return;
-  }
-
-  pushEvent(state, {
-    minute: minute,
-    phase: phase,
-    type: "build_up",
-    team: side,
-    player: attacker.name,
-    message: teamName(state, side) + " surge into the final third.",
-    chainId: chainId,
-    chainStep: step++,
-  });
-
-  var blockChance =
-    BALANCE.defenceBlockBase + (o.defence - s.attack) * BALANCE.defencePerStrength;
-  if (nextRng(state) < clamp(blockChance, 0.1, 0.55)) {
-    state.stats[defSide].blocks += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "block",
-      team: defSide,
-      message: teamName(state, defSide) + " block the shot.",
-      chainId: chainId,
-      chainStep: step++,
-    });
-    if (nextRng(state) < 0.35) {
-      state.stats[side].corners += 1;
-      pushEvent(state, {
-        minute: minute,
-        phase: phase,
-        type: "corner",
-        team: side,
-        message: "Corner to " + teamName(state, side) + ".",
-        chainId: chainId,
-        chainStep: step++,
-      });
-    }
-    return;
-  }
-
-  state.stats[side].shots += 1;
-  if (nextRng(state) >= BALANCE.shotOnTargetRate) {
-    state.stats[side].misses += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "miss",
-      team: side,
-      player: attacker.name,
-      message: attacker.name + " fires wide!",
-      chainId: chainId,
-      chainStep: step++,
-    });
-    return;
-  }
-
-  state.stats[side].shots_on_target += 1;
-  if (nextRng(state) < BALANCE.saveRate) {
-    var gk = gkName(state, defSide);
-    state.stats[defSide].saves += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "save",
-      team: defSide,
-      player: gk,
-      message: gk + " makes a sharp save!",
-      chainId: chainId,
-      chainStep: step++,
-    });
-    return;
-  }
-
-  if (nextRng(state) < BALANCE.goalFromOnTarget) {
-    if (side === "home") state.scoreHome += 1;
-    else state.scoreAway += 1;
-    state.stats[side].goals += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "goal",
-      team: side,
-      player: attacker.name,
-      message: attacker.name + " scores for " + teamName(state, side) + "!",
-      chainId: chainId,
-      chainStep: step++,
-    });
-    if (minute !== 45 && minute !== 90 && minute !== 105 && minute !== 120) {
-      pushEvent(state, {
-        minute: minute,
-        phase: phase,
-        type: "kickoff_restart",
-        team: defSide,
-        message: teamName(state, defSide) + " kick off again.",
-        chainId: chainId,
-        chainStep: step++,
-      });
-    }
-  } else {
-    state.stats[side].misses += 1;
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "miss",
-      team: side,
-      player: attacker.name,
-      message: attacker.name + " rattles the bar!",
-      chainId: chainId,
-      chainStep: step++,
-    });
-  }
 }
 
-function simulateOneMinute(state, minute, phase) {
-  applyMinuteWear(state, "home");
-  applyMinuteWear(state, "away");
-  maybeAutoSub(state, "home", minute, phase);
-  maybeAutoSub(state, "away", minute, phase);
-
-  var foulMul =
-    coachingMod(state.homeCoaching).foul + coachingMod(state.awayCoaching).foul;
-  if (nextRng(state) < BALANCE.foulChance * (foulMul / 2)) {
-    handleFoul(state, minute, phase);
-    // extra condition on fouler is approximate via foul handler side
+/**
+ * Winner side when decided, else null. Five kicks each, ending early when one side
+ * can no longer catch up; then sudden death decided only after an equal number of kicks.
+ */
+function shootoutDecided(h, a, th, ta) {
+  if (th <= 5 && ta <= 5) {
+    if (h + (5 - th) < a) return "away";
+    if (a + (5 - ta) < h) return "home";
+    return null;
   }
-  if (nextRng(state) < atkChance(state, "home")) {
-    handleAttack(state, "home", minute, phase);
-  } else if (nextRng(state) < atkChance(state, "away")) {
-    handleAttack(state, "away", minute, phase);
-  } else if (nextRng(state) < 0.35) {
-    var side = nextRng(state) < 0.5 ? "home" : "away";
-    var p = pickPlayer(state, side);
-    pushEvent(state, {
-      minute: minute,
-      phase: phase,
-      type: "midfield_play",
-      team: side,
-      player: p.name,
-      message: teamName(state, side) + " recycle possession in midfield.",
-    });
-  }
-  state.clockMs += state.timing.matchMinuteRealMs;
-  state.simMinute = minute;
+  if (th === ta && h !== a) return h > a ? "home" : "away";
+  return null;
 }
 
-function processShootoutKick(state) {
-  if (!state.shootoutKicks) state.shootoutKicks = [];
-  var side = state.shootoutSide;
-  var taker = pickPlayer(state, side);
-  var defSide = side === "home" ? "away" : "home";
-  var gk = gkName(state, defSide);
-  var kickIndex = state.shootoutTakenHome + state.shootoutTakenAway + 1;
-  var kickNumForSide =
-    (side === "home" ? state.shootoutTakenHome : state.shootoutTakenAway) + 1;
-  var isSudden = kickNumForSide > BALANCE.shootoutStandardRounds;
-  var chainId = "so-" + kickIndex;
-  var timing = state.timing;
-
-  // must-score / match-point heuristic before kick
-  var mustScore = false;
-  var matchPoint = false;
-  if (state.shootoutTakenHome === state.shootoutTakenAway) {
-    var rem =
-      Math.max(
-        BALANCE.shootoutStandardRounds -
-          Math.max(state.shootoutTakenHome, state.shootoutTakenAway),
-        0,
-      ) - 1;
-    if (rem < 0) rem = 0;
-    // after this kick if they miss and other already leads...
-  }
-  // If other side has more remaining potential
-  var otherScore = side === "home" ? state.shootoutAway : state.shootoutHome;
-  var myScore = side === "home" ? state.shootoutHome : state.shootoutAway;
-  var otherTaken = side === "home" ? state.shootoutTakenAway : state.shootoutTakenHome;
-  var otherRem = Math.max(BALANCE.shootoutStandardRounds - otherTaken, 0);
-  if (!isSudden && otherScore + otherRem < myScore + 1) {
-    // already winning even if miss later — not must score
-  }
-  if (
-    !isSudden &&
-    myScore + Math.max(BALANCE.shootoutStandardRounds - kickNumForSide + 1, 0) <=
-      otherScore
-  ) {
-    mustScore = true;
-  }
-  if (isSudden) {
-    // sudden death: must score if other already scored this pair
-    if (
-      state.shootoutTakenHome !== state.shootoutTakenAway &&
-      myScore <= otherScore
-    ) {
-      mustScore = true;
-    }
-  }
-
-  pushEvent(state, {
-    minute: 120,
-    phase: "shootout",
-    type: "shootout_walkup",
-    team: side,
-    player: taker.name,
-    message: taker.name + " walks up for " + teamName(state, side) + ".",
-    chainId: chainId,
-    chainStep: 0,
-    advanceMs: timing.shootoutKickSpacingMs * 0.4,
-    meta: {
-      kickIndex: kickIndex,
-      kickNumber: kickNumForSide,
-      suddenDeath: isSudden,
-      mustScore: mustScore,
-    },
+function shootoutKick(st, out) {
+  var T = st.timing;
+  var so = st.so;
+  var side = so.next;
+  var def = OTHER[side];
+  var taken = side === "home" ? so.th : so.ta;
+  var order = shootoutOrder(st, side);
+  var taker = order[taken % order.length];
+  var gk = keeper(st, def);
+  var no = taken + 1;
+  var sudden = no > 5;
+  var nh = so.th + (side === "home" ? 1 : 0);
+  var na = so.ta + (side === "away" ? 1 : 0);
+  var ifMiss = shootoutDecided(so.h, so.a, nh, na);
+  var ifGoal = shootoutDecided(so.h + (side === "home" ? 1 : 0), so.a + (side === "away" ? 1 : 0), nh, na);
+  var t0 = st.nextAt;
+  st.danger = true; // shootout markets stay suspended from setup to result
+  emit(st, out, t0, "shootout_setup", {
+    side: side,
+    p: taker.name,
+    p2: gk.name,
+    kick: { no: no, sd: sudden ? 1 : 0, must: ifMiss === def ? 1 : 0, win: ifGoal === side ? 1 : 0 },
+    text:
+      taker.name +
+      " steps up for " +
+      tname(st, side) +
+      (ifGoal === side ? " — score and " + abbr(st, side) + " win it!" : ifMiss === def ? " — must score to stay alive" : sudden ? " — sudden death" : ""),
   });
-
-  var onT = nextRng(state) < BALANCE.shootoutOnTarget;
-  var saved = onT && nextRng(state) < BALANCE.shootoutSaveRate;
-  var scored = onT && !saved;
-  var outcome = scored ? "goal" : saved ? "save" : "miss";
-
-  if (side === "home") state.shootoutTakenHome += 1;
-  else state.shootoutTakenAway += 1;
-
-  if (scored) {
-    if (side === "home") state.shootoutHome += 1;
-    else state.shootoutAway += 1;
-  }
-
-  // Check if decisive after this kick
-  var finished = false;
-  if (state.shootoutTakenHome === state.shootoutTakenAway) {
-    var r = state.shootoutTakenHome;
-    var rem2 = Math.max(BALANCE.shootoutStandardRounds - r, 0);
-    if (r >= BALANCE.shootoutStandardRounds) {
-      if (state.shootoutHome !== state.shootoutAway) finished = true;
-    } else if (Math.abs(state.shootoutHome - state.shootoutAway) > rem2) {
-      finished = true;
-    }
+  var shot = penaltyShot(st, taker, gk, M.shootoutScore);
+  var outcome = shot.outcome;
+  if (side === "home") {
+    so.th += 1;
+    if (outcome === "goal") so.h += 1;
   } else {
-    // unequal: early win possible after home took more
-    var moreSide =
-      state.shootoutTakenHome > state.shootoutTakenAway ? "home" : "away";
-    var moreTaken =
-      moreSide === "home" ? state.shootoutTakenHome : state.shootoutTakenAway;
-    var lessTaken =
-      moreSide === "home" ? state.shootoutTakenAway : state.shootoutTakenHome;
-    var moreScore = moreSide === "home" ? state.shootoutHome : state.shootoutAway;
-    var lessScore = moreSide === "home" ? state.shootoutAway : state.shootoutHome;
-    var lessRem = Math.max(BALANCE.shootoutStandardRounds - lessTaken, 0);
-    if (moreTaken <= BALANCE.shootoutStandardRounds && moreScore > lessScore + lessRem) {
-      finished = true;
-    }
+    so.ta += 1;
+    if (outcome === "goal") so.a += 1;
   }
-
-  var kickRec = {
-    kickIndex: kickIndex,
-    team: side,
-    kickNumber: kickNumForSide,
-    suddenDeath: isSudden,
-    player: taker.name,
-    keeper: gk,
-    outcome: outcome,
-    mustScore: mustScore,
-    matchPoint: matchPoint,
-    decisive: finished,
-    shootoutHome: state.shootoutHome,
-    shootoutAway: state.shootoutAway,
-    takenHome: state.shootoutTakenHome,
-    takenAway: state.shootoutTakenAway,
-  };
-  state.shootoutKicks.push(kickRec);
-
-  var resultType = scored
-    ? "shootout_goal"
-    : saved
-      ? "shootout_save"
-      : "shootout_miss";
-  pushEvent(state, {
-    minute: 120,
-    phase: "shootout",
-    type: resultType,
-    team: side,
-    player: taker.name,
-    message: scored
-      ? taker.name + " scores!"
-      : saved
-        ? gk + " saves from " + taker.name + "!"
-        : taker.name + " misses!",
-    chainId: chainId,
-    chainStep: 1,
-    advanceMs: timing.shootoutKickSpacingMs * 0.6,
-    meta: kickRec,
-  });
-
-  state.shootoutSide = side === "home" ? "away" : "home";
-  return finished;
-}
-
-function finalise(state) {
-  if (state.finalised) return;
-  if (state.wentShootout) {
-    state.winnerSide =
-      state.shootoutHome > state.shootoutAway ? "home" : "away";
-  } else if (state.scoreHome !== state.scoreAway) {
-    state.winnerSide = state.scoreHome > state.scoreAway ? "home" : "away";
-  } else {
-    state.winnerSide = "home";
-  }
-  pushEvent(state, {
-    minute: state.simMinute,
-    phase: "finished",
-    type: "match_end",
-    team: state.winnerSide,
-    message:
-      teamName(state, state.winnerSide) +
-      " win! Final " +
-      state.homeName +
-      " " +
-      state.scoreHome +
+  so.kicks.push({ side: side, taker: taker.name, outcome: outcome });
+  var decided = shootoutDecided(so.h, so.a, so.th, so.ta);
+  so.next = def;
+  if (decided) so.done = true;
+  st.danger = false;
+  var woodText = shot.post === "bar" ? "the bar" : "the post";
+  var res = emit(st, out, t0 + T.shootoutRevealMs, "shootout_kick", {
+    side: side,
+    p: taker.name,
+    p2: gk.name,
+    pen: { col: shot.col, height: shot.height, dive: shot.dive, post: shot.post, run: shot.run, outcome: outcome },
+    kick: { no: no, sd: sudden ? 1 : 0, outcome: outcome, decisive: decided ? 1 : 0 },
+    major: 1,
+    text:
+      outcome === "goal"
+        ? pick(st, [taker.name + " scores!", taker.name + " buries it!", "Cool finish from " + taker.name + "!"])
+        : outcome === "save"
+          ? gk.name + " saves from " + taker.name + "!"
+          : outcome === "woodwork"
+            ? taker.name + " hits " + woodText + "!"
+            : taker.name + " misses!",
+    tick:
+      vs(st) +
+      " pens " +
+      so.h +
       "–" +
-      state.scoreAway +
-      " " +
-      state.awayName +
-      (state.wentShootout
-        ? " (" + state.shootoutHome + "–" + state.shootoutAway + " pens)"
-        : "") +
-      ".",
+      so.a +
+      " — " +
+      (outcome === "goal" ? taker.name + " scores." : outcome === "save" ? gk.name + " saves from " + taker.name + "." : taker.name + " misses."),
   });
-  state.phase = "finished";
-  state.finalised = true;
-  var hAtk = effectiveStrength(
-    { grade: state.homeGrade },
-    state.homePlayers,
-    "balanced",
-    false,
-  ).attack;
-  var aAtk = effectiveStrength(
-    { grade: state.awayGrade },
-    state.awayPlayers,
-    "balanced",
-    false,
-  ).attack;
-  var totalAtk = hAtk + aAtk || 1;
-  state.stats.home.possession = Math.round((hAtk / totalAtk) * 100);
-  state.stats.away.possession = 100 - state.stats.home.possession;
-}
-
-/**
- * When state_json is lost, flags reset but sim_minute remains high.
- * Reconstruct phase flags so full-time / ET / shootout can still complete.
- */
-function recoverMissedPhases(state, timing) {
-  if (!state || state.finalised) return;
-  var m = state.simMinute || 0;
-  if (m >= 45) state.halfTimeDone = true;
-  if (m >= 90) {
-    state.halfTimeDone = true;
-    state.secondHalfDone = true;
+  if (!decided) {
+    st.nextAt = t0 + T.shootoutKickMs;
+    return;
   }
-  if (m > 90 && !state.fullTimeDone && !state.etStarted && !state.shootoutStarted) {
-    // Past regulation without transition — force FT path next loop
-    // Leave fullTimeDone false so advanceSegment fires FT once.
-    if (m > 95) state.simMinute = 95;
-  }
-  if (m >= 105 && state.etStarted) state.etHalfDone = true;
-  if (m >= 120 && state.etStarted) {
-    // leave etEndDone false so end-of-ET fires once if needed
-  }
-  if (state.phase === "shootout") state.shootoutStarted = true;
-  if (!state.timing && timing) state.timing = timing;
-}
-
-/**
- * Advance one simulation segment. Applies current coaching for new minutes only.
- * @returns {{ newEvents: Array, finished: boolean, state: object }}
- */
-function advanceSegment(state, opts) {
-  opts = opts || {};
-  if (opts.homeCoaching) state.homeCoaching = opts.homeCoaching;
-  if (opts.awayCoaching) state.awayCoaching = opts.awayCoaching;
-
-  if (state.finalised) {
-    return { newEvents: [], finished: true, state: state };
-  }
-
-  var timing = state.timing || getTiming(state.pace || "normal");
-  state.timing = timing;
-  var segMins = timing.segmentMatchMinutes || 5;
-  var startSeq = state.seq;
-  var startMin = state.simMinute;
-
-  // Kickoff
-  if (!state.kickoffDone) {
-    state.phase = "first_half";
-    pushEvent(state, {
-      minute: 0,
-      phase: "first_half",
-      type: "kickoff",
-      team: "home",
-      message: "Kickoff! " + state.homeName + " vs " + state.awayName + ".",
-    });
-    state.kickoffDone = true;
-  }
-
-  // Coaching visibility events at segment start if stance just applied via meta
-  if (opts.coachingAnnouncement) {
-    pushEvent(state, {
-      minute: state.simMinute,
-      phase: state.phase,
-      type: "coaching_change",
-      team: opts.coachingAnnouncement.team,
-      message: opts.coachingAnnouncement.message,
-    });
-  }
-
-  var minutesDone = 0;
-  var maxMinutesThisSeg = segMins;
-
-  function phaseForMinute(m) {
-    if (m <= 45) return "first_half";
-    if (m <= 90) return "second_half";
-    if (m <= 105) return "extra_time_1";
-    if (m <= 120) return "extra_time_2";
-    return "shootout";
-  }
-
-  // Shootout mode: process limited kicks per segment
-  if (state.phase === "shootout" || state.shootoutStarted) {
-    state.phase = "shootout";
-    if (!state.shootoutStarted) {
-      pushEvent(state, {
-        minute: 120,
-        phase: "shootout",
-        type: "shootout_start",
-        message: "Penalty shootout!",
-        advanceMs: timing.shootoutIntroMs,
-      });
-      state.shootoutStarted = true;
-      state.wentShootout = true;
-    }
-    var kicks = 0;
-    while (kicks < 2 && !state.finalised) {
-      var done = processShootoutKick(state);
-      kicks++;
-      if (done) {
-        pushEvent(state, {
-          minute: 120,
-          phase: "shootout",
-          type: "shootout_end",
-          team: state.shootoutHome > state.shootoutAway ? "home" : "away",
-          message:
-            teamName(
-              state,
-              state.shootoutHome > state.shootoutAway ? "home" : "away",
-            ) +
-            " win " +
-            state.shootoutHome +
-            "–" +
-            state.shootoutAway +
-            " on penalties!",
-          advanceMs: timing.shootoutKickSpacingMs,
-        });
-        finalise(state);
-        break;
-      }
-    }
-    state.segmentIndex += 1;
-    var newEventsSo = state.events.filter(function (e) {
-      return e.seq > startSeq;
-    });
-    return { newEvents: newEventsSo, finished: state.finalised, state: state };
-  }
-
-  // Recover missed phase transitions when state_json was lost/corrupt and
-  // simMinute jumped past exact boundary minutes (45/90/105/120).
-  recoverMissedPhases(state, timing);
-
-  while (minutesDone < maxMinutesThisSeg && !state.finalised) {
-    var nextMin = state.simMinute + 1;
-
-    // Half-time transition after 45 (also if already past 45 without flag)
-    if ((nextMin === 46 || (state.simMinute >= 45 && !state.halfTimeDone)) && !state.halfTimeDone) {
-      state.phase = "half_time";
-      pushEvent(state, {
-        minute: 45,
-        phase: "half_time",
-        type: "half_time",
-        message:
-          "Half-time: " +
-          state.homeName +
-          " " +
-          state.scoreHome +
-          "–" +
-          state.scoreAway +
-          " " +
-          state.awayName +
-          ".",
-        advanceMs: timing.halfTimeBreakMs,
-      });
-      state.halfTimeDone = true;
-      pushEvent(state, {
-        minute: 45,
-        phase: "second_half",
-        type: "second_half",
-        team: "away",
-        message: "Second half underway.",
-      });
-      state.phase = "second_half";
-      if (state.simMinute < 45) {
-        // fall through to simulate; otherwise continue transitions
-      } else if (state.simMinute >= 90) {
-        // continue into full-time recovery below on next loop
-        continue;
-      } else if (state.simMinute > 45) {
-        // already in second half range — no need to re-sim past minutes
-      }
-    }
-
-    // Full time after 90 (or recovered when past 90 without fullTimeDone)
-    if ((nextMin === 91 || (state.simMinute >= 90 && !state.fullTimeDone)) && !state.fullTimeDone) {
-      state.phase = "full_time";
-      pushEvent(state, {
-        minute: 90,
-        phase: "full_time",
-        type: "full_time",
-        message:
-          "Full-time: " +
-          state.homeName +
-          " " +
-          state.scoreHome +
-          "–" +
-          state.scoreAway +
-          " " +
-          state.awayName +
-          ".",
-        advanceMs: timing.matchMinuteRealMs,
-      });
-      state.fullTimeDone = true;
-      state.secondHalfDone = true;
-      state.halfTimeDone = true;
-      if (state.simMinute < 90) state.simMinute = 90;
-      if (state.scoreHome !== state.scoreAway) {
-        finalise(state);
-        break;
-      }
-      // ET
-      state.wentExtraTime = true;
-      state.phase = "extra_time_1";
-      pushEvent(state, {
-        minute: 90,
-        phase: "extra_time_1",
-        type: "extra_time_start",
-        message: "Extra time! Still level.",
-        advanceMs: timing.matchMinuteRealMs,
-      });
-      state.etStarted = true;
-      continue;
-    }
-
-    // ET half
-    if (
-      (nextMin === 106 || (state.simMinute >= 105 && state.etStarted && !state.etHalfDone)) &&
-      state.etStarted &&
-      !state.etHalfDone
-    ) {
-      pushEvent(state, {
-        minute: 105,
-        phase: "extra_time_ht",
-        type: "extra_time_half",
-        message: "Extra-time half-time.",
-        advanceMs: timing.etHalfTimeBreakMs,
-      });
-      state.etHalfDone = true;
-      state.phase = "extra_time_2";
-      if (state.simMinute < 105) state.simMinute = 105;
-      continue;
-    }
-
-    // End of ET
-    if (
-      (nextMin === 121 || (state.simMinute >= 120 && state.etStarted && !state.etEndDone)) &&
-      state.etStarted &&
-      !state.etEndDone
-    ) {
-      pushEvent(state, {
-        minute: 120,
-        phase: "extra_time_end",
-        type: "extra_time_end",
-        message:
-          "End of extra time: " +
-          state.homeName +
-          " " +
-          state.scoreHome +
-          "–" +
-          state.scoreAway +
-          " " +
-          state.awayName +
-          ".",
-        advanceMs: timing.matchMinuteRealMs,
-      });
-      state.etEndDone = true;
-      if (state.simMinute < 120) state.simMinute = 120;
-      if (state.scoreHome !== state.scoreAway) {
-        finalise(state);
-        break;
-      }
-      // Enter shootout next segment
-      state.phase = "shootout";
-      break;
-    }
-
-    if (nextMin > 120) break;
-    if (nextMin > 90 && !state.etStarted) break;
-
-    var ph = phaseForMinute(nextMin);
-    state.phase = ph;
-    simulateOneMinute(state, nextMin, ph);
-    minutesDone++;
-  }
-
-  state.segmentIndex += 1;
-  var newEvents = state.events.filter(function (e) {
-    return e.seq > startSeq;
+  var wl = decided === "home" ? so.h + "–" + so.a : so.a + "–" + so.h;
+  var end = emit(st, out, res.at + Math.round(T.endMs * 0.6), "shootout_end", {
+    side: decided,
+    major: 1,
+    text: tname(st, decided) + " win the shootout " + wl + "!",
+    tick: abbr(st, decided) + " win the shootout " + wl + ".",
   });
-  return { newEvents: newEvents, finished: state.finalised, state: state };
+  finish(st, out, end.at + T.endMs, "pens");
 }
 
-/**
- * Reconstruct visible state from events given elapsed ms since match start.
- */
-function reconstructVisible(events, elapsedMs, opts) {
-  opts = opts || {};
-  var list = events || [];
-  var due = [];
-  var scoreHome = 0;
-  var scoreAway = 0;
-  var shootoutHome = 0;
-  var shootoutAway = 0;
-  var phase = "scheduled";
-  var minute = 0;
-  var finished = false;
-  var lastSeq = 0;
-  var elapsed = typeof elapsedMs === "number" && !isNaN(elapsedMs) ? elapsedMs : 0;
+// ---------------------------------------------------------------- driver
 
-  for (var i = 0; i < list.length; i++) {
-    var e = list[i] || {};
-    var off = e.offsetMs != null ? e.offsetMs : 0;
-    if (off > elapsed) break;
-    due.push(e);
-    lastSeq = e.seq != null ? e.seq : lastSeq;
-    if (e.minute != null) minute = e.minute;
-    if (e.phase != null && e.phase !== "") phase = String(e.phase);
-    if (e.scoreHome != null) scoreHome = e.scoreHome;
-    if (e.scoreAway != null) scoreAway = e.scoreAway;
-    if (e.shootoutHome != null) shootoutHome = e.shootoutHome;
-    if (e.shootoutAway != null) shootoutAway = e.shootoutAway;
-    if (e.type === "match_end") {
-      finished = true;
-      phase = "finished";
-    }
+function step(st, out) {
+  switch (st.phase) {
+    case "pre":
+      st.phase = "first_half";
+      emit(st, out, st.nextAt, "kickoff", {
+        side: "home",
+        ball: [50, 32],
+        text: "Kick-off! " + tname(st, "home") + " v " + tname(st, "away"),
+        clk: { s: 0, run: 1 },
+      });
+      return;
+    case "half_time":
+      return resume(st, out, "second_half", "second_half", 2700, "Second half under way");
+    case "et_break":
+      return resume(st, out, "extra_time", "extra_time_1", 5400, "Extra time under way");
+    case "et_half_time":
+      return resume(st, out, "et_second_half", "extra_time_2", 6300, "Second period of extra time");
+    case "shootout":
+      return shootoutKick(st, out);
+    default:
+      if (LIVE_PHASES.indexOf(st.phase) >= 0) return playMinute(st, out);
+      st.nextAt = Infinity;
   }
-
-  if (!due.length) {
-    phase = elapsed < 0 ? "scheduled" : "live";
-  }
-
-  var phaseStr = String(phase || "scheduled");
-  var status = "live";
-  if (finished) status = "finished";
-  else if (elapsed < 0) status = "scheduled";
-  else if (phaseStr === "half_time" || phaseStr === "extra_time_ht") status = "half_time";
-  else if (phaseStr.indexOf("extra") === 0) status = "extra_time";
-  else if (phaseStr === "shootout") status = "shootout";
-  else if (phaseStr === "scheduled") status = "scheduled";
-  else status = "live";
-
-  return {
-    events: due,
-    eventsSince: opts.sinceSeq
-      ? due.filter(function (ev) {
-          return (ev.seq || 0) > opts.sinceSeq;
-        })
-      : due,
-    scoreHome: scoreHome,
-    scoreAway: scoreAway,
-    shootoutHome: shootoutHome,
-    shootoutAway: shootoutAway,
-    phase: phaseStr,
-    minute: minute,
-    finished: finished,
-    lastSeq: lastSeq,
-    status: status,
-  };
 }
 
-/** Full offline sim for tests (loops segments until done). */
-function simulateMatch(opts) {
-  var state = createMatchState(opts);
+/** Simulate every step whose start time is <= now. Returns the new events in order. */
+function advanceTo(st, now) {
+  var out = [];
   var guard = 0;
-  while (!state.finalised && guard < 80) {
-    advanceSegment(state, {});
-    guard++;
-  }
-  return {
-    events: state.events,
-    scoreHome: state.scoreHome,
-    scoreAway: state.scoreAway,
-    shootoutHome: state.shootoutHome,
-    shootoutAway: state.shootoutAway,
-    winnerSide: state.winnerSide,
-    wentExtraTime: state.wentExtraTime,
-    wentShootout: state.wentShootout,
-    stats: state.stats,
-    durationMs: state.clockMs,
-    expectedFinishOffsetMs: state.clockMs,
-  };
+  while (st.phase !== "finished" && st.nextAt <= now && guard++ < 5000) step(st, out);
+  return out;
+}
+
+/** Queue a manager stance; it applies from the next simulated minute. */
+function queueStance(st, side, stance) {
+  st.pending[side] = stance;
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
-    createMatchState: createMatchState,
-    advanceSegment: advanceSegment,
-    reconstructVisible: reconstructVisible,
-    simulateMatch: simulateMatch,
-    effectiveStrength: effectiveStrength,
-    mulberry32: mulberry32,
+    createMatch: createMatch,
+    advanceTo: advanceTo,
+    queueStance: queueStance,
+    buildTiming: buildTiming,
+    goalRates: goalRates,
+    shootoutDecided: shootoutDecided,
     hashSeed: hashSeed,
-    coachingMod: coachingMod,
+    mulberry32: mulberry32,
+    LIVE_PHASES: LIVE_PHASES,
   };
 }
