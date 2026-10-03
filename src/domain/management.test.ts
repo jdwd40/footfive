@@ -111,17 +111,20 @@ describe("effective stats", () => {
 });
 
 describe("match engine still works with wear", () => {
-  it("simulateMatch finishes", () => {
+  it("a worn, fully managed squad still completes a match", () => {
     const engine = require(
       path.resolve(__dirname, "../../pocketbase/pb_hooks/lib/matchEngine.js"),
     ) as {
-      simulateMatch: (o: Record<string, unknown>) => { events: unknown[]; winnerSide: string };
+      createMatch: (o: Record<string, unknown>) => Record<string, unknown>;
+      advanceTo: (st: Record<string, unknown>, now: number) => Array<{ t: string; st: { win: string | null } }>;
     };
     const team = (name: string) => ({
+      id: name,
       name,
+      abbr: name,
       grade: "B",
       players: [
-        { name: "A", role: "att", attack: 70, defence: 40, energy: 100, condition: 100, is_starter: true, intensity: "balanced" },
+        { name: "A", role: "att", attack: 70, defence: 40, energy: 20, condition: 40, is_starter: true, intensity: "aggressive" },
         { name: "B", role: "mid", attack: 65, defence: 50, energy: 100, condition: 100, is_starter: true, intensity: "balanced" },
         { name: "C", role: "mid", attack: 60, defence: 55, energy: 100, condition: 100, is_starter: true, intensity: "balanced" },
         { name: "D", role: "def", attack: 40, defence: 70, energy: 100, condition: 100, is_starter: true, intensity: "balanced" },
@@ -130,13 +133,10 @@ describe("match engine still works with wear", () => {
         { name: "G", role: "def", attack: 35, defence: 60, energy: 100, condition: 100, is_starter: false, intensity: "balanced" },
       ],
     });
-    const res = engine.simulateMatch({
-      home: team("H"),
-      away: team("A"),
-      seed: "mgmt-1",
-      pace: "test",
-    });
-    expect(res.events.length).toBeGreaterThan(5);
-    expect(res.winnerSide).toMatch(/home|away/);
+    const st = engine.createMatch({ fixtureId: "m", seed: 11, kickoffAt: 0, home: team("H"), away: team("A") });
+    const ev = engine.advanceTo(st, 1e12);
+    expect(ev.length).toBeGreaterThan(5);
+    expect(ev[ev.length - 1].t).toBe("match_end");
+    expect(ev[ev.length - 1].st.win).toMatch(/home|away/);
   });
 });

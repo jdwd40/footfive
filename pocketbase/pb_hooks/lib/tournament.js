@@ -130,6 +130,7 @@ function copyPlayer(p) {
   if (!p) return null;
   // Avoid Object.assign on goja/host objects — copy known fields explicitly.
   return {
+    id: p.id || "",
     name: p.name || "",
     role: p.role || "util",
     attack: p.attack != null ? p.attack : 50,

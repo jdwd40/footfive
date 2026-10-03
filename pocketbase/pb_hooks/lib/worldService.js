@@ -1,36 +1,44 @@
 /**
- * Shared global Proball world service.
+ * FootFive shared world — championship lifecycle, match ticking, publication.
+ *
+ * Truth model
+ *   match_states.state_json   private engine state (never exposed)
+ *   match_events              one row per event; public once at <= now
+ *   shared_fixtures           public summary, written only when the result is public
+ *
+ * tick(now) is idempotent and safe to call from any request or cron: every step
+ * re-reads its rows inside a write transaction (SQLite serialises writers), so two
+ * concurrent ticks cannot double-advance a match, double-settle or double-create.
  */
-var teamsMod, tourneyMod, matchMod, balMod, mgmtMod, recMod;
+var teamsMod, tourneyMod, eng, balMod, mgmtMod, recMod, oddsMod, mkt, betMod;
 try {
   teamsMod = require(__hooks + "/lib/teams.js");
   tourneyMod = require(__hooks + "/lib/tournament.js");
-  matchMod = require(__hooks + "/lib/matchEngine.js");
+  eng = require(__hooks + "/lib/matchEngine.js");
   balMod = require(__hooks + "/lib/balance.js");
   mgmtMod = require(__hooks + "/lib/managementService.js");
   recMod = require(__hooks + "/lib/recordsService.js");
+  oddsMod = require(__hooks + "/lib/odds.js");
+  mkt = require(__hooks + "/lib/markets.js");
+  betMod = require(__hooks + "/lib/bettingService.js");
 } catch (e) {
   teamsMod = require("./teams.js");
   tourneyMod = require("./tournament.js");
-  matchMod = require("./matchEngine.js");
+  eng = require("./matchEngine.js");
   balMod = require("./balance.js");
   mgmtMod = require("./managementService.js");
   recMod = require("./recordsService.js");
+  oddsMod = require("./odds.js");
+  mkt = require("./markets.js");
+  betMod = require("./bettingService.js");
 }
 
-var TEAMS = teamsMod.TEAMS;
 var BALANCE = balMod.BALANCE;
-var getTiming = balMod.getTiming;
-var clampMatchMinuteSeconds = balMod.clampMatchMinuteSeconds;
-var drawRoundOf16 = tourneyMod.drawRoundOf16;
-var buildNextRoundFixtures = tourneyMod.buildNextRoundFixtures;
-var nextRoundKey = tourneyMod.nextRoundKey;
 var ROUND_LABELS = tourneyMod.ROUND_LABELS;
-var defaultStarters = tourneyMod.defaultStarters;
-var createMatchState = matchMod.createMatchState;
-var advanceSegment = matchMod.advanceSegment;
-var reconstructVisible = matchMod.reconstructVisible;
-var hashSeed = matchMod.hashSeed;
+var ROUND_ORDER = tourneyMod.ROUND_ORDER;
+var BRACKET = tourneyMod.BRACKET;
+
+// ------------------------------------------------------------------ helpers
 
 function toPbDate(d) {
   var x = d instanceof Date ? d : new Date(d);
@@ -39,12 +47,12 @@ function toPbDate(d) {
 
 function parsePbDate(v) {
   if (v == null || v === "") return NaN;
-  if (Object.prototype.toString.call(v) === "[object Date]") return v.getTime();
   var s = String(v).trim().replace(" ", "T");
   if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
   return new Date(s).getTime();
 }
 
+/** Legacy-tolerant JSON field reader (goja may hand back byte arrays). */
 function parseJson(val, fallback) {
   if (val == null || val === "") return fallback;
   if (typeof val === "string") {
@@ -54,153 +62,86 @@ function parseJson(val, fallback) {
       return fallback;
     }
   }
-  // Detect goja/Go []byte mis-decoded as number array (ASCII codes of JSON)
   if (Array.isArray(val) && val.length > 2 && typeof val[0] === "number") {
     try {
-      var asStr = String.fromCharCode.apply(null, val.slice(0, Math.min(val.length, 500000)));
-      if (asStr.charAt(0) === "{" || asStr.charAt(0) === "[") {
-        return JSON.parse(asStr);
-      }
+      return JSON.parse(String.fromCharCode.apply(null, val));
     } catch (_) {}
   }
   try {
     return JSON.parse(JSON.stringify(val));
   } catch (_) {
-    return val || fallback;
+    return fallback;
   }
 }
 
-/** Stable plain JSON for PocketBase json fields (avoid goja proxies / byte arrays). */
-function safeJson(val) {
-  if (val == null) return null;
+function readJson(rec, key, fallback) {
   try {
-    return JSON.parse(JSON.stringify(val));
+    var s = rec.getString(key);
+    if (s && s !== "null") return JSON.parse(s);
+  } catch (_) {}
+  return parseJson(rec.get(key), fallback);
+}
+
+function plain(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+
+function log(event, fields) {
+  try {
+    var o = { ts: new Date().toISOString(), level: "info", event: event, app: "footfive" };
+    for (var k in fields || {}) o[k] = fields[k];
+    console.log("[footfive-json] " + JSON.stringify(o));
+  } catch (_) {}
+}
+
+/** FOOTFIVE_TIME_SCALE (env) divides every duration — accelerated tests only. */
+function timeScale() {
+  try {
+    var s = parseFloat($os.getenv("FOOTFIVE_TIME_SCALE"));
+    return s > 0 ? s : 1;
   } catch (_) {
-    return null;
+    return 1;
   }
 }
 
-function isPlayerList(list) {
-  if (!Array.isArray(list) || !list.length) return false;
-  var p0 = list[0];
-  return !!(p0 && typeof p0 === "object" && (p0.name || p0.id || p0.role));
+function intIn(v, lo, hi, dflt) {
+  var n = parseInt(v, 10);
+  return isNaN(n) || n < lo || n > hi ? dflt : n;
 }
 
-/** Effective between-round wait in ms (admin minutes override pace defaults). */
-function effectiveRoundIntervalMs(world) {
-  var mins = parseInt(world.get("between_round_minutes"), 10);
-  if (!isNaN(mins) && mins >= 1 && mins <= 1440) {
-    return mins * 60 * 1000;
-  }
-  var stored = parseInt(world.get("round_interval_ms"), 10);
-  if (!isNaN(stored) && stored >= 60000) return stored;
-  var pace = world.get("pace") || "normal";
-  return getTiming(pace).roundIntervalMs;
+/** All wall-clock timing for the world, from admin settings. */
+function timing(world) {
+  var k = timeScale();
+  var minuteSec = intIn(world.get("match_minute_real_seconds"), 1, 60, BALANCE.matchMinuteRealSeconds || 15);
+  var between = intIn(world.get("between_round_minutes"), 1, 1440, 1);
+  var gap = intIn(world.get("championship_gap_minutes"), 1, 1440, 10);
+  var win = Math.min(intIn(world.get("fixtures_window_minutes"), 1, 1440, 5), gap);
+  return {
+    scale: k,
+    minuteSec: minuteSec,
+    minuteMs: (minuteSec * 1000) / k,
+    betweenMs: (between * 60000) / k,
+    gapMs: (gap * 60000) / k,
+    windowMs: (win * 60000) / k,
+    betweenMinutes: between,
+    gapMinutes: gap,
+    windowMinutes: win,
+  };
 }
 
-/** Official real ms per in-game minute from world setting (default 15s). */
-function effectiveMatchMinuteMs(world) {
-  var sec = parseInt(world.get("match_minute_real_seconds"), 10);
-  if (!isNaN(sec) && sec >= 1 && sec <= 60) return sec * 1000;
-  var ms = parseInt(world.get("match_minute_real_ms"), 10);
-  // Ignore legacy turbo values below 1s unless no seconds field ever set
-  if (!isNaN(ms) && ms >= 1000) return ms;
-  return BALANCE.matchMinuteRealMs || 15000;
+function one($app, col, filter, sort, params) {
+  var rows = $app.findRecordsByFilter(col, filter, sort || "", 1, 0, params || {});
+  return rows && rows.length ? rows[0] : null;
 }
 
-/** Segment wall-clock ms for a world (new fixtures). */
-function segmentRealMs(world) {
-  var minuteMs = effectiveMatchMinuteMs(world);
-  var pace = world.get("pace") || "normal";
-  var timing = getTiming(pace, minuteMs);
-  var mins = timing.segmentMatchMinutes || 5;
-  return mins * minuteMs;
+function all($app, col, filter, sort, params, limit) {
+  return $app.findRecordsByFilter(col, filter, sort || "", limit || 200, 0, params || {}) || [];
 }
 
-/** Segment wall-clock for an existing match (uses kickoff snapshot). */
-function segmentRealMsForMatch(world, ms) {
-  var snap = parseInt(ms.get("match_minute_real_ms"), 10);
-  if (!isNaN(snap) && snap > 0) {
-    var pace = world.get("pace") || "normal";
-    var timing = getTiming(pace, snap);
-    return (timing.segmentMatchMinutes || 5) * snap;
-  }
-  try {
-    var st = parseJson(ms.get("state_json"), {});
-    if (st && st.timing && st.timing.matchMinuteRealMs > 0) {
-      var sm = st.timing.segmentMatchMinutes || 5;
-      return sm * st.timing.matchMinuteRealMs;
-    }
-  } catch (_) {}
-  return segmentRealMs(world);
-}
+// ------------------------------------------------------------------ world & teams
 
-function loadEventsFromDb($app, matchStateId) {
-  try {
-    var ms = $app.findRecordById("match_states", matchStateId);
-    var raw = ms.get("events_json");
-    if (raw == null || raw === "") return [];
-    if (typeof raw === "string") {
-      try {
-        var arr = JSON.parse(raw);
-        return Array.isArray(arr) ? filterEvents(arr) : [];
-      } catch (_) {
-        return [];
-      }
-    }
-    // Prefer JSON round-trip for goja host arrays
-    try {
-      var s = JSON.stringify(raw);
-      if (s && s.charAt(0) === "[") {
-        return filterEvents(JSON.parse(s));
-      }
-    } catch (_) {}
-    return filterEvents(raw);
-  } catch (err) {
-    console.log("[footfive] loadEventsFromDb: " + err);
-    return [];
-  }
-}
-
-function filterEvents(list) {
-  var out = [];
-  if (!list || typeof list.length !== "number") return out;
-  for (var i = 0; i < list.length; i++) {
-    var item = list[i];
-    if (item && typeof item === "object" && (item.type || item.seq != null)) {
-      out.push(item);
-    }
-  }
-  return out;
-}
-
-function audit($app, adminId, action, targetType, targetId, meta) {
-  try {
-    var col = $app.findCollectionByNameOrId("admin_audit_logs");
-    var rec = new Record(col);
-    rec.set("admin", adminId);
-    rec.set("action", action);
-    rec.set("target_type", targetType || "");
-    rec.set("target_id", targetId || "");
-    rec.set("meta", meta || {});
-    $app.save(rec);
-  } catch (_) {}
-}
-
-/**
- * True when required shared-world collections exist (migrations applied).
- */
 function isSchemaReady($app) {
-  var need = [
-    "world",
-    "proball_teams",
-    "proball_players",
-    "shared_tournaments",
-    "shared_rounds",
-    "shared_fixtures",
-    "match_states",
-    "global_team_records",
-  ];
+  var need = ["world", "proball_teams", "proball_players", "shared_tournaments", "shared_rounds", "shared_fixtures", "match_states", "match_events", "global_team_records"];
   for (var i = 0; i < need.length; i++) {
     try {
       $app.findCollectionByNameOrId(need[i]);
@@ -212,92 +153,48 @@ function isSchemaReady($app) {
 }
 
 function ensureWorld($app) {
-  if (!isSchemaReady($app)) {
-    throw new Error("schema_not_ready");
-  }
-  var rows = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0);
-  if (rows && rows.length) {
-    // Existing production world — never create duplicate
-    return rows[0];
-  }
-
+  if (!isSchemaReady($app)) throw new Error("schema_not_ready");
+  var w = one($app, "world", "key = 'main'");
+  if (w) return w;
   ensureTeams($app);
-
-  // Re-check no concurrent create
-  rows = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0);
-  if (rows && rows.length) return rows[0];
-
-  var col = $app.findCollectionByNameOrId("world");
-  var w = new Record(col);
-  w.set("key", "main");
-  // Fresh installs use production-like pace (not dev turbo)
-  w.set("pace", "normal");
-  w.set("between_round_minutes", 3);
-  w.set("round_interval_ms", 3 * 60 * 1000);
-  w.set("tournament_interval_ms", BALANCE.tournamentIntervalMs);
-  w.set("segment_minutes", 5);
-  w.set("match_minute_real_seconds", BALANCE.matchMinuteRealSeconds || 15);
-  w.set("match_minute_real_ms", (BALANCE.matchMinuteRealSeconds || 15) * 1000);
-  w.set("processing_status", "idle");
-  w.set("processing_version", 0);
-  w.set("retention_days", 30);
-  w.set("progression_paused", false);
-  $app.save(w);
-
-  // Start first tournament if none
-  var t = getActiveTournament($app);
-  if (!t) createTournament($app, w);
-  return w;
+  var rec = new Record($app.findCollectionByNameOrId("world"));
+  rec.set("key", "main");
+  rec.set("pace", "normal");
+  rec.set("between_round_minutes", 1);
+  rec.set("round_interval_ms", 60000);
+  rec.set("championship_gap_minutes", 10);
+  rec.set("fixtures_window_minutes", 5);
+  rec.set("match_minute_real_seconds", BALANCE.matchMinuteRealSeconds || 15);
+  rec.set("match_minute_real_ms", (BALANCE.matchMinuteRealSeconds || 15) * 1000);
+  rec.set("processing_status", "idle");
+  rec.set("retention_days", 30);
+  rec.set("progression_paused", false);
+  try {
+    $app.save(rec);
+  } catch (err) {
+    var again = one($app, "world", "key = 'main'"); // unique key: a concurrent create won
+    if (again) return again;
+    throw err;
+  }
+  return rec;
 }
 
 function ensureTeams($app) {
-  var existing = $app.findRecordsByFilter("proball_teams", "id != ''", "sort_order", 50, 0);
-  // Backfill abbreviations on existing teams without recreating
-  if (existing && existing.length >= 16) {
-    for (var bi = 0; bi < existing.length; bi++) {
-      try {
-        var et = existing[bi];
-        var curAb = et.get("abbreviation");
-        if (curAb) continue;
-        var tmpl = teamsMod.getTeamBySlug(et.get("slug"));
-        if (tmpl && tmpl.abbreviation) {
-          et.set("abbreviation", tmpl.abbreviation);
-          $app.save(et);
-        }
-      } catch (_) {}
-    }
-    return existing;
-  }
-
-  var teamsCol = $app.findCollectionByNameOrId("proball_teams");
-  var playersCol = $app.findCollectionByNameOrId("proball_players");
-  var recordsCol = $app.findCollectionByNameOrId("global_team_records");
+  var existing = all($app, "proball_teams", "id != ''", "sort_order", {}, 50);
+  if (existing.length >= 16) return existing;
+  var TEAMS = teamsMod.TEAMS;
   var created = [];
-
   for (var i = 0; i < TEAMS.length; i++) {
     var t = TEAMS[i];
-    var found = $app.findRecordsByFilter(
-      "proball_teams",
-      "slug = {:s}",
-      "",
-      1,
-      0,
-      { s: t.slug },
-    );
-    if (found && found.length) {
-      try {
-        if (!found[0].get("abbreviation") && t.abbreviation) {
-          found[0].set("abbreviation", t.abbreviation);
-          $app.save(found[0]);
-        }
-      } catch (_) {}
-      created.push(found[0]);
+    var found = one($app, "proball_teams", "slug = {:s}", "", { s: t.slug });
+    if (found) {
+      created.push(found);
       continue;
     }
-    var team = new Record(teamsCol);
+    var team = new Record($app.findCollectionByNameOrId("proball_teams"));
     team.set("slug", t.slug);
     team.set("name", t.name);
-    if (t.abbreviation) team.set("abbreviation", t.abbreviation);
+    team.set("abbreviation", t.abbreviation);
     team.set("grade", t.grade);
     team.set("strength", BALANCE.gradeStrength[t.grade] || 60);
     team.set("primary_color", t.primary);
@@ -310,128 +207,192 @@ function ensureTeams($app) {
     team.set("overclock_ready", false);
     $app.save(team);
     created.push(team);
-
-    var players = defaultStarters(t.players || []);
+    var players = tourneyMod.defaultStarters(t.players || []);
     for (var p = 0; p < players.length; p++) {
-      var pl = players[p];
-      var prec = new Record(playersCol);
-      prec.set("team", team.id);
-      prec.set("name", pl.name);
-      prec.set("role", pl.role || "util");
-      prec.set("attack", pl.attack || 50);
-      prec.set("defence", pl.defence || 50);
-      prec.set("energy", 100);
-      prec.set("condition", 100);
-      prec.set("is_starter", !!pl.is_starter);
-      prec.set("intensity", pl.intensity || "balanced");
-      prec.set("sort_order", p);
-      $app.save(prec);
+      var pr = new Record($app.findCollectionByNameOrId("proball_players"));
+      pr.set("team", team.id);
+      pr.set("name", players[p].name);
+      pr.set("role", players[p].role || "util");
+      pr.set("attack", players[p].attack || 50);
+      pr.set("defence", players[p].defence || 50);
+      pr.set("energy", 100);
+      pr.set("condition", 100);
+      pr.set("is_starter", !!players[p].is_starter);
+      pr.set("intensity", "balanced");
+      pr.set("sort_order", p);
+      $app.save(pr);
     }
-
-    var tr = new Record(recordsCol);
+    var tr = new Record($app.findCollectionByNameOrId("global_team_records"));
     tr.set("team", team.id);
-    tr.set("played", 0);
-    tr.set("wins", 0);
-    tr.set("draws", 0);
-    tr.set("losses", 0);
-    tr.set("goals_for", 0);
-    tr.set("goals_against", 0);
-    tr.set("shootout_wins", 0);
-    tr.set("shootout_losses", 0);
-    tr.set("championships", 0);
+    ["played", "wins", "draws", "losses", "goals_for", "goals_against", "shootout_wins", "shootout_losses", "championships"].forEach(function (f) {
+      tr.set(f, 0);
+    });
     $app.save(tr);
   }
   return created;
 }
 
-function getActiveTournament($app) {
-  var rows = $app.findRecordsByFilter(
-    "shared_tournaments",
-    'status = "active"',
-    "-number",
-    1,
-    0,
-  );
-  return rows && rows.length ? rows[0] : null;
-}
-
-function createTournament($app, world) {
-  var teams = ensureTeams($app);
-  // reset eliminated
-  for (var i = 0; i < teams.length; i++) {
-    teams[i].set("eliminated", false);
-    $app.save(teams[i]);
+function teamPublic(t, managerName) {
+  var abbr = String(t.get("abbreviation") || "").toUpperCase();
+  if (!abbr) {
+    var tmpl = teamsMod.getTeamBySlug(t.get("slug"));
+    abbr = tmpl ? tmpl.abbreviation : String(t.get("name") || "").slice(0, 3).toUpperCase();
   }
-
-  var existing = $app.findRecordsByFilter(
-    "shared_tournaments",
-    "id != ''",
-    "-number",
-    1,
-    0,
-  );
-  var num = 1;
-  if (existing && existing.length) num = (existing[0].get("number") || 0) + 1;
-
-  var tCol = $app.findCollectionByNameOrId("shared_tournaments");
-  var tournament = new Record(tCol);
-  tournament.set("number", num);
-  tournament.set("status", "active");
-  tournament.set("current_round", "r16");
-  $app.save(tournament);
-
-  var pace = world.get("pace") || "dev";
-  var timing = getTiming(pace);
-  var delay = timing.firstKickoffDelayMs;
-  var scheduled = new Date(Date.now() + delay);
-  var teamIds = teams.map(function (t) {
-    return t.id;
-  });
-  createRound($app, tournament, "r16", teamIds, null, scheduled, pace);
-  world.set("next_action_at", toPbDate(scheduled));
-  $app.save(world);
-  return tournament;
+  return {
+    id: t.id,
+    name: t.get("name"),
+    abbreviation: abbr,
+    grade: t.get("grade"),
+    primary_color: t.get("primary_color"),
+    secondary_color: t.get("secondary_color"),
+    badge_key: t.get("badge_key"),
+    strength: t.get("strength"),
+    managerId: t.get("manager") || null,
+    managerName: managerName || null,
+    available: !t.get("manager"),
+    eliminated: !!t.get("eliminated"),
+    slug: t.get("slug"),
+    mode: t.get("manager") ? t.get("manager_mode") || "manual" : "ai",
+  };
 }
 
-function createRound($app, tournament, roundKey, teamIds, winnersBySlot, scheduledAt, pace) {
-  var rCol = $app.findCollectionByNameOrId("shared_rounds");
-  var fCol = $app.findCollectionByNameOrId("shared_fixtures");
-  var idem = tournament.id + ":" + roundKey + ":v2";
+function teamMap($app) {
+  var rows = all($app, "proball_teams", "id != ''", "sort_order", {}, 50);
+  var m = {};
+  for (var i = 0; i < rows.length; i++) m[rows[i].id] = rows[i];
+  return m;
+}
 
-  var existing = $app.findRecordsByFilter(
-    "shared_rounds",
-    "idempotency_key = {:k}",
-    "",
-    1,
-    0,
-    { k: idem },
-  );
-  if (existing && existing.length) return existing[0];
+function getManagerTeam($app, userId) {
+  return userId ? one($app, "proball_teams", "manager = {:u}", "", { u: userId }) : null;
+}
 
-  var round = new Record(rCol);
+function listTeams($app) {
+  ensureTeams($app);
+  var teams = all($app, "proball_teams", "id != ''", "sort_order", {}, 50);
+  var out = [];
+  for (var i = 0; i < teams.length; i++) {
+    var name = null;
+    if (teams[i].get("manager")) {
+      try {
+        name = $app.findRecordById("users", teams[i].get("manager")).get("display_name") || "Manager";
+      } catch (_) {
+        name = "Manager";
+      }
+    }
+    out.push(teamPublic(teams[i], name));
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ engine inputs
+
+/**
+ * Team snapshot for the engine. AI-controlled sides (unmanaged or Full AI) pick their
+ * five from fitness without touching the manager's saved lineup.
+ */
+function engineTeam($app, team) {
+  var snap = mgmtMod.loadTeamSnapshot($app, team.id);
+  var manager = team.get("manager");
+  var ai = !manager || team.get("manager_mode") === "ai";
+  var players = ai ? mgmtMod.aiLineup(snap.players) : snap.players;
+  return {
+    id: team.id,
+    name: team.get("name"),
+    abbr: teamPublic(team).abbreviation,
+    grade: team.get("grade"),
+    players: players,
+    stance: ai ? "balanced" : team.get("default_stance") || "balanced",
+    ai: ai,
+    oc: !!snap.overclock,
+  };
+}
+
+function pairModel(homeT, awayT) {
+  var st = eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: homeT, away: awayT });
+  var r = eng.goalRates(st);
+  return { lh: Math.round(r.home * 1e6) / 1e6, la: Math.round(r.away * 1e6) / 1e6 };
+}
+
+// ------------------------------------------------------------------ lifecycle
+
+function activeTournament($app) {
+  return one($app, "shared_tournaments", 'status = "active"', "-number");
+}
+
+function lastCompleteTournament($app) {
+  return one($app, "shared_tournaments", 'status = "complete"', "-number");
+}
+
+function roundsOf($app, tournamentId) {
+  var rows = all($app, "shared_rounds", "tournament = {:t}", "created", { t: tournamentId }, 10);
+  return rows.sort(function (a, b) {
+    return ROUND_ORDER.indexOf(a.get("round_key")) - ROUND_ORDER.indexOf(b.get("round_key"));
+  });
+}
+
+function currentRound($app, tournamentId) {
+  var rs = roundsOf($app, tournamentId);
+  return rs.length ? rs[rs.length - 1] : null;
+}
+
+function fixturesOf($app, roundId) {
+  return all($app, "shared_fixtures", "round = {:r}", "bracket_index", { r: roundId }, 20);
+}
+
+/** Next championship kick-off (ms). Stored on world.next_action_at. */
+function nextStartMs(world) {
+  return parsePbDate(world.get("next_action_at"));
+}
+
+function createTournament($app, startAt) {
+  var created = null;
+  var t0 = Date.now();
+  $app.runInTransaction(function (tx) {
+    if (activeTournament(tx)) return;
+    var teams = ensureTeams(tx);
+    var last = one(tx, "shared_tournaments", "id != ''", "-number");
+    var num = last ? (last.get("number") || 0) + 1 : 1;
+    for (var i = 0; i < teams.length; i++) {
+      teams[i].set("eliminated", false);
+      tx.save(teams[i]);
+    }
+    var t = new Record(tx.findCollectionByNameOrId("shared_tournaments"));
+    t.set("number", num);
+    t.set("status", "active");
+    t.set("current_round", "r16");
+    t.set("starts_at", toPbDate(startAt));
+    tx.save(t);
+    var ids = teams.map(function (x) {
+      return x.id;
+    });
+    var pairs = tourneyMod.drawRoundOf16(ids, eng.hashSeed(t.id + ":r16"));
+    var round = createRound(tx, t, "r16", pairs, startAt);
+    t.set("odds_json", championshipOdds(tx, round));
+    tx.save(t);
+    created = t;
+  });
+  if (created) log("championship_created", { number: created.get("number"), startsAt: toPbDate(startAt), ms: Date.now() - t0 });
+  return created;
+}
+
+function createRound(tx, tournament, key, pairings, scheduledAt) {
+  var idem = tournament.id + ":" + key + ":v2";
+  var existing = one(tx, "shared_rounds", "idempotency_key = {:k}", "", { k: idem });
+  if (existing) return existing;
+  var round = new Record(tx.findCollectionByNameOrId("shared_rounds"));
   round.set("tournament", tournament.id);
-  round.set("round_key", roundKey);
-  round.set("label", ROUND_LABELS[roundKey] || roundKey);
+  round.set("round_key", key);
+  round.set("label", ROUND_LABELS[key] || key);
   round.set("scheduled_at", toPbDate(scheduledAt));
   round.set("status", "scheduled");
   round.set("idempotency_key", idem);
   round.set("progression_done", false);
-  round.set("processing_version", 0);
-  $app.save(round);
-
-  var pairings;
-  if (roundKey === "r16") {
-    pairings = drawRoundOf16(teamIds, hashSeed(tournament.id + roundKey));
-  } else {
-    var prev =
-      roundKey === "qf" ? "r16" : roundKey === "sf" ? "qf" : "sf";
-    pairings = buildNextRoundFixtures(prev, winnersBySlot);
-  }
-
+  tx.save(round);
+  var teams = teamMap(tx);
   for (var i = 0; i < pairings.length; i++) {
     var p = pairings[i];
-    if (!p.homeId || !p.awayId) continue;
-    var fx = new Record(fCol);
+    var fx = new Record(tx.findCollectionByNameOrId("shared_fixtures"));
     fx.set("tournament", tournament.id);
     fx.set("round", round.id);
     fx.set("slot", p.slot);
@@ -443,1524 +404,876 @@ function createRound($app, tournament, roundKey, teamIds, winnersBySlot, schedul
     fx.set("scheduled_at", toPbDate(scheduledAt));
     fx.set("status", "scheduled");
     fx.set("lineups_frozen", false);
-    $app.save(fx);
+    fx.set("model_json", pairModel(engineTeam(tx, teams[p.homeId]), engineTeam(tx, teams[p.awayId])));
+    tx.save(fx);
   }
   return round;
 }
 
-function teamPublic(t, managerName) {
-  var abbr = "";
-  try {
-    abbr = String(t.get("abbreviation") || "").toUpperCase();
-  } catch (_) {
-    abbr = "";
+/** Champion and semi-finalist probabilities from the R16 draw (pairwise engine models). */
+function championshipOdds(tx, r16Round) {
+  var fixtures = fixturesOf(tx, r16Round.id);
+  var teams = teamMap(tx);
+  var snaps = {};
+  for (var id in teams) snaps[id] = engineTeam(tx, teams[id]);
+  var cache = {};
+  function q(i, j) {
+    var key = i + ":" + j;
+    if (cache[key] == null) {
+      cache[key] = oddsMod.pairQualify(pairModel(snaps[i], snaps[j]));
+      cache[j + ":" + i] = 1 - cache[key];
+    }
+    return cache[key];
   }
-  if (!abbr && t.get("slug")) {
-    // fallback from template
-    try {
-      var tmpl = teamsMod.getTeamBySlug(t.get("slug"));
-      if (tmpl && tmpl.abbreviation) abbr = tmpl.abbreviation;
-    } catch (_) {}
+  var r16 = fixtures.map(function (f) {
+    return { home: f.get("home_team"), away: f.get("away_team") };
+  });
+  var b = oddsMod.bracket(r16, q);
+  return { champion: b.champion, reachSF: b.reachSF, quarters: b.quarters };
+}
+
+/** Kick off a due round: freeze lineups, create engine states. */
+function kickOff($app, roundId, now, T) {
+  var kicked = false;
+  $app.runInTransaction(function (tx) {
+    var round = tx.findRecordById("shared_rounds", roundId);
+    if (round.get("status") !== "scheduled") return;
+    var at = parsePbDate(round.get("scheduled_at"));
+    if (now < at) return;
+    var teams = teamMap(tx);
+    var fixtures = fixturesOf(tx, round.id);
+    var timingSnap = eng.buildTiming(T.minuteSec * 1000, T.scale);
+    for (var i = 0; i < fixtures.length; i++) {
+      var fx = fixtures[i];
+      var homeRec = teams[fx.get("home_team")];
+      var awayRec = teams[fx.get("away_team")];
+      // Full AI and unmanaged teams use the treasury between matches (visible rules).
+      [homeRec, awayRec].forEach(function (t) {
+        if (!t.get("manager") || t.get("manager_mode") === "ai") mgmtMod.aiMaintainTeam(tx, t);
+      });
+      var home = engineTeam(tx, homeRec);
+      var away = engineTeam(tx, awayRec);
+      [homeRec, awayRec].forEach(function (t) {
+        if (t.get("overclock_ready")) {
+          t.set("overclock_ready", false);
+          t.set("overclock_fixture", fx.id);
+          tx.save(t);
+        }
+      });
+      var state = eng.createMatch({
+        fixtureId: fx.id,
+        seed: eng.hashSeed(fx.id + ":" + round.id + ":v2"),
+        kickoffAt: at,
+        timing: timingSnap,
+        home: home,
+        away: away,
+      });
+      var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fx.id });
+      if (!ms) ms = new Record(tx.findCollectionByNameOrId("match_states"));
+      ms.set("fixture", fx.id);
+      ms.set("seed", state.seed);
+      ms.set("sim_version", 2);
+      ms.set("phase", state.phase);
+      ms.set("state_json", plain(state));
+      ms.set("events_json", []);
+      ms.set("started_at", toPbDate(at));
+      ms.set("next_segment_due_at", toPbDate(at));
+      ms.set("finalised", false);
+      ms.set("progression_settled", false);
+      ms.set("match_minute_real_ms", Math.round(timingSnap.minuteMs));
+      tx.save(ms);
+      fx.set("home_lineup_json", home.players);
+      fx.set("away_lineup_json", away.players);
+      fx.set("lineups_frozen", true);
+      fx.set("model_json", pairModel(home, away));
+      fx.set("match_minute_real_ms", Math.round(timingSnap.minuteMs));
+      fx.set("status", "live");
+      tx.save(fx);
+    }
+    round.set("status", "live");
+    round.set("started_at", toPbDate(at));
+    round.set("match_minute_real_ms", Math.round(timingSnap.minuteMs));
+    tx.save(round);
+    kicked = true;
+  });
+  if (kicked) log("round_kickoff", { roundId: roundId });
+  return kicked;
+}
+
+/** Advance one match to `now`, persisting new events. */
+function advanceMatch($app, msId, roundId, now) {
+  var res = { events: 0, finished: false };
+  $app.runInTransaction(function (tx) {
+    var ms = tx.findRecordById("match_states", msId);
+    if (ms.get("finalised")) {
+      res.finished = true;
+      return;
+    }
+    if (ms.get("sim_version") !== 2) return;
+    var st = readJson(ms, "state_json", null);
+    if (!st || st.nextAt > now) return;
+    var evs = eng.advanceTo(st, now);
+    var col = tx.findCollectionByNameOrId("match_events");
+    for (var i = 0; i < evs.length; i++) {
+      var r = new Record(col);
+      r.set("fixture", st.fx);
+      r.set("round", roundId);
+      r.set("seq", evs[i].seq);
+      r.set("at", evs[i].at);
+      r.set("type", evs[i].t);
+      r.set("major", !!evs[i].major);
+      r.set("data", plain(evs[i]));
+      tx.save(r);
+    }
+    ms.set("state_json", plain(st));
+    ms.set("phase", st.phase);
+    ms.set("sim_minute", st.minute);
+    ms.set("score_home", st.score[0]);
+    ms.set("score_away", st.score[1]);
+    ms.set("shootout_home", st.so ? st.so.h : 0);
+    ms.set("shootout_away", st.so ? st.so.a : 0);
+    ms.set("home_coaching", st.teams.home.stance);
+    ms.set("away_coaching", st.teams.away.stance);
+    ms.set("next_segment_due_at", toPbDate(isFinite(st.nextAt) ? st.nextAt : st.finishedAt || now));
+    ms.set("last_processed_at", toPbDate(now));
+    ms.set("finalised", st.phase === "finished");
+    tx.save(ms);
+    res.events = evs.length;
+    res.finished = st.phase === "finished";
+  });
+  return res;
+}
+
+/** Restart a match left half-played by the pre-v2 engine (only after an upgrade mid-round). */
+function restartLegacyMatch($app, ms, startAt, T) {
+  var fx = $app.findRecordById("shared_fixtures", ms.get("fixture"));
+  var teams = teamMap($app);
+  var home = engineTeam($app, teams[fx.get("home_team")]);
+  var away = engineTeam($app, teams[fx.get("away_team")]);
+  var timingSnap = eng.buildTiming(T.minuteSec * 1000, T.scale);
+  var st = eng.createMatch({ fixtureId: fx.id, seed: eng.hashSeed(fx.id + ":legacy"), kickoffAt: startAt, timing: timingSnap, home: home, away: away });
+  ms.set("sim_version", 2);
+  ms.set("state_json", plain(st));
+  ms.set("events_json", []);
+  ms.set("phase", "pre");
+  ms.set("started_at", toPbDate(startAt));
+  ms.set("finalised", false);
+  ms.set("winner_team", "");
+  ms.set("match_minute_real_ms", Math.round(timingSnap.minuteMs));
+  $app.save(ms);
+  fx.set("model_json", pairModel(home, away));
+  fx.set("scheduled_at", toPbDate(startAt));
+  $app.save(fx);
+  log("legacy_match_restarted", { fixtureId: fx.id });
+}
+
+/** Result of a finished match (v2 state or legacy columns). */
+function resultOf(ms, fx) {
+  if (ms.get("sim_version") === 2) {
+    var st = readJson(ms, "state_json", {});
+    if (st.phase !== "finished") return null;
+    return {
+      sh: st.score[0],
+      sa: st.score[1],
+      soh: st.so ? st.so.h : 0,
+      soa: st.so ? st.so.a : 0,
+      winner: st.winner,
+      winnerId: st.winner === "home" ? fx.get("home_team") : fx.get("away_team"),
+      by: st.by,
+      at: st.finishedAt,
+      state: st,
+    };
   }
+  if (!ms.get("finalised") || !ms.get("winner_team")) return null;
+  var soh = ms.get("shootout_home") || 0;
+  var soa = ms.get("shootout_away") || 0;
+  var legacy = readJson(ms, "state_json", {});
   return {
-    id: t.id,
-    name: t.get("name"),
-    abbreviation: abbr || String(t.get("name") || "").slice(0, 3).toUpperCase(),
-    grade: t.get("grade"),
-    primary_color: t.get("primary_color"),
-    secondary_color: t.get("secondary_color"),
-    badge_key: t.get("badge_key"),
-    strength: t.get("strength"),
-    managerId: t.get("manager") || null,
-    managerName: managerName || null,
-    available: !t.get("manager"),
-    eliminated: !!t.get("eliminated"),
-    slug: t.get("slug"),
+    sh: ms.get("score_home") || 0,
+    sa: ms.get("score_away") || 0,
+    soh: soh,
+    soa: soa,
+    winner: ms.get("winner_team") === fx.get("home_team") ? "home" : "away",
+    winnerId: ms.get("winner_team"),
+    by: soh + soa > 0 ? "pens" : legacy.wentExtraTime ? "aet" : "normal",
+    at: parsePbDate(ms.get("last_processed_at")) || 0,
+    legacy: true,
   };
 }
 
-function getManagerTeam($app, userId) {
+/** Events of a fixture already public at `now` (ascending). */
+function publishedEvents($app, fixtureId, now, sinceSeq, limit) {
   var rows = $app.findRecordsByFilter(
-    "proball_teams",
-    "manager = {:u}",
-    "",
-    1,
+    "match_events",
+    "fixture = {:f} && at <= {:n} && seq > {:s}",
+    "-seq",
+    limit || 500,
     0,
-    { u: userId },
+    { f: fixtureId, n: now, s: sinceSeq || 0 },
   );
-  return rows && rows.length ? rows[0] : null;
+  var out = [];
+  for (var i = (rows || []).length - 1; i >= 0; i--) out.push(readJson(rows[i], "data", {}));
+  return out;
 }
 
-function claimTeam($app, userId, teamId) {
-  var owned = getManagerTeam($app, userId);
-  if (owned) throw new BadRequestError("You already manage a team");
+function lastPublished($app, fixtureId, now) {
+  var r = one($app, "match_events", "fixture = {:f} && at <= {:n}", "-seq", { f: fixtureId, n: now });
+  return r ? readJson(r, "data", null) : null;
+}
 
-  var result = null;
-  $app.runInTransaction(function (txApp) {
-    var team = txApp.findRecordById("proball_teams", teamId);
-    if (team.get("manager")) {
-      throw new BadRequestError("Team already claimed");
+/** Legacy-shaped event list for records/summary helpers. */
+function legacyEvents(events) {
+  var out = [];
+  for (var i = 0; i < events.length; i++) {
+    var e = events[i];
+    var type = null;
+    if (e.t === "goal") type = "goal";
+    else if (e.t === "penalty_goal") type = "penalty_scored";
+    else if (e.t === "penalty_saved") type = "penalty_saved";
+    else if (e.t === "penalty_missed" || e.t === "penalty_woodwork") type = "penalty_missed";
+    else if (e.t === "yellow_card" || e.t === "red_card" || e.t === "foul") type = e.t;
+    else if (e.t === "shootout_kick") type = e.kick && e.kick.outcome === "goal" ? "shootout_goal" : "shootout_miss";
+    if (!type) continue;
+    out.push({ type: type, team: e.side, player: e.p, minute: e.min, message: e.text });
+  }
+  return out;
+}
+
+function namedStats(x, pos) {
+  function side(a, p) {
+    return { possession: p, shots: a[0], shots_on_target: a[1], saves: a[2], corners: a[3], fouls: a[4], yellow_cards: a[5], red_cards: a[6], penalties_awarded: a[7] };
+  }
+  return { home: side(x[0], pos), away: side(x[1], 100 - pos) };
+}
+
+function updateTeamRecord(tx, teamId, patch) {
+  var rec = one(tx, "global_team_records", "team = {:t}", "", { t: teamId });
+  if (!rec) return;
+  for (var k in patch) rec.set(k, (rec.get(k) || 0) + patch[k]);
+  tx.save(rec);
+}
+
+/**
+ * Finalise one fixture once its final whistle is public: fixture result, records,
+ * elimination, rewards, wear, summaries and fixture bets — one transaction, once.
+ */
+function finaliseFixture($app, fixtureId, roundKey, now) {
+  var done = false;
+  $app.runInTransaction(function (tx) {
+    var fx = tx.findRecordById("shared_fixtures", fixtureId);
+    var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fixtureId });
+    if (!ms || ms.get("progression_settled")) return;
+    var r = resultOf(ms, fx);
+    if (!r || r.at > now) return;
+    var homeId = fx.get("home_team");
+    var awayId = fx.get("away_team");
+    var loserId = r.winnerId === homeId ? awayId : homeId;
+
+    fx.set("status", "finished");
+    fx.set("winner_team", r.winnerId);
+    fx.set("score_home", r.sh);
+    fx.set("score_away", r.sa);
+    fx.set("shootout_home", r.soh);
+    fx.set("shootout_away", r.soa);
+    fx.set("decided_by", r.by);
+    fx.set("finished_ms", Math.round(r.at));
+    tx.save(fx);
+    ms.set("winner_team", r.winnerId);
+    ms.set("finalised", true);
+    ms.set("progression_settled", true);
+    tx.save(ms);
+
+    var level = r.sh === r.sa;
+    [
+      [homeId, r.sh, r.sa, r.winnerId === homeId],
+      [awayId, r.sa, r.sh, r.winnerId === awayId],
+    ].forEach(function (s) {
+      updateTeamRecord(tx, s[0], {
+        played: 1,
+        wins: !level && s[3] ? 1 : 0,
+        draws: level ? 1 : 0,
+        losses: !level && !s[3] ? 1 : 0,
+        goals_for: s[1],
+        goals_against: s[2],
+        shootout_wins: r.by === "pens" && s[3] ? 1 : 0,
+        shootout_losses: r.by === "pens" && !s[3] ? 1 : 0,
+        normal_time_wins: r.by === "normal" && s[3] ? 1 : 0,
+        extra_time_wins: r.by === "aet" && s[3] ? 1 : 0,
+        finals_reached: roundKey === "final" ? 1 : 0,
+      });
+    });
+    var loser = tx.findRecordById("proball_teams", loserId);
+    loser.set("eliminated", true);
+    tx.save(loser);
+
+    var tournamentId = fx.get("tournament");
+    var extra = null;
+    if (!r.legacy) {
+      // Wear first, so an eliminated team's consolation energy restore wins.
+      mgmtMod.applyWearDelta(tx, r.state.teams.home.players);
+      mgmtMod.applyWearDelta(tx, r.state.teams.away.players);
     }
-    // re-check user has no team
-    var again = txApp.findRecordsByFilter(
-      "proball_teams",
-      "manager = {:u}",
-      "",
-      1,
-      0,
-      { u: userId },
-    );
-    if (again && again.length) throw new BadRequestError("You already manage a team");
+    mgmtMod.rewardFixture(tx, fx, ms, tournamentId, roundKey);
+    mgmtMod.rewardElimination(tx, loserId, roundKey, tournamentId);
 
-    team.set("manager", userId);
-    txApp.save(team);
-    result = team;
+    if (!r.legacy) {
+      var events = publishedEvents(tx, fixtureId, 9e15, 0, 2000);
+      var st = r.state;
+      extra = {
+        events: legacyEvents(events),
+        wentExtraTime: r.by !== "normal",
+        wentShootout: r.by === "pens",
+        shootoutKicks: st.so
+          ? st.so.kicks.map(function (k, i) {
+              return { kickIndex: i + 1, team: k.side, player: k.taker, outcome: k.outcome === "goal" ? "goal" : k.outcome === "save" ? "save" : "miss" };
+            })
+          : [],
+        stats: namedStats(events.length ? events[events.length - 1].st.x : [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]], events.length ? events[events.length - 1].st.pos : 50),
+        players: { home: st.teams.home.players, away: st.teams.away.players },
+      };
+    }
+    var sum = recMod.ensureMatchSummary(tx, fx, ms, roundKey, tournamentId, extra);
+    if (sum && sum.created) recMod.settlePlayerRecordsFromMatch(tx, fx, ms, extra);
+    betMod.settleFixtureBets(tx, fx, r, now);
+    done = true;
   });
+  if (done) log("fixture_finalised", { fixtureId: fixtureId });
+  return done;
+}
 
+/** Close a round once every fixture is finalised; schedule the next one. */
+function completeRound($app, roundId, now, T) {
+  var out = null;
+  $app.runInTransaction(function (tx) {
+    var round = tx.findRecordById("shared_rounds", roundId);
+    if (round.get("progression_done")) return;
+    var fixtures = fixturesOf(tx, round.id);
+    var winners = {};
+    var finished = 0;
+    for (var i = 0; i < fixtures.length; i++) {
+      if (fixtures[i].get("status") !== "finished") return;
+      winners[fixtures[i].get("slot")] = fixtures[i].get("winner_team");
+      finished = Math.max(finished, fixtures[i].get("finished_ms") || 0);
+    }
+    if (!fixtures.length) return;
+    round.set("status", "completed");
+    round.set("progression_done", true);
+    round.set("completed_at", toPbDate(now));
+    round.set("finished_ms", finished);
+    tx.save(round);
+    var t = tx.findRecordById("shared_tournaments", round.get("tournament"));
+    var key = round.get("round_key");
+    betMod.settleRoundFirst(tx, round, fixtures, true);
+    if (key === "qf") betMod.settleSemis(tx, t, fixtures);
+    var nextKey = tourneyMod.nextRoundKey(key);
+    if (nextKey) {
+      var at = Math.max(finished + T.betweenMs, now + Math.min(T.betweenMs, 30000 / T.scale));
+      createRound(tx, t, nextKey, tourneyMod.buildNextRoundFixtures(key, winners), at);
+      t.set("current_round", nextKey);
+      tx.save(t);
+      out = { next: nextKey, at: at };
+      return;
+    }
+    var champ = fixtures[0].get("winner_team");
+    t.set("status", "complete");
+    t.set("current_round", "complete");
+    t.set("champion_team", champ);
+    t.set("completed_at", toPbDate(finished || now));
+    tx.save(t);
+    updateTeamRecord(tx, champ, { championships: 1 });
+    mgmtMod.rewardChampion(tx, champ, t.id);
+    recMod.awardChampionshipPlayers(tx, champ);
+    recMod.ensureTournamentSummary(tx, t, fixtures);
+    betMod.settleChampion(tx, t, champ);
+    var world = one(tx, "world", "key = 'main'");
+    var nextStart = Math.max(finished, now) + T.gapMs;
+    world.set("next_action_at", toPbDate(nextStart));
+    tx.save(world);
+    out = { champion: champ, nextStart: nextStart };
+  });
+  if (out) log("round_completed", { roundId: roundId, result: out });
+  return out;
+}
+
+/**
+ * Bring the shared world up to `now`. Called by cron and (throttled) by reads.
+ */
+function tick($app, now) {
+  now = now || Date.now();
+  var world = ensureWorld($app);
+  if (world.get("progression_paused")) return { paused: true };
+  var T = timing(world);
+  var actions = [];
+  var t = activeTournament($app);
+
+  if (!t) {
+    // The next championship is drawn as soon as the previous one ends; its fixtures
+    // stay hidden (and closed to betting) until the fixture window opens.
+    var start = nextStartMs(world);
+    if (isNaN(start)) start = now + T.windowMs; // fresh install: open the fixture window now
+    t = createTournament($app, Math.max(start, now + 1000));
+    if (t) actions.push("championship_created");
+    if (!t) return { actions: actions };
+  }
+
+  for (var guard = 0; guard < 6; guard++) {
+    var round = currentRound($app, t.id);
+    if (!round) break;
+    var status = round.get("status");
+    if (status === "scheduled" || status === "management") {
+      if (now < parsePbDate(round.get("scheduled_at"))) break;
+      if (kickOff($app, round.id, now, T)) actions.push("kickoff:" + round.get("round_key"));
+      continue;
+    }
+    if (status !== "live") break;
+    var fixtures = fixturesOf($app, round.id);
+    var allDone = true;
+    for (var i = 0; i < fixtures.length; i++) {
+      var fx = fixtures[i];
+      try {
+        if (fx.get("status") === "finished") {
+          // Pre-v2 fixtures were marked finished before their progression ran.
+          if (!fx.get("finished_ms")) finaliseFixture($app, fx.id, round.get("round_key"), now);
+          continue;
+        }
+        allDone = false;
+        var ms = one($app, "match_states", "fixture = {:f}", "", { f: fx.id });
+        if (!ms) continue;
+        if (ms.get("sim_version") !== 2 && !ms.get("finalised")) {
+          restartLegacyMatch($app, ms, now + T.betweenMs, T);
+          continue;
+        }
+        var adv = ms.get("sim_version") === 2 && !ms.get("finalised") ? advanceMatch($app, ms.id, round.id, now) : { finished: true };
+        betMod.settleNextGoal($app, fx.id, now);
+        if (adv.finished && finaliseFixture($app, fx.id, round.get("round_key"), now)) actions.push("final:" + fx.get("slot"));
+      } catch (err) {
+        log("tick_fixture_error", { fixtureId: fx.id, message: String(err).slice(0, 300) });
+      }
+    }
+    try {
+      betMod.settleRoundFirst($app, round, fixturesOf($app, round.id), false, now);
+    } catch (err2) {
+      log("tick_round_first_error", { message: String(err2).slice(0, 200) });
+    }
+    if (!allDone) break;
+    var done = completeRound($app, round.id, now, T);
+    if (!done) break;
+    actions.push("round_complete:" + round.get("round_key"));
+    if (done.champion) {
+      if (createTournament($app, done.nextStart)) actions.push("championship_created");
+      break;
+    }
+  }
+  return { actions: actions };
+}
+
+/** Kick-off of the current championship's draw is public from this time (ms). */
+function drawVisibleAt(round, T) {
+  if (!round || round.get("round_key") !== "r16") return 0;
+  return parsePbDate(round.get("scheduled_at")) - T.windowMs;
+}
+
+/** True while a pre-drawn championship's fixtures are still private (champion screen). */
+function drawHidden($app, round, now) {
+  if (!round || round.get("status") !== "scheduled" || round.get("round_key") !== "r16") return false;
+  return (now || Date.now()) < drawVisibleAt(round, timing(ensureWorld($app)));
+}
+
+/** Throttled tick for read paths (one per second per process). */
+function tickIfDue($app) {
+  var now = Date.now();
   try {
-    audit($app, userId, "team_claim", "proball_teams", teamId, {});
+    var last = $app.store().get("ff_last_tick") || 0;
+    if (now - last < 1000 / timeScale()) return;
+    $app.store().set("ff_last_tick", now);
   } catch (_) {}
+  try {
+    tick($app, now);
+  } catch (err) {
+    log("tick_error", { message: String(err).slice(0, 300) });
+  }
+}
+
+// ------------------------------------------------------------------ projections
+
+function fixtureTeams(fx, teams) {
+  var h = teams[fx.get("home_team")];
+  var a = teams[fx.get("away_team")];
+  return { home: h ? teamPublic(h) : null, away: a ? teamPublic(a) : null };
+}
+
+function modelOf(fx) {
+  var m = readJson(fx, "model_json", null);
+  return m && m.lh != null ? m : null;
+}
+
+function minuteMsOf(fx, T) {
+  return fx.get("match_minute_real_ms") || T.minuteMs;
+}
+
+/** Public card for one fixture at `now`. */
+function fixtureCard($app, fx, teams, now, T) {
+  var tm = fixtureTeams(fx, teams);
+  var kickoffAt = parsePbDate(fx.get("scheduled_at"));
+  var card = {
+    id: fx.id,
+    slot: fx.get("slot"),
+    index: fx.get("bracket_index"),
+    home: tm.home,
+    away: tm.away,
+    status: fx.get("status"),
+    kickoffAt: kickoffAt,
+    minuteMs: minuteMsOf(fx, T),
+    st: null,
+    at: null,
+    seq: 0,
+    last: null,
+    odds: null,
+  };
+  if (fx.get("status") !== "scheduled") {
+    var ev = lastPublished($app, fx.id, now);
+    if (ev) {
+      card.st = ev.st;
+      card.at = ev.at;
+      card.seq = ev.seq;
+      card.last = { t: ev.t, text: ev.text, side: ev.side || null };
+    }
+    if (fx.get("status") === "finished") {
+      card.result = {
+        sh: fx.get("score_home"),
+        sa: fx.get("score_away"),
+        soh: fx.get("shootout_home"),
+        soa: fx.get("shootout_away"),
+        winner: fx.get("winner_team") === fx.get("home_team") ? "home" : "away",
+        by: fx.get("decided_by") || null,
+      };
+    }
+  }
+  var model = modelOf(fx);
+  if (model && fx.get("status") !== "finished") {
+    var fake = { status: fx.get("status"), kickoffAt: kickoffAt };
+    var stx = card.st;
+    var state = mkt.fixtureState(fake, stx, now);
+    if (state.phase !== "finished") {
+      var minute = stx ? Math.floor(oddsMod.clockMinute(stx.clk, card.at, now, card.minuteMs)) : 0;
+      var fd = oddsMod.finalDist(model, stx || { sc: [0, 0], ph: "pre" }, minute, true);
+      card.odds = {
+        home: mkt.okP(fd.qualifyHome),
+        away: mkt.okP(1 - fd.qualifyHome),
+        closed: state.closed,
+      };
+    }
+  }
+  return card;
+}
+
+/** Bracket for the current championship with honest pending slots. */
+function bracketView($app, t, teams) {
+  var rounds = roundsOf($app, t.id);
+  var byKey = {};
+  rounds.forEach(function (r) {
+    byKey[r.get("round_key")] = fixturesOf($app, r.id);
+  });
+  var out = [];
+  var winnersPrev = null;
+  var labelsPrev = null;
+  ROUND_ORDER.forEach(function (key) {
+    var list = [];
+    var fxs = byKey[key];
+    if (fxs && fxs.length) {
+      fxs.forEach(function (fx) {
+        var tm = fixtureTeams(fx, teams);
+        list.push({
+          slot: fx.get("slot"),
+          fixtureId: fx.id,
+          home: tm.home,
+          away: tm.away,
+          status: fx.get("status"),
+          sh: fx.get("status") === "finished" ? fx.get("score_home") : null,
+          sa: fx.get("status") === "finished" ? fx.get("score_away") : null,
+          soh: fx.get("shootout_home") || 0,
+          soa: fx.get("shootout_away") || 0,
+          by: fx.get("decided_by") || null,
+          winner: fx.get("status") === "finished" ? (fx.get("winner_team") === fx.get("home_team") ? "home" : "away") : null,
+        });
+      });
+    } else {
+      BRACKET[key].forEach(function (s) {
+        var feeders = BRACKET[ROUND_ORDER[ROUND_ORDER.indexOf(key) - 1]].filter(function (p) {
+          return p.feeds === s.slot;
+        });
+        function pending(pos) {
+          var f = feeders.filter(function (p) {
+            return p.pos === pos;
+          })[0];
+          var w = f && winnersPrev ? winnersPrev[f.slot] : null;
+          return w ? { team: w } : { pending: "Winner " + (labelsPrev && f ? labelsPrev[f.slot] : f ? f.slot : "") };
+        }
+        var h = pending("home");
+        var a = pending("away");
+        list.push({ slot: s.slot, home: h.team || null, away: a.team || null, homePending: h.pending || null, awayPending: a.pending || null, status: "pending" });
+      });
+    }
+    winnersPrev = {};
+    labelsPrev = {};
+    list.forEach(function (f) {
+      if (f.winner) winnersPrev[f.slot] = f.winner === "home" ? f.home : f.away;
+      // Unknown sides fall back to their round label ("QF1", "SF2" …), never "?".
+      var hl = f.home ? f.home.abbreviation : f.slot;
+      var al = f.away ? f.away.abbreviation : f.slot;
+      labelsPrev[f.slot] = f.home || f.away ? hl + " v " + al : f.slot.toUpperCase();
+    });
+    out.push({ key: key, label: ROUND_LABELS[key], fixtures: list });
+  });
+  return out;
+}
+
+function tickerFor($app, roundId, now, limit) {
+  var rows = $app.findRecordsByFilter("match_events", "round = {:r} && major = true && at <= {:n}", "-at,-seq", limit || 40, 0, { r: roundId, n: now }) || [];
+  return rows.map(function (r) {
+    var d = readJson(r, "data", {});
+    return { id: r.get("fixture") + ":" + d.seq, fixtureId: r.get("fixture"), seq: d.seq, at: d.at, t: d.t, side: d.side || null, text: d.tick || d.text, min: d.min };
+  });
+}
+
+function championView($app, t, teams) {
+  if (!t || !t.get("champion_team")) return null;
+  var champ = teams[t.get("champion_team")];
+  var rounds = roundsOf($app, t.id);
+  var final = null;
+  rounds.forEach(function (r) {
+    if (r.get("round_key") !== "final") return;
+    var f = fixturesOf($app, r.id)[0];
+    if (!f) return;
+    var tm = fixtureTeams(f, teams);
+    final = {
+      fixtureId: f.id,
+      home: tm.home,
+      away: tm.away,
+      sh: f.get("score_home"),
+      sa: f.get("score_away"),
+      soh: f.get("shootout_home") || 0,
+      soa: f.get("shootout_away") || 0,
+      by: f.get("decided_by") || null,
+    };
+  });
+  return {
+    tournamentId: t.id,
+    number: t.get("number"),
+    team: champ ? teamPublic(champ) : null,
+    final: final,
+    completedAt: parsePbDate(t.get("completed_at")) || parsePbDate(t.get("updated")),
+  };
+}
+
+/** Main screen state: champion → fixtures → live, all from server time. */
+function liveView($app) {
+  tickIfDue($app);
+  var now = Date.now();
+  var world = ensureWorld($app);
+  var T = timing(world);
+  var teams = teamMap($app);
+  var t = activeTournament($app);
+  var last = lastCompleteTournament($app);
+  var view = {
+    serverTimeMs: now,
+    paused: !!world.get("progression_paused"),
+    timing: { betweenMs: T.betweenMs, gapMs: T.gapMs, windowMs: T.windowMs, minuteMs: T.minuteMs, betweenMinutes: T.betweenMinutes, gapMinutes: T.gapMinutes, windowMinutes: T.windowMinutes, minuteSec: T.minuteSec },
+    mode: "idle",
+    championship: null,
+    round: null,
+    fixtures: [],
+    bracket: [],
+    ticker: [],
+    champion: championView($app, last, teams),
+    nextChampionshipAt: null,
+  };
+  var round = t ? currentRound($app, t.id) : null;
+  var hidden = drawHidden($app, round, now);
+  if (!t || hidden) {
+    // Champion celebration: the next draw exists but stays private until the window opens.
+    var start = t ? parsePbDate(t.get("starts_at")) : nextStartMs(world);
+    view.mode = view.champion ? "champion" : "idle";
+    view.nextChampionshipAt = isNaN(start) ? null : start;
+    view.fixturesAt = isNaN(start) ? null : start - T.windowMs;
+    if (view.champion && last) {
+      var lr = currentRound($app, last.id);
+      if (lr) view.ticker = tickerFor($app, lr.id, now, 30);
+    }
+    return view;
+  }
+  view.championship = { id: t.id, number: t.get("number"), startsAt: parsePbDate(t.get("starts_at")), status: t.get("status") };
+  if (!round) return view;
+  var rs = round.get("status");
+  view.mode = rs === "live" ? "live" : "fixtures";
+  view.round = {
+    id: round.id,
+    key: round.get("round_key"),
+    label: round.get("label"),
+    status: rs,
+    scheduledAt: parsePbDate(round.get("scheduled_at")),
+    finishedAt: round.get("finished_ms") || null,
+  };
+  view.fixtures = fixturesOf($app, round.id).map(function (fx) {
+    return fixtureCard($app, fx, teams, now, T);
+  });
+  view.bracket = bracketView($app, t, teams);
+  var tickRound = round;
+  if (rs === "scheduled") {
+    var rounds = roundsOf($app, t.id);
+    tickRound = rounds.length > 1 ? rounds[rounds.length - 2] : null;
+  }
+  view.ticker = tickRound ? tickerFor($app, tickRound.id, now, 40) : [];
+  // The big champion screen belongs to the gap between championships; once the next
+  // draw is out the champion stays visible in a smaller form during the R16 window.
+  if (rs === "scheduled" && round.get("round_key") === "r16") view.recentChampion = view.champion;
+  view.champion = null;
+  return view;
+}
+
+function lineupPublic(players) {
+  return (players || []).map(function (p) {
+    return { name: p.name, no: p.no, role: p.role, starter: !!p.is_starter };
+  });
+}
+
+/** Individual match view. Events after `sinceSeq`; first load returns the latest 60. */
+function matchView($app, fixtureId, sinceSeq, userId) {
+  tickIfDue($app);
+  var now = Date.now();
+  var world = ensureWorld($app);
+  var T = timing(world);
+  var teams = teamMap($app);
+  var fx = $app.findRecordById("shared_fixtures", fixtureId);
+  var round = $app.findRecordById("shared_rounds", fx.get("round"));
+  if (drawHidden($app, round, now)) throw new Error("fixture not announced");
+  var card = fixtureCard($app, fx, teams, now, T);
+  var managed = getManagerTeam($app, userId);
+  var side = managed ? (managed.id === fx.get("home_team") ? "home" : managed.id === fx.get("away_team") ? "away" : null) : null;
+  var events = [];
+  var lineups = null;
+  var coach = null;
+  var sentOff = [];
+  if (fx.get("status") !== "scheduled") {
+    events = publishedEvents($app, fixtureId, now, sinceSeq || 0, sinceSeq ? 300 : 60);
+    // Sent-off players from published events only (the engine state may already know a
+    // red card that is a few seconds from publication).
+    var reds = $app.findRecordsByFilter("match_events", 'fixture = {:f} && type = "red_card" && at <= {:n}', "seq", 10, 0, { f: fixtureId, n: now }) || [];
+    sentOff = reds.map(function (r) {
+      var d = readJson(r, "data", {});
+      return { side: d.side, p: d.p };
+    });
+    var ms = one($app, "match_states", "fixture = {:f}", "", { f: fixtureId });
+    var st = ms && ms.get("sim_version") === 2 ? readJson(ms, "state_json", null) : null;
+    if (st) {
+      lineups = { home: lineupPublic(st.teams.home.players), away: lineupPublic(st.teams.away.players) };
+      if (side) {
+        var c = st.coach && st.coach[side] ? st.coach[side] : { n: 0, last: 0 };
+        coach = {
+          stance: st.pending && st.pending[side] ? st.pending[side] : st.teams[side].stance,
+          pending: !!(st.pending && st.pending[side]),
+          ai: !!st.teams[side].ai,
+          used: c.n || 0,
+          max: BALANCE.liveCoachingMax,
+          cooldownUntil: (c.last || 0) + liveCoachCooldownMs(T),
+        };
+      }
+    }
+  } else {
+    lineups = {
+      home: lineupPublic(engineTeam($app, teams[fx.get("home_team")]).players.map(numbered)),
+      away: lineupPublic(engineTeam($app, teams[fx.get("away_team")]).players.map(numbered)),
+    };
+  }
+  return {
+    serverTimeMs: now,
+    round: { id: round.id, key: round.get("round_key"), label: round.get("label"), status: round.get("status") },
+    fixture: card,
+    events: events,
+    lineups: lineups,
+    sentOff: sentOff,
+    managedSide: side,
+    coach: coach,
+  };
+}
+
+function numbered(p, i) {
+  return { name: p.name, role: p.role, is_starter: p.is_starter, no: p.role === "gk" && p.is_starter ? 1 : i + 2 };
+}
+
+function liveCoachCooldownMs(T) {
+  return (BALANCE.liveCoachingCooldownMinutes || 3) * T.minuteMs;
+}
+
+/** Manager Defend / Balanced / Attack — applies from the next simulated minute. */
+function setCoaching($app, userId, fixtureId, stance) {
+  if (["defend", "balanced", "attack"].indexOf(stance) < 0) throw new BadRequestError("Choose Defend, Balanced or Attack");
+  tick($app, Date.now()); // resolve everything up to now first
+  var now = Date.now();
+  var world = ensureWorld($app);
+  var T = timing(world);
+  var result = null;
+  $app.runInTransaction(function (tx) {
+    var fx = tx.findRecordById("shared_fixtures", fixtureId);
+    var team = getManagerTeam(tx, userId);
+    var side = team ? (team.id === fx.get("home_team") ? "home" : team.id === fx.get("away_team") ? "away" : null) : null;
+    if (!side) throw new ForbiddenError("You do not manage a team in this match");
+    if (team.get("manager_mode") === "ai") throw new BadRequestError("Your team is on Full AI. Switch to My settings to coach live.");
+    var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fixtureId });
+    if (!ms || ms.get("sim_version") !== 2) throw new BadRequestError("Match has not kicked off");
+    var st = readJson(ms, "state_json", null);
+    var pub = lastPublished(tx, fixtureId, now);
+    if (!pub || eng.LIVE_PHASES.indexOf(pub.st.ph) < 0 && ["half_time", "et_break", "et_half_time"].indexOf(pub.st.ph) < 0) {
+      throw new BadRequestError("Coaching is available while the match is being played");
+    }
+    if (st.phase === "shootout" || st.phase === "finished") throw new BadRequestError("Coaching has closed for this match");
+    st.coach = st.coach || {};
+    var c = st.coach[side] || { n: 0, last: 0 };
+    if (c.n >= BALANCE.liveCoachingMax) throw new BadRequestError("No coaching commands left this match (" + BALANCE.liveCoachingMax + " max)");
+    var wait = c.last + liveCoachCooldownMs(T) - now;
+    if (wait > 0) throw new BadRequestError("Command recharging — available in " + Math.ceil(wait / 1000) + "s");
+    if ((st.pending[side] || st.teams[side].stance) === stance) throw new BadRequestError("Already set to " + stance);
+    eng.queueStance(st, side, stance);
+    st.coach[side] = { n: c.n + 1, last: now };
+    ms.set("state_json", plain(st));
+    tx.save(ms);
+    var cmd = new Record(tx.findCollectionByNameOrId("coaching_commands"));
+    cmd.set("fixture", fixtureId);
+    cmd.set("team", team.id);
+    cmd.set("user", userId);
+    cmd.set("stance", stance);
+    cmd.set("effective_from_minute", st.minute + 1);
+    tx.save(cmd);
+    result = { ok: true, stance: stance, fromMinute: st.minute + 1, used: c.n + 1, max: BALANCE.liveCoachingMax };
+  });
   return result;
 }
 
-function releaseTeam($app, adminId, teamId) {
-  var team = $app.findRecordById("proball_teams", teamId);
-  var prev = team.get("manager");
-  team.set("manager", "");
-  $app.save(team);
-  audit($app, adminId, "team_release", "proball_teams", teamId, { previous: prev });
-  return team;
-}
-
-function loadTeamForSim($app, teamId) {
-  return mgmtMod.loadTeamSnapshot($app, teamId);
-}
-
-function freezeLineups($app, fixture) {
-  if (fixture.get("lineups_frozen")) return;
-  var home = loadTeamForSim($app, fixture.get("home_team"));
-  var away = loadTeamForSim($app, fixture.get("away_team"));
-  fixture.set("home_lineup_json", home.players);
-  fixture.set("away_lineup_json", away.players);
-  fixture.set("lineups_frozen", true);
-  $app.save(fixture);
-
-  // Consume overclock flags into next match (mark fixture on team)
-  try {
-    if (home.overclock) {
-      var ht = $app.findRecordById("proball_teams", home.id);
-      ht.set("overclock_ready", false);
-      ht.set("overclock_fixture", fixture.id);
-      $app.save(ht);
-    }
-    if (away.overclock) {
-      var at = $app.findRecordById("proball_teams", away.id);
-      at.set("overclock_ready", false);
-      at.set("overclock_fixture", fixture.id);
-      $app.save(at);
-    }
-  } catch (_) {}
-}
-
-/**
- * Start live fixtures for a due round: freeze lineups, create match_states.
- */
-function kickOffRound($app, round, world) {
-  if (round.get("status") === "live" || round.get("status") === "completed") {
-    return { skipped: true };
-  }
-  var scheduled = parsePbDate(round.get("scheduled_at"));
-  if (isNaN(scheduled) || Date.now() < scheduled) return { waiting: true };
-
-  var fixtures = $app.findRecordsByFilter(
-    "shared_fixtures",
-    "round = {:r}",
-    "bracket_index",
-    20,
-    0,
-    { r: round.id },
-  );
-  // Use official world speed snapshot (not dev turbo) for new kickoffs
-  var pace = "normal";
-  var minuteMs = effectiveMatchMinuteMs(world);
-  var startedAt = new Date(Math.max(scheduled, Date.now() - 1000));
-  var msCol = $app.findCollectionByNameOrId("match_states");
-  var segMs = segmentRealMs(world);
-
-  try {
-    round.set("match_minute_real_ms", minuteMs);
-    $app.save(round);
-  } catch (_) {}
-
-  for (var i = 0; i < fixtures.length; i++) {
-    var fx = fixtures[i];
-    freezeLineups($app, fx);
-
-    var existing = $app.findRecordsByFilter(
-      "match_states",
-      "fixture = {:f}",
-      "",
-      1,
-      0,
-      { f: fx.id },
-    );
-    if (existing && existing.length) continue;
-
-    var homePlayers = parseJson(fx.get("home_lineup_json"), []);
-    var awayPlayers = parseJson(fx.get("away_lineup_json"), []);
-    var homeTeam = $app.findRecordById("proball_teams", fx.get("home_team"));
-    var awayTeam = $app.findRecordById("proball_teams", fx.get("away_team"));
-    var homeOc =
-      homeTeam.get("overclock_fixture") === fx.id ||
-      !!homeTeam.get("overclock_ready");
-    var awayOc =
-      awayTeam.get("overclock_fixture") === fx.id ||
-      !!awayTeam.get("overclock_ready");
-
-    try {
-      fx.set("match_minute_real_ms", minuteMs);
-      $app.save(fx);
-    } catch (_) {}
-
-    var state = createMatchState({
-      home: {
-        id: homeTeam.id,
-        name: homeTeam.get("name"),
-        grade: homeTeam.get("grade"),
-        players: homePlayers,
-      },
-      away: {
-        id: awayTeam.id,
-        name: awayTeam.get("name"),
-        grade: awayTeam.get("grade"),
-        players: awayPlayers,
-      },
-      seed: hashSeed(fx.id + ":" + round.id),
-      pace: pace,
-      matchMinuteRealMs: minuteMs,
-      homeCoaching: "balanced",
-      awayCoaching: "balanced",
-      homeOverclock: homeOc,
-      awayOverclock: awayOc,
-    });
-
-    // First segment at kickoff
-    var advanced = advanceSegment(state, {});
-    var ms = new Record(msCol);
-    ms.set("fixture", fx.id);
-    ms.set("seed", state.seed);
-    ms.set("sim_version", 1);
-    ms.set("processing_version", 0);
-    ms.set("phase", state.phase);
-    ms.set("sim_minute", state.simMinute);
-    ms.set("score_home", state.scoreHome);
-    ms.set("score_away", state.scoreAway);
-    ms.set("shootout_home", state.shootoutHome);
-    ms.set("shootout_away", state.shootoutAway);
-    ms.set("home_coaching", state.homeCoaching);
-    ms.set("away_coaching", state.awayCoaching);
-    ms.set("state_json", safeJson(stripEvents(state)));
-    ms.set("events_json", safeJson(state.events));
-    ms.set("stats_json", safeJson(state.stats));
-    ms.set("started_at", toPbDate(startedAt));
-    ms.set("next_segment_due_at", toPbDate(startedAt.getTime() + segMs));
-    ms.set("last_processed_at", toPbDate(new Date()));
-    ms.set("finalised", !!state.finalised);
-    ms.set("progression_settled", false);
-    ms.set("segment_index", state.segmentIndex);
-    ms.set("last_segment_key", fx.id + ":seg:0");
-    try {
-      ms.set("match_minute_real_ms", minuteMs);
-    } catch (_) {}
-    if (state.finalised && state.winnerSide) {
-      ms.set(
-        "winner_team",
-        state.winnerSide === "home" ? fx.get("home_team") : fx.get("away_team"),
-      );
-    }
-    try {
-      $app.save(ms);
-    } catch (saveErr) {
-      console.log("[footfive] match_state save: " + saveErr);
-      // If unique conflict, continue (idempotent kickoff)
-      var again = $app.findRecordsByFilter(
-        "match_states",
-        "fixture = {:f}",
-        "",
-        1,
-        0,
-        { f: fx.id },
-      );
-      if (!again || !again.length) throw saveErr;
-    }
-
-    fx.set("status", state.finalised ? "finished" : "live");
-    if (state.finalised && state.winnerSide) {
-      fx.set(
-        "winner_team",
-        state.winnerSide === "home" ? fx.get("home_team") : fx.get("away_team"),
-      );
-    }
-    $app.save(fx);
-
-    // Lock bets at kickoff
-    lockBetsForFixture($app, fx.id);
-  }
-
-  // Ensure any fixture that already had match_state is live
-  for (var j = 0; j < fixtures.length; j++) {
-    var fx2 = fixtures[j];
-    if (fx2.get("status") === "scheduled") {
-      var hasMs = $app.findRecordsByFilter(
-        "match_states",
-        "fixture = {:f}",
-        "",
-        1,
-        0,
-        { f: fx2.id },
-      );
-      if (hasMs && hasMs.length && !hasMs[0].get("finalised")) {
-        fx2.set("status", "live");
-        if (!fx2.get("lineups_frozen")) freezeLineups($app, fx2);
-        else $app.save(fx2);
-      }
-    }
-  }
-
-  round.set("status", "live");
-  round.set("started_at", toPbDate(startedAt));
-  if (!round.get("announce_key")) {
-    round.set("announce_key", round.id + ":start:" + startedAt.getTime());
-  }
-  round.set("announced_at", toPbDate(startedAt));
-  $app.save(round);
-  try {
-    console.log(
-      "[footfive-json] " +
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          level: "info",
-          event: "round_started",
-          app: "footfive",
-          round: round.get("round_key"),
-          roundId: round.id,
-          fixtures: fixtures.length,
-        }),
-    );
-  } catch (_) {}
-  return { kicked: true, startedAt: toPbDate(startedAt), roundId: round.id };
-}
-
-function stripEvents(state) {
-  var copy = {};
-  for (var k in state) {
-    if (k === "events") continue;
-    if (Object.prototype.hasOwnProperty.call(state, k)) copy[k] = state[k];
-  }
-  return copy;
-}
-
-function hydrateState(ms, events, app) {
-  var raw = parseJson(ms.get("state_json"), {});
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
-  raw.events = events || [];
-  raw.scoreHome = ms.get("score_home") || 0;
-  raw.scoreAway = ms.get("score_away") || 0;
-  raw.shootoutHome = ms.get("shootout_home") || 0;
-  raw.shootoutAway = ms.get("shootout_away") || 0;
-  raw.homeCoaching = ms.get("home_coaching") || "balanced";
-  raw.awayCoaching = ms.get("away_coaching") || "balanced";
-  raw.phase = ms.get("phase") || raw.phase || "first_half";
-  raw.simMinute = ms.get("sim_minute") || 0;
-  raw.finalised = !!ms.get("finalised");
-  raw.segmentIndex = ms.get("segment_index") || 0;
-  raw.seed = ms.get("seed") || 1;
-  raw.homePlayers = Array.isArray(raw.homePlayers) ? raw.homePlayers : [];
-  raw.awayPlayers = Array.isArray(raw.awayPlayers) ? raw.awayPlayers : [];
-  // Fix double-encoded / byte-array player lists
-  if (!isPlayerList(raw.homePlayers)) raw.homePlayers = [];
-  if (!isPlayerList(raw.awayPlayers)) raw.awayPlayers = [];
-  raw.homeName = raw.homeName || "Home";
-  raw.awayName = raw.awayName || "Away";
-  raw.homeGrade = raw.homeGrade || "C";
-  raw.awayGrade = raw.awayGrade || "C";
-  raw.yellows = raw.yellows || {};
-  raw.sentOff = raw.sentOff || {};
-  raw.stats = raw.stats || {
-    home: { goals: raw.scoreHome || 0 },
-    away: { goals: raw.scoreAway || 0 },
-  };
-  if (!raw.timing) {
-    raw.timing = getTiming(raw.pace || "normal");
-  }
-  // If players missing/corrupt, reload lineup from fixture
-  if ((!isPlayerList(raw.homePlayers) || !isPlayerList(raw.awayPlayers)) && app) {
-    try {
-      var fx = app.findRecordById("shared_fixtures", ms.get("fixture"));
-      if (!isPlayerList(raw.homePlayers)) {
-        raw.homePlayers = parseJson(fx.get("home_lineup_json"), []) || [];
-      }
-      if (!isPlayerList(raw.awayPlayers)) {
-        raw.awayPlayers = parseJson(fx.get("away_lineup_json"), []) || [];
-      }
-      try {
-        var ht = app.findRecordById("proball_teams", fx.get("home_team"));
-        var at = app.findRecordById("proball_teams", fx.get("away_team"));
-        raw.homeName = raw.homeName || ht.get("name");
-        raw.awayName = raw.awayName || at.get("name");
-        raw.homeGrade = raw.homeGrade || ht.get("grade");
-        raw.awayGrade = raw.awayGrade || at.get("grade");
-        raw.homeId = raw.homeId || ht.id;
-        raw.awayId = raw.awayId || at.id;
-      } catch (_) {}
-    } catch (_) {}
-  }
-  // Reconstruct flags from sim minute so stuck matches can finish
-  if (raw.simMinute >= 45) raw.halfTimeDone = raw.halfTimeDone || true;
-  if (raw.simMinute >= 90) raw.secondHalfDone = raw.secondHalfDone || true;
-  if (raw.events && raw.events.length) raw.kickoffDone = true;
-  if (raw.seq == null) {
-    var maxSeq = 0;
-    for (var ei = 0; ei < (raw.events || []).length; ei++) {
-      if ((raw.events[ei].seq || 0) > maxSeq) maxSeq = raw.events[ei].seq;
-    }
-    raw.seq = maxSeq;
-  }
-  return raw;
-}
-
-/**
- * Advance due segments for all live match_states. Idempotent.
- */
-function advanceDueMatches($app, world, limit) {
-  limit = limit || 40;
-  var now = Date.now();
-  var due = $app.findRecordsByFilter(
-    "match_states",
-    'finalised = false && next_segment_due_at <= {:n}',
-    "next_segment_due_at",
-    limit,
-    0,
-    { n: toPbDate(new Date(now + 500)) },
-  );
-  // Also find any with empty next or past
-  if (!due || !due.length) {
-    due = $app.findRecordsByFilter(
-      "match_states",
-      "finalised = false",
-      "next_segment_due_at",
-      limit,
-      0,
-    );
-  }
-
-  var advanced = 0;
-
-  for (var i = 0; i < (due || []).length; i++) {
-    var ms = due[i];
-    if (ms.get("finalised")) continue;
-    var nextDue = parsePbDate(ms.get("next_segment_due_at"));
-    if (!isNaN(nextDue) && nextDue > now + 50) continue;
-
-    try {
-      var segMsRow = segmentRealMsForMatch(world, ms);
-      if (advanceOneMatch($app, ms, world, segMsRow)) advanced++;
-    } catch (err) {
-      console.log("[footfive] advance match " + ms.id + ": " + err);
-    }
-  }
-  return advanced;
-}
-
-function advanceOneMatch($app, ms, world, segMs) {
-  var version = ms.get("processing_version") || 0;
-  var segIndex = ms.get("segment_index") || 0;
-  var segKey = ms.get("fixture") + ":seg:" + (segIndex + 1);
-  if (segMs == null || !(segMs > 0)) {
-    segMs = segmentRealMsForMatch(world, ms);
-  }
-
-  if (ms.get("last_segment_key") === segKey) {
-    // already processed this segment id
-    return false;
-  }
-
-  var events = loadEventsFromDb($app, ms.id);
-  if (!events.length) events = filterEvents(parseJson(ms.get("events_json"), []));
-  var state = hydrateState(ms, events, $app);
-  if (!state.homePlayers.length || !state.awayPlayers.length) {
-    console.log("[footfive] skip advance — missing players for " + ms.id);
-    return false;
-  }
-
-  // Lock timing to kickoff snapshot so admin speed changes do not rewrite live clocks
-  var snapMs = parseInt(ms.get("match_minute_real_ms"), 10);
-  if (!isNaN(snapMs) && snapMs > 0) {
-    state.timing = getTiming(state.pace || "normal", snapMs);
-    state.timing.matchMinuteRealMs = snapMs;
-  } else if (state.timing && state.timing.matchMinuteRealMs) {
-    // persist snapshot for legacy live matches once
-    try {
-      ms.set("match_minute_real_ms", state.timing.matchMinuteRealMs);
-      $app.save(ms);
-    } catch (_) {}
-  }
-
-  var result = advanceSegment(state, {
-    homeCoaching: ms.get("home_coaching") || "balanced",
-    awayCoaching: ms.get("away_coaching") || "balanced",
+/** Atomic claim with the betting-conflict rule. */
+function claimTeam($app, userId, teamId) {
+  var result = null;
+  $app.runInTransaction(function (tx) {
+    var team = tx.findRecordById("proball_teams", teamId);
+    if (getManagerTeam(tx, userId)) throw new BadRequestError("You already manage a team");
+    if (team.get("manager")) throw new BadRequestError("Someone already manages " + team.get("name"));
+    var conflict = betMod.claimConflict(tx, userId, teamId);
+    if (conflict) throw new BadRequestError(conflict);
+    team.set("manager", userId);
+    team.set("manager_mode", "manual");
+    tx.save(team);
+    result = team;
   });
-
-  var started = parsePbDate(ms.get("started_at"));
-  if (isNaN(started)) started = Date.now();
-  var nextDue = Date.now() + segMs;
-  // Align to started + segment_index * segMs for determinism
-  var aligned = started + state.segmentIndex * segMs;
-  if (aligned > Date.now()) nextDue = aligned;
-  else nextDue = Date.now() + 50;
-
-  $app.runInTransaction(function (txApp) {
-    var fresh = txApp.findRecordById("match_states", ms.id);
-    if (fresh.get("finalised")) return;
-    if ((fresh.get("processing_version") || 0) !== version) return;
-    if (fresh.get("last_segment_key") === segKey) return;
-
-    fresh.set("processing_version", version + 1);
-    fresh.set("phase", state.phase);
-    fresh.set("sim_minute", state.simMinute);
-    fresh.set("score_home", state.scoreHome);
-    fresh.set("score_away", state.scoreAway);
-    fresh.set("shootout_home", state.shootoutHome);
-    fresh.set("shootout_away", state.shootoutAway);
-    fresh.set("state_json", safeJson(stripEvents(state)));
-    fresh.set("events_json", safeJson(state.events));
-    fresh.set("stats_json", safeJson(state.stats));
-    fresh.set("segment_index", state.segmentIndex);
-    fresh.set("last_segment_key", segKey);
-    fresh.set("last_processed_at", toPbDate(new Date()));
-    fresh.set("next_segment_due_at", toPbDate(nextDue));
-    fresh.set("finalised", !!state.finalised);
-    if (state.finalised && state.winnerSide) {
-      var fx = txApp.findRecordById("shared_fixtures", fresh.get("fixture"));
-      var winnerId =
-        state.winnerSide === "home" ? fx.get("home_team") : fx.get("away_team");
-      fresh.set("winner_team", winnerId);
-      fx.set("status", "finished");
-      fx.set("winner_team", winnerId);
-      txApp.save(fx);
-    }
-    txApp.save(fresh);
-  });
-
-  return true;
-}
-
-function lockBetsForFixture($app, fixtureId) {
   try {
-    var bets = $app.findRecordsByFilter(
-      "shared_bets",
-      'fixture = {:f} && status = "open"',
-      "",
-      200,
-      0,
-      { f: fixtureId },
-    );
-    for (var i = 0; i < (bets || []).length; i++) {
-      bets[i].set("status", "locked");
-      $app.save(bets[i]);
-    }
+    var col = $app.findCollectionByNameOrId("admin_audit_logs");
+    var a = new Record(col);
+    a.set("admin", userId);
+    a.set("action", "team_claim");
+    a.set("target_type", "proball_teams");
+    a.set("target_id", teamId);
+    a.set("meta", {});
+    $app.save(a);
   } catch (_) {}
-}
-
-function settleBetsForFixture($app, fixture, winnerTeamId) {
-  var bets;
-  try {
-    bets = $app.findRecordsByFilter(
-      "shared_bets",
-      "fixture = {:f} && settled != true",
-      "",
-      200,
-      0,
-      { f: fixture.id },
-    );
-  } catch (_) {
-    return;
-  }
-  for (var i = 0; i < (bets || []).length; i++) {
-    settleOneBet($app, bets[i], winnerTeamId);
-  }
-}
-
-function settleOneBet($app, bet, winnerTeamId) {
-  var key = bet.id + ":settle:v1";
-  if (bet.get("settled") || bet.get("settlement_key") === key) return;
-
-  $app.runInTransaction(function (txApp) {
-    var fresh = txApp.findRecordById("shared_bets", bet.id);
-    if (fresh.get("settled")) return;
-    var stake = fresh.get("stake") || 0;
-    var odds = fresh.get("odds") || 1;
-    var won = fresh.get("selection_team") === winnerTeamId;
-    var userId = fresh.get("user");
-    var user = txApp.findRecordById("users", userId);
-    var credits = user.get("credits") || 0;
-
-    if (won) {
-      var payout = Math.floor(stake * odds);
-      user.set("credits", credits + payout);
-      txApp.save(user);
-      writeTx(txApp, userId, "bet_win", payout, "Bet win " + fresh.id, key + ":win");
-      fresh.set("status", "won");
-    } else {
-      fresh.set("status", "lost");
-      writeTx(txApp, userId, "bet_loss", 0, "Bet lost " + fresh.id, key + ":loss");
-    }
-    fresh.set("settled", true);
-    fresh.set("settlement_key", key);
-    txApp.save(fresh);
-  });
-}
-
-function writeTx(txApp, userId, type, amount, description, idem) {
-  try {
-    var col = txApp.findCollectionByNameOrId("credit_ledger");
-    var rec = new Record(col);
-    rec.set("user", userId);
-    rec.set("type", type);
-    rec.set("amount", amount);
-    rec.set("description", description);
-    rec.set("idempotency_key", idem);
-    txApp.save(rec);
-  } catch (err) {
-    console.log("[footfive] writeTx: " + err);
-  }
-}
-
-function completeRoundIfReady($app, round, world) {
-  if (round.get("progression_done") || round.get("status") === "completed") {
-    return { skipped: true };
-  }
-  var fixtures = $app.findRecordsByFilter(
-    "shared_fixtures",
-    "round = {:r}",
-    "bracket_index",
-    20,
-    0,
-    { r: round.id },
-  );
-  if (!fixtures.length) return { waiting: true };
-
-  var allDone = true;
-  var winnersBySlot = {};
-  for (var i = 0; i < fixtures.length; i++) {
-    var fx = fixtures[i];
-    var msRows = $app.findRecordsByFilter(
-      "match_states",
-      "fixture = {:f}",
-      "",
-      1,
-      0,
-      { f: fx.id },
-    );
-    if (!msRows.length || !msRows[0].get("finalised")) {
-      allDone = false;
-      break;
-    }
-    winnersBySlot[fx.get("slot")] = msRows[0].get("winner_team");
-  }
-  if (!allDone) return { waiting: true };
-
-  $app.runInTransaction(function (txApp) {
-    var fresh = txApp.findRecordById("shared_rounds", round.id);
-    if (fresh.get("progression_done")) return;
-
-    for (var j = 0; j < fixtures.length; j++) {
-      var f = txApp.findRecordById("shared_fixtures", fixtures[j].id);
-      var ms = txApp.findRecordsByFilter(
-        "match_states",
-        "fixture = {:f}",
-        "",
-        1,
-        0,
-        { f: f.id },
-      )[0];
-      if (!ms || ms.get("progression_settled")) continue;
-
-      var winnerId = ms.get("winner_team");
-      var homeId = f.get("home_team");
-      var awayId = f.get("away_team");
-      var hs = ms.get("score_home") || 0;
-      var as_ = ms.get("score_away") || 0;
-      var wentSo =
-        (ms.get("shootout_home") || 0) + (ms.get("shootout_away") || 0) > 0;
-      var drawFT = hs === as_;
-
-      var stJson = parseJson(ms.get("state_json"), {});
-      var wentEt = !!stJson.wentExtraTime;
-      var homeWon = winnerId === homeId;
-      var awayWon = winnerId === awayId;
-      updateTeamRecord(txApp, homeId, {
-        played: 1,
-        wins: !drawFT && homeWon ? 1 : 0,
-        draws: drawFT ? 1 : 0,
-        losses: !drawFT && !homeWon ? 1 : 0,
-        goals_for: hs,
-        goals_against: as_,
-        shootout_wins: wentSo && homeWon ? 1 : 0,
-        shootout_losses: wentSo && !homeWon ? 1 : 0,
-        normal_time_wins: !drawFT && homeWon && !wentEt && !wentSo ? 1 : 0,
-        extra_time_wins: homeWon && wentEt && !wentSo ? 1 : 0,
-        finals_reached: fresh.get("round_key") === "final" ? 1 : 0,
-      });
-      updateTeamRecord(txApp, awayId, {
-        played: 1,
-        wins: !drawFT && awayWon ? 1 : 0,
-        draws: drawFT ? 1 : 0,
-        losses: !drawFT && !awayWon ? 1 : 0,
-        goals_for: as_,
-        goals_against: hs,
-        shootout_wins: wentSo && awayWon ? 1 : 0,
-        shootout_losses: wentSo && !awayWon ? 1 : 0,
-        normal_time_wins: !drawFT && awayWon && !wentEt && !wentSo ? 1 : 0,
-        extra_time_wins: awayWon && wentEt && !wentSo ? 1 : 0,
-        finals_reached: fresh.get("round_key") === "final" ? 1 : 0,
-      });
-
-      var loserId = winnerId === homeId ? awayId : homeId;
-      try {
-        var loser = txApp.findRecordById("proball_teams", loserId);
-        loser.set("eliminated", true);
-        txApp.save(loser);
-      } catch (_) {}
-
-      ms.set("progression_settled", true);
-      txApp.save(ms);
-      f.set("status", "finished");
-      f.set("winner_team", winnerId);
-      txApp.save(f);
-    }
-
-    fresh.set("status", "completed");
-    fresh.set("progression_done", true);
-    fresh.set("completed_at", toPbDate(new Date()));
-    txApp.save(fresh);
-  });
-
-  // Settle bets, rewards, player wear outside tight path
-  var tournament = $app.findRecordById(
-    "shared_tournaments",
-    round.get("tournament"),
-  );
-  var roundKey = round.get("round_key");
-  for (var b = 0; b < fixtures.length; b++) {
-    var fx2 = fixtures[b];
-    var w = winnersBySlot[fx2.get("slot")];
-    if (w) settleBetsForFixture($app, fx2, w);
-    try {
-      var msR = $app.findRecordsByFilter(
-        "match_states",
-        "fixture = {:f}",
-        "",
-        1,
-        0,
-        { f: fx2.id },
-      );
-      if (msR && msR.length) {
-        mgmtMod.rewardFixture($app, fx2, msR[0], tournament.id, roundKey);
-        // Persist wear from state players
-        var st = parseJson(msR[0].get("state_json"), {});
-        if (st.homePlayers) {
-          mgmtMod.applyPostMatchPlayerWear($app, fx2.get("home_team"), st.homePlayers);
-        }
-        if (st.awayPlayers) {
-          mgmtMod.applyPostMatchPlayerWear($app, fx2.get("away_team"), st.awayPlayers);
-        }
-        var loserId =
-          w === fx2.get("home_team") ? fx2.get("away_team") : fx2.get("home_team");
-        if (loserId) {
-          mgmtMod.rewardElimination($app, loserId, roundKey, tournament.id);
-        }
-        try {
-          var sumRes = recMod.ensureMatchSummary(
-            $app,
-            fx2,
-            msR[0],
-            roundKey,
-            tournament.id,
-          );
-          if (sumRes && sumRes.created) {
-            recMod.settlePlayerRecordsFromMatch($app, fx2, msR[0]);
-          }
-        } catch (err2) {
-          console.log("[footfive] match summary: " + err2);
-        }
-      }
-    } catch (err) {
-      console.log("[footfive] reward/wear: " + err);
-    }
-  }
-
-  var pace = world.get("pace") || "normal";
-  var timing = getTiming(pace);
-  var nextKey = nextRoundKey(round.get("round_key"));
-  var nextAt = new Date(Date.now() + effectiveRoundIntervalMs(world));
-
-  if (nextKey) {
-    createRound($app, tournament, nextKey, null, winnersBySlot, nextAt, pace);
-    tournament.set("current_round", nextKey);
-    $app.save(tournament);
-    world.set("next_action_at", toPbDate(nextAt));
-    $app.save(world);
-    // AI prep for next round
-    try {
-      var allTeams = $app.findRecordsByFilter("proball_teams", "id != ''", "", 20, 0);
-      for (var ai = 0; ai < allTeams.length; ai++) {
-        mgmtMod.aiMaintainTeam($app, allTeams[ai], world);
-      }
-    } catch (_) {}
-  } else {
-    var finalFx = fixtures[0];
-    var champ = finalFx ? finalFx.get("winner_team") : null;
-    tournament.set("status", "complete");
-    tournament.set("current_round", "complete");
-    if (champ) {
-      tournament.set("champion_team", champ);
-      try {
-        updateTeamRecord($app, champ, { championships: 1 });
-        mgmtMod.rewardChampion($app, champ, tournament.id);
-        recMod.awardChampionshipPlayers($app, champ);
-      } catch (_) {}
-    }
-    $app.save(tournament);
-    try {
-      recMod.ensureTournamentSummary($app, tournament, fixtures);
-    } catch (err3) {
-      console.log("[footfive] tournament summary: " + err3);
-    }
-    var tourneyAt = new Date(Date.now() + timing.tournamentIntervalMs);
-    world.set("next_action_at", toPbDate(tourneyAt));
-    $app.save(world);
-  }
-
-  return { completed: true, next: nextKey };
-}
-
-function updateTeamRecord(appOrTx, teamId, patch) {
-  var rows = appOrTx.findRecordsByFilter(
-    "global_team_records",
-    "team = {:t}",
-    "",
-    1,
-    0,
-    { t: teamId },
-  );
-  if (!rows || !rows.length) return;
-  var rec = rows[0];
-  for (var k in patch) {
-    if (Object.prototype.hasOwnProperty.call(patch, k)) {
-      rec.set(k, (rec.get(k) || 0) + patch[k]);
-    }
-  }
-  appOrTx.save(rec);
-}
-
-/**
- * Repair scheduled_at when missing/invalid on a non-started round.
- */
-function repairRoundSchedule($app, round, world) {
-  if (!round) return { skipped: true };
-  var st = round.get("status");
-  if (st === "live" || st === "completed") return { skipped: true, reason: "already_started" };
-  var scheduled = parsePbDate(round.get("scheduled_at"));
-  if (!isNaN(scheduled) && scheduled > 0) return { ok: true, repaired: false, scheduledAt: round.get("scheduled_at") };
-
-  var waitMs = effectiveRoundIntervalMs(world);
-  var when = new Date(Date.now() + waitMs);
-  round.set("scheduled_at", toPbDate(when));
-  $app.save(round);
-  var fixtures = $app.findRecordsByFilter(
-    "shared_fixtures",
-    "round = {:r}",
-    "",
-    20,
-    0,
-    { r: round.id },
-  );
-  for (var i = 0; i < (fixtures || []).length; i++) {
-    if (fixtures[i].get("status") === "scheduled") {
-      fixtures[i].set("scheduled_at", toPbDate(when));
-      $app.save(fixtures[i]);
-    }
-  }
-  world.set("next_action_at", toPbDate(when));
-  $app.save(world);
-  console.log(
-    "[footfive-json] " +
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        level: "info",
-        event: "round_schedule_repaired",
-        app: "footfive",
-        roundId: round.id,
-        scheduledAt: toPbDate(when),
-      }),
-  );
-  return { ok: true, repaired: true, scheduledAt: toPbDate(when) };
-}
-
-/**
- * Admin: reschedule waiting (not live) round using between_round_minutes.
- */
-function applyBetweenRoundToWaiting($app, adminId, reason) {
-  var world = ensureWorld($app);
-  var round = getActiveRound($app);
-  if (!round) throw new BadRequestError("No active round");
-  var st = round.get("status");
-  if (st === "live" || st === "completed") {
-    throw new BadRequestError("Cannot reschedule a live or completed round");
-  }
-  var liveFx = $app.findRecordsByFilter(
-    "shared_fixtures",
-    'round = {:r} && status = "live"',
-    "",
-    1,
-    0,
-    { r: round.id },
-  );
-  if (liveFx && liveFx.length) {
-    throw new BadRequestError("Fixtures already live");
-  }
-  var waitMs = effectiveRoundIntervalMs(world);
-  var when = new Date(Date.now() + waitMs);
-  var before = { scheduled_at: round.get("scheduled_at") };
-  round.set("scheduled_at", toPbDate(when));
-  $app.save(round);
-  var fixtures = $app.findRecordsByFilter(
-    "shared_fixtures",
-    "round = {:r}",
-    "",
-    20,
-    0,
-    { r: round.id },
-  );
-  for (var i = 0; i < (fixtures || []).length; i++) {
-    fixtures[i].set("scheduled_at", toPbDate(when));
-    $app.save(fixtures[i]);
-  }
-  world.set("next_action_at", toPbDate(when));
-  $app.save(world);
-  try {
-    audit($app, adminId, "round_reschedule", "shared_rounds", round.id, {
-      before: before,
-      scheduledAt: toPbDate(when),
-      betweenRoundMinutes: world.get("between_round_minutes"),
-      reason: reason || "",
-    });
-  } catch (_) {}
-  return {
-    ok: true,
-    roundId: round.id,
-    scheduledAt: toPbDate(when),
-    betweenRoundMinutes: world.get("between_round_minutes") || 3,
-  };
-}
-
-/**
- * Full world catch-up: kickoff due rounds, advance segments, complete rounds, restart tournaments.
- */
-function catchUpWorld($app) {
-  var world = ensureWorld($app);
-  var actions = [];
-  if (world.get("progression_paused")) {
-    return { ok: true, paused: true, actions: [] };
-  }
-
-  // Backfill between_round_minutes if missing
-  if (world.get("between_round_minutes") == null || world.get("between_round_minutes") === 0) {
-    try {
-      world.set("between_round_minutes", 3);
-      if (!world.get("round_interval_ms") || world.get("round_interval_ms") < 60000) {
-        world.set("round_interval_ms", 3 * 60 * 1000);
-      }
-      $app.save(world);
-      world = ensureWorld($app);
-      actions.push({ backfillBetweenRoundMinutes: 3 });
-    } catch (_) {}
-  }
-  // Backfill match speed to official 15s/min when missing or legacy turbo-only
-  var secField = parseInt(world.get("match_minute_real_seconds"), 10);
-  if (isNaN(secField) || secField < 1) {
-    try {
-      world.set("match_minute_real_seconds", 15);
-      world.set("match_minute_real_ms", 15000);
-      $app.save(world);
-      world = ensureWorld($app);
-      actions.push({ backfillMatchMinuteSeconds: 15 });
-    } catch (_) {}
-  }
-
-  // New tournament if none active and next_action due
-  var active = getActiveTournament($app);
-  if (!active) {
-    var nextAt = parsePbDate(world.get("next_action_at"));
-    if (isNaN(nextAt) || Date.now() >= nextAt) {
-      createTournament($app, world);
-      actions.push({ tournamentCreated: true });
-      active = getActiveTournament($app);
-    }
-  }
-
-  if (active) {
-    var rounds = $app.findRecordsByFilter(
-      "shared_rounds",
-      "tournament = {:t}",
-      "-created",
-      10,
-      0,
-      { t: active.id },
-    );
-    for (var i = 0; i < (rounds || []).length; i++) {
-      var r = rounds[i];
-      var st = r.get("status");
-      if (st === "scheduled" || st === "management") {
-        var repaired = repairRoundSchedule($app, r, world);
-        if (repaired && repaired.repaired) actions.push({ scheduleRepair: repaired });
-        r = $app.findRecordById("shared_rounds", r.id);
-        var ko = kickOffRound($app, r, world);
-        actions.push({ kickoff: ko, round: r.get("round_key") });
-        r = $app.findRecordById("shared_rounds", r.id);
-        st = r.get("status");
-      }
-      if (st === "live") {
-        var n = advanceDueMatches($app, world, 80);
-        actions.push({ advanced: n });
-        var done = completeRoundIfReady($app, r, world);
-        actions.push({ complete: done });
-      }
-    }
-  }
-
-  // Always advance any live matches (stuck recovery included via advanceSegment)
-  var n2 = advanceDueMatches($app, world, 80);
-  if (n2) actions.push({ advancedExtra: n2 });
-
-  return { ok: true, actions: actions };
-}
-
-function getActiveRound($app) {
-  var t = getActiveTournament($app);
-  if (!t) return null;
-  var rounds = $app.findRecordsByFilter(
-    "shared_rounds",
-    'tournament = {:t} && status != "completed"',
-    "-created",
-    5,
-    0,
-    { t: t.id },
-  );
-  if (rounds && rounds.length) {
-    for (var i = 0; i < rounds.length; i++) {
-      var s = rounds[i].get("status");
-      if (s === "live" || s === "scheduled" || s === "management") return rounds[i];
-    }
-    return rounds[0];
-  }
-  var done = $app.findRecordsByFilter(
-    "shared_rounds",
-    "tournament = {:t}",
-    "-created",
-    1,
-    0,
-    { t: t.id },
-  );
-  return done && done.length ? done[0] : null;
-}
-
-function buildScoreboard($app) {
-  catchUpWorld($app);
-  var round = getActiveRound($app);
-  var serverNow = Date.now();
-  if (!round) {
-    return {
-      serverTime: new Date(serverNow).toISOString(),
-      serverTimeMs: serverNow,
-      round: null,
-      fixtures: [],
-    };
-  }
-
-  var fixtures = $app.findRecordsByFilter(
-    "shared_fixtures",
-    "round = {:r}",
-    "bracket_index",
-    20,
-    0,
-    { r: round.id },
-  );
-  var items = [];
-  for (var j = 0; j < fixtures.length; j++) {
-    var fx = fixtures[j];
-    var home = $app.findRecordById("proball_teams", fx.get("home_team"));
-    var away = $app.findRecordById("proball_teams", fx.get("away_team"));
-    var entry = {
-      fixtureId: fx.id,
-      slot: fx.get("slot"),
-      bracketIndex: fx.get("bracket_index"),
-      home: teamPublic(home),
-      away: teamPublic(away),
-      scheduledAt: fx.get("scheduled_at"),
-      status: "scheduled",
-      scoreHome: 0,
-      scoreAway: 0,
-      shootoutHome: 0,
-      shootoutAway: 0,
-      minute: 0,
-      phase: "scheduled",
-      finished: false,
-    };
-
-    var msRows = $app.findRecordsByFilter(
-      "match_states",
-      "fixture = {:f}",
-      "",
-      1,
-      0,
-      { f: fx.id },
-    );
-    if (msRows && msRows.length) {
-      var match = msRows[0];
-      // Advance this match if due before reading
-      try {
-        var world = ensureWorld($app);
-        var nd = parsePbDate(match.get("next_segment_due_at"));
-        if (!match.get("finalised") && (isNaN(nd) || nd <= serverNow)) {
-          advanceOneMatch($app, match, world, segmentRealMsForMatch(world, match));
-          match = $app.findRecordById("match_states", match.id);
-        }
-      } catch (_) {}
-
-      var started = parsePbDate(match.get("started_at"));
-      var elapsed = isNaN(started) ? 0 : serverNow - started;
-      var events = loadEventsFromDb($app, match.id);
-      if (!events.length) events = filterEvents(parseJson(match.get("events_json"), []));
-      var vis = reconstructVisible(events, elapsed);
-      entry.matchMinuteRealMs =
-        parseInt(match.get("match_minute_real_ms"), 10) || effectiveMatchMinuteMs(world);
-      // Prefer reconstructed scores; fall back to authoritative DB fields when events empty
-      entry.scoreHome = events.length ? vis.scoreHome : match.get("score_home") || 0;
-      entry.scoreAway = events.length ? vis.scoreAway : match.get("score_away") || 0;
-      entry.shootoutHome = events.length ? vis.shootoutHome : match.get("shootout_home") || 0;
-      entry.shootoutAway = events.length ? vis.shootoutAway : match.get("shootout_away") || 0;
-      entry.minute = events.length ? vis.minute : match.get("sim_minute") || 0;
-      entry.phase = events.length ? vis.phase : match.get("phase") || "live";
-      entry.status = match.get("finalised")
-        ? "finished"
-        : events.length
-          ? vis.status
-          : "live";
-      entry.finished = vis.finished || !!match.get("finalised");
-      if (entry.finished) entry.winnerTeamId = match.get("winner_team");
-      entry.homeCoaching = match.get("home_coaching");
-      entry.awayCoaching = match.get("away_coaching");
-    }
-    items.push(entry);
-  }
-
-  var worldSb = ensureWorld($app);
-  return {
-    serverTime: new Date(serverNow).toISOString(),
-    serverTimeMs: serverNow,
-    betweenRoundMinutes: worldSb.get("between_round_minutes") || 3,
-    matchMinuteRealSeconds:
-      parseInt(worldSb.get("match_minute_real_seconds"), 10) || 15,
-    matchMinuteRealMs: effectiveMatchMinuteMs(worldSb),
-    round: {
-      id: round.id,
-      key: round.get("round_key"),
-      label: round.get("label"),
-      status: round.get("status"),
-      scheduledAt: round.get("scheduled_at"),
-      startedAt: round.get("started_at"),
-      announceKey: round.get("announce_key") || "",
-      announcedAt: round.get("announced_at") || "",
-      matchMinuteRealMs: parseInt(round.get("match_minute_real_ms"), 10) || null,
-    },
-    fixtures: items,
-  };
-}
-
-function buildMatchView($app, fixtureId, sinceSeq, userId) {
-  catchUpWorld($app);
-  var fx = $app.findRecordById("shared_fixtures", fixtureId);
-  var home = $app.findRecordById("proball_teams", fx.get("home_team"));
-  var away = $app.findRecordById("proball_teams", fx.get("away_team"));
-  var serverNow = Date.now();
-
-  var msRows = $app.findRecordsByFilter(
-    "match_states",
-    "fixture = {:f}",
-    "",
-    1,
-    0,
-    { f: fixtureId },
-  );
-
-  var managedSide = null;
-  if (userId) {
-    if (home.get("manager") === userId) managedSide = "home";
-    if (away.get("manager") === userId) managedSide = "away";
-  }
-
-  if (!msRows || !msRows.length) {
-    return {
-      serverTime: new Date(serverNow).toISOString(),
-      serverTimeMs: serverNow,
-      fixtureId: fixtureId,
-      home: teamPublic(home),
-      away: teamPublic(away),
-      status: "scheduled",
-      scoreHome: 0,
-      scoreAway: 0,
-      shootoutHome: 0,
-      shootoutAway: 0,
-      minute: 0,
-      phase: "scheduled",
-      events: [],
-      newEvents: [],
-      lastSeq: 0,
-      finished: false,
-      stats: null,
-      managedSide: managedSide,
-      homeCoaching: "balanced",
-      awayCoaching: "balanced",
-      canCoach: false,
-    };
-  }
-
-  var match = msRows[0];
-  try {
-    var world = ensureWorld($app);
-    var nd = parsePbDate(match.get("next_segment_due_at"));
-    if (!match.get("finalised") && (isNaN(nd) || nd <= serverNow)) {
-      advanceOneMatch($app, match, world, segmentRealMsForMatch(world, match));
-      match = $app.findRecordById("match_states", match.id);
-    }
-  } catch (_) {}
-
-  var started = parsePbDate(match.get("started_at"));
-  var elapsed = isNaN(started) ? 0 : serverNow - started;
-  var events = loadEventsFromDb($app, match.id);
-  if (!events.length) events = filterEvents(parseJson(match.get("events_json"), []));
-  var vis = reconstructVisible(events, elapsed, { sinceSeq: sinceSeq || 0 });
-  var newEvents = sinceSeq
-    ? events.filter(function (e) {
-        return (e.offsetMs || 0) <= elapsed && (e.seq || 0) > sinceSeq;
-      })
-    : vis.events;
-
-  var finished = vis.finished || !!match.get("finalised");
-  var stateRaw = parseJson(match.get("state_json"), {});
-  if (!stateRaw || typeof stateRaw !== "object" || Array.isArray(stateRaw)) stateRaw = {};
-  var kicks = stateRaw.shootoutKicks || [];
-  // Prefer event reconstruction; fall back to DB columns when events empty (legacy stuck)
-  var useDb = !events.length;
-  var scoreHome = useDb ? match.get("score_home") || 0 : vis.scoreHome;
-  var scoreAway = useDb ? match.get("score_away") || 0 : vis.scoreAway;
-  var minute = useDb ? match.get("sim_minute") || 0 : vis.minute;
-  var phase = useDb ? match.get("phase") || "live" : vis.phase;
-  var status = finished
-    ? "finished"
-    : useDb
-      ? match.get("finalised")
-        ? "finished"
-        : "live"
-      : vis.status;
-  var speedMs =
-    parseInt(match.get("match_minute_real_ms"), 10) ||
-    (stateRaw.timing && stateRaw.timing.matchMinuteRealMs) ||
-    effectiveMatchMinuteMs(ensureWorld($app));
-
-  return {
-    serverTime: new Date(serverNow).toISOString(),
-    serverTimeMs: serverNow,
-    fixtureId: fixtureId,
-    matchMinuteRealMs: speedMs,
-    home: teamPublic(home),
-    away: teamPublic(away),
-    status: status,
-    scoreHome: scoreHome,
-    scoreAway: scoreAway,
-    shootoutHome: useDb ? match.get("shootout_home") || 0 : vis.shootoutHome,
-    shootoutAway: useDb ? match.get("shootout_away") || 0 : vis.shootoutAway,
-    shootoutTakenHome: stateRaw.shootoutTakenHome || 0,
-    shootoutTakenAway: stateRaw.shootoutTakenAway || 0,
-    shootoutSide: stateRaw.shootoutSide || null,
-    shootoutKicks: finished || phase === "shootout" || status === "shootout" ? kicks : [],
-    minute: minute,
-    phase: phase,
-    events: useDb
-      ? [
-          {
-            seq: 1,
-            minute: 0,
-            phase: "first_half",
-            offsetMs: 0,
-            type: "kickoff",
-            team: "home",
-            player: null,
-            message: "Match in progress (recovered).",
-            scoreHome: scoreHome,
-            scoreAway: scoreAway,
-            shootoutHome: 0,
-            shootoutAway: 0,
-          },
-        ]
-      : vis.events,
-    newEvents: useDb ? [] : newEvents,
-    lastSeq: useDb ? 1 : vis.lastSeq,
-    finished: finished,
-    caughtUp: true,
-    stats: finished ? parseJson(match.get("stats_json"), null) : null,
-    winnerTeamId: finished ? match.get("winner_team") : null,
-    managedSide: managedSide,
-    homeCoaching: match.get("home_coaching") || "balanced",
-    awayCoaching: match.get("away_coaching") || "balanced",
-    canCoach:
-      !!managedSide &&
-      !finished &&
-      (status === "live" ||
-        status === "extra_time" ||
-        status === "half_time" ||
-        status === "shootout"),
-  };
-}
-
-function setCoaching($app, userId, fixtureId, stance) {
-  if (["defend", "balanced", "attack"].indexOf(stance) < 0) {
-    throw new BadRequestError("Invalid stance");
-  }
-  var fx = $app.findRecordById("shared_fixtures", fixtureId);
-  var home = $app.findRecordById("proball_teams", fx.get("home_team"));
-  var away = $app.findRecordById("proball_teams", fx.get("away_team"));
-  var side = null;
-  if (home.get("manager") === userId) side = "home";
-  if (away.get("manager") === userId) side = "away";
-  if (!side) throw new ForbiddenError("You do not manage a team in this fixture");
-
-  var msRows = $app.findRecordsByFilter(
-    "match_states",
-    "fixture = {:f}",
-    "",
-    1,
-    0,
-    { f: fixtureId },
-  );
-  if (!msRows.length) throw new BadRequestError("Match not started");
-  var ms = msRows[0];
-  if (ms.get("finalised")) throw new BadRequestError("Match finished");
-
-  // Cooldown: last command for this team/fixture
-  var world = ensureWorld($app);
-  var timing = getTiming(world.get("pace") || "dev");
-  var recent = $app.findRecordsByFilter(
-    "coaching_commands",
-    "fixture = {:f} && team = {:t}",
-    "-created",
-    1,
-    0,
-    {
-      f: fixtureId,
-      t: side === "home" ? home.id : away.id,
-    },
-  );
-  if (recent && recent.length) {
-    var last = parsePbDate(recent[0].get("created"));
-    if (!isNaN(last) && Date.now() - last < timing.coachingCooldownMs) {
-      throw new BadRequestError("Coaching cooldown active");
-    }
-  }
-
-  var teamId = side === "home" ? home.id : away.id;
-  var teamName = side === "home" ? home.get("name") : away.get("name");
-  var label =
-    stance === "defend"
-      ? "Defend"
-      : stance === "attack"
-        ? "Attack"
-        : "Balanced";
-  var message =
-    stance === "defend"
-      ? teamName + " drop into a defensive shape."
-      : stance === "attack"
-        ? teamName + " switch to Attack."
-        : teamName + " return to a balanced setup.";
-
-  if (side === "home") ms.set("home_coaching", stance);
-  else ms.set("away_coaching", stance);
-  $app.save(ms);
-
-  var col = $app.findCollectionByNameOrId("coaching_commands");
-  var cmd = new Record(col);
-  cmd.set("fixture", fixtureId);
-  cmd.set("team", teamId);
-  cmd.set("user", userId);
-  cmd.set("stance", stance);
-  cmd.set("effective_from_minute", (ms.get("sim_minute") || 0) + 1);
-  cmd.set("segment_index", (ms.get("segment_index") || 0) + 1);
-  $app.save(cmd);
-
-  // Append coaching event for next segment announcement stored now for visibility
-  var events = loadEventsFromDb($app, ms.id);
-  if (!events.length) events = filterEvents(parseJson(ms.get("events_json"), []));
-  var state = hydrateState(ms, events);
-  // Don't advance — just record message as event with current clock for live feed
-  state.seq = events.length ? events[events.length - 1].seq : 0;
-  state.events = events;
-  state.clockMs = events.length ? events[events.length - 1].offsetMs : 0;
-  state.seq += 1;
-  var ev = {
-    seq: state.seq,
-    minute: state.simMinute,
-    phase: state.phase,
-    offsetMs: state.clockMs,
-    type: "coaching_change",
-    team: side,
-    player: null,
-    message: message,
-    scoreHome: state.scoreHome,
-    scoreAway: state.scoreAway,
-    shootoutHome: state.shootoutHome,
-    shootoutAway: state.shootoutAway,
-  };
-  events.push(ev);
-  ms.set("events_json", events);
-  $app.save(ms);
-
-  return { ok: true, stance: stance, side: side, message: message };
-}
-
-function saveLineup($app, userId, teamId, starterIds, subIds) {
-  var team = $app.findRecordById("proball_teams", teamId);
-  if (team.get("manager") !== userId) throw new ForbiddenError("Not your team");
-  return mgmtMod.setLineup($app, userId, starterIds, subIds);
-}
-
-function calcOdds(homeStrength, awayStrength, side) {
-  var diff = homeStrength - awayStrength;
-  if (side === "away") diff = -diff;
-  // positive diff → shorter odds for that side
-  var raw = 2.2 - diff * 0.02;
-  return Math.round(clamp(raw, BALANCE.minOdds, BALANCE.maxOdds) * 100) / 100;
-}
-
-function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, n));
-}
-
-function placeBet($app, userId, fixtureId, selectionTeamId, stake) {
-  stake = parseInt(stake, 10);
-  if (!stake || stake < 1) throw new BadRequestError("Invalid stake");
-
-  var fx = $app.findRecordById("shared_fixtures", fixtureId);
-  if (fx.get("status") === "live" || fx.get("status") === "finished") {
-    throw new BadRequestError("Bets locked for this fixture");
-  }
-  var sched = parsePbDate(fx.get("scheduled_at"));
-  if (!isNaN(sched) && Date.now() >= sched) {
-    throw new BadRequestError("Bets locked — kickoff passed");
-  }
-
-  var managed = getManagerTeam($app, userId);
-  if (
-    managed &&
-    (managed.id === fx.get("home_team") || managed.id === fx.get("away_team"))
-  ) {
-    throw new BadRequestError("Cannot bet on your own fixture");
-  }
-
-  if (
-    selectionTeamId !== fx.get("home_team") &&
-    selectionTeamId !== fx.get("away_team")
-  ) {
-    throw new BadRequestError("Selection must be a team in the fixture");
-  }
-
-  var existing = $app.findRecordsByFilter(
-    "shared_bets",
-    "user = {:u} && fixture = {:f}",
-    "",
-    5,
-    0,
-    { u: userId, f: fixtureId },
-  );
-  if (existing && existing.length) {
-    throw new BadRequestError("You already have a bet on this fixture");
-  }
-
-  var home = $app.findRecordById("proball_teams", fx.get("home_team"));
-  var away = $app.findRecordById("proball_teams", fx.get("away_team"));
-  var side = selectionTeamId === home.id ? "home" : "away";
-  var odds = calcOdds(home.get("strength"), away.get("strength"), side);
-
-  var bet = null;
-  $app.runInTransaction(function (txApp) {
-    var user = txApp.findRecordById("users", userId);
-    var credits = user.get("credits") || 0;
-    if (credits < stake) throw new BadRequestError("Insufficient credits");
-    user.set("credits", credits - stake);
-    txApp.save(user);
-
-    var col = txApp.findCollectionByNameOrId("shared_bets");
-    bet = new Record(col);
-    bet.set("user", userId);
-    bet.set("fixture", fixtureId);
-    bet.set("selection_team", selectionTeamId);
-    bet.set("stake", stake);
-    bet.set("odds", odds);
-    bet.set("status", "open");
-    bet.set("settled", false);
-    txApp.save(bet);
-
-    writeTx(
-      txApp,
-      userId,
-      "bet_stake",
-      -stake,
-      "Bet stake on fixture " + fixtureId,
-      bet.id + ":stake",
-    );
-  });
-
-  return {
-    id: bet.id,
-    stake: stake,
-    odds: odds,
-    selectionTeamId: selectionTeamId,
-    status: "open",
-  };
-}
-
-function listBettingFixtures($app, userId) {
-  var board = buildScoreboard($app);
-  var managed = getManagerTeam($app, userId);
-  var out = [];
-  for (var i = 0; i < (board.fixtures || []).length; i++) {
-    var f = board.fixtures[i];
-    if (f.status !== "scheduled") continue;
-    var own =
-      managed &&
-      (managed.id === f.home.id || managed.id === f.away.id);
-    if (own) continue;
-    out.push({
-      fixtureId: f.fixtureId,
-      home: f.home,
-      away: f.away,
-      scheduledAt: f.scheduledAt,
-      homeOdds: calcOdds(f.home.strength || 60, f.away.strength || 60, "home"),
-      awayOdds: calcOdds(f.home.strength || 60, f.away.strength || 60, "away"),
-    });
-  }
-  return out;
+  return result;
 }
 
 function ensureUserCredits($app, userId) {
@@ -1973,100 +1286,60 @@ function ensureUserCredits($app, userId) {
   return user.get("credits") || 0;
 }
 
-function listTeams($app) {
-  ensureTeams($app);
-  var teams = $app.findRecordsByFilter("proball_teams", "id != ''", "sort_order", 50, 0);
-  var out = [];
-  for (var i = 0; i < teams.length; i++) {
-    var t = teams[i];
-    var managerName = null;
-    if (t.get("manager")) {
-      try {
-        var u = $app.findRecordById("users", t.get("manager"));
-        managerName = u.get("display_name") || "Manager";
-      } catch (_) {
-        managerName = "Manager";
-      }
-    }
-    out.push(teamPublic(t, managerName));
+/** Personal context: wallet, team, next fixture. */
+function worldSnapshot($app, userId) {
+  tickIfDue($app);
+  var world = ensureWorld($app);
+  var T = timing(world);
+  var managed = getManagerTeam($app, userId);
+  var credits = userId ? ensureUserCredits($app, userId) : 0;
+  var t = activeTournament($app);
+  var round = t ? currentRound($app, t.id) : null;
+  if (drawHidden($app, round)) {
+    t = null; // next championship drawn but not announced yet
+    round = null;
   }
-  return out;
+  var next = null;
+  if (managed && t) {
+    var f = one($app, "shared_fixtures", '(home_team = {:t} || away_team = {:t}) && tournament = {:x} && status != "finished"', "-created", { t: managed.id, x: t.id });
+    if (f) {
+      var teams = teamMap($app);
+      var tm = fixtureTeams(f, teams);
+      next = { fixtureId: f.id, status: f.get("status"), kickoffAt: parsePbDate(f.get("scheduled_at")), opponent: f.get("home_team") === managed.id ? tm.away : tm.home, home: f.get("home_team") === managed.id };
+    }
+  }
+  return {
+    serverTimeMs: Date.now(),
+    credits: credits,
+    startingCredits: BALANCE.startingCredits,
+    managedTeam: managed ? Object.assign(teamPublic(managed), { treasury: managed.get("treasury"), battery_count: managed.get("battery_count") || 0, default_stance: managed.get("default_stance") || "balanced" }) : null,
+    nextFixture: next,
+    tournament: t ? { id: t.id, number: t.get("number"), current_round: t.get("current_round") } : null,
+    activeRound: round ? { id: round.id, key: round.get("round_key"), label: round.get("label"), status: round.get("status"), scheduledAt: round.get("scheduled_at") } : null,
+    timing: { betweenMinutes: T.betweenMinutes, gapMinutes: T.gapMinutes, windowMinutes: T.windowMinutes, minuteSec: T.minuteSec },
+    commandCharge: managed ? mgmtMod.getCommandChargeState($app, userId) : null,
+  };
 }
 
-function worldSnapshot($app, userId) {
-  catchUpWorld($app);
+/** Admin: reschedule a waiting round to now + between-round break. */
+function applyBetweenRoundToWaiting($app, adminId, reason) {
   var world = ensureWorld($app);
-  var t = getActiveTournament($app);
-  var round = getActiveRound($app);
-  var managed = userId ? getManagerTeam($app, userId) : null;
-  var credits = userId ? ensureUserCredits($app, userId) : 0;
-  var managementOpen = mgmtMod.isManagementOpen($app);
-  var treasury = null;
-  var batteries = null;
-  var avgEnergy = null;
-  var avgCondition = null;
-  var commandCharge = null;
-  if (managed) {
-    treasury =
-      managed.get("treasury") != null ? managed.get("treasury") : BALANCE.startingTreasury;
-    batteries = managed.get("battery_count") || 0;
-    try {
-      var sq = mgmtMod.getSquad($app, userId);
-      avgEnergy = sq.averages.energy;
-      avgCondition = sq.averages.condition;
-    } catch (_) {}
-  }
-  if (userId && managed) {
-    try {
-      commandCharge = mgmtMod.getCommandChargeState($app, userId);
-    } catch (_) {}
-  }
-
-  return {
-    serverTime: new Date().toISOString(),
-    serverTimeMs: Date.now(),
-    world: {
-      pace: world.get("pace"),
-      nextActionAt: world.get("next_action_at"),
-      roundIntervalMs: world.get("round_interval_ms"),
-      aiProgressionEnabled: !!world.get("ai_progression_enabled"),
-    },
-    tournament: t
-      ? {
-          id: t.id,
-          number: t.get("number"),
-          status: t.get("status"),
-          current_round: t.get("current_round"),
-          champion_team: t.get("champion_team"),
-        }
-      : null,
-    activeRound: round
-      ? {
-          id: round.id,
-          key: round.get("round_key"),
-          label: round.get("label"),
-          status: round.get("status"),
-          scheduledAt: round.get("scheduled_at"),
-          startedAt: round.get("started_at"),
-        }
-      : null,
-    managedTeam: managed
-      ? Object.assign(teamPublic(managed), {
-          treasury: treasury,
-          battery_count: batteries,
-        })
-      : null,
-    isSpectator: !managed,
-    managementOpen: managementOpen,
-    credits: credits,
-    bettingCredits: credits,
-    teamTreasury: treasury,
-    startingCredits: BALANCE.startingCredits,
-    squadAverages: managed
-      ? { energy: avgEnergy, condition: avgCondition }
-      : null,
-    commandCharge: commandCharge,
-  };
+  var T = timing(world);
+  var t = activeTournament($app);
+  var round = t ? currentRound($app, t.id) : null;
+  if (!round || round.get("status") !== "scheduled") throw new BadRequestError("No round is waiting to kick off");
+  var when = Date.now() + T.betweenMs;
+  $app.runInTransaction(function (tx) {
+    var r = tx.findRecordById("shared_rounds", round.id);
+    if (r.get("status") !== "scheduled") throw new BadRequestError("Round already kicked off");
+    r.set("scheduled_at", toPbDate(when));
+    tx.save(r);
+    fixturesOf(tx, r.id).forEach(function (f) {
+      f.set("scheduled_at", toPbDate(when));
+      tx.save(f);
+    });
+  });
+  return { ok: true, roundId: round.id, scheduledAt: toPbDate(when), reason: reason || "" };
 }
 
 if (typeof module !== "undefined") {
@@ -2074,31 +1347,39 @@ if (typeof module !== "undefined") {
     ensureWorld: ensureWorld,
     isSchemaReady: isSchemaReady,
     ensureTeams: ensureTeams,
-    catchUpWorld: catchUpWorld,
+    tick: tick,
+    tickIfDue: tickIfDue,
+    catchUpWorld: function ($app) {
+      return tick($app, Date.now());
+    },
+    timing: timing,
     claimTeam: claimTeam,
-    releaseTeam: releaseTeam,
     getManagerTeam: getManagerTeam,
     listTeams: listTeams,
-    worldSnapshot: worldSnapshot,
-    buildScoreboard: buildScoreboard,
-    buildMatchView: buildMatchView,
-    setCoaching: setCoaching,
-    saveLineup: saveLineup,
-    placeBet: placeBet,
-    listBettingFixtures: listBettingFixtures,
-    ensureUserCredits: ensureUserCredits,
-    getActiveTournament: getActiveTournament,
-    getActiveRound: getActiveRound,
     teamPublic: teamPublic,
-    calcOdds: calcOdds,
-    BALANCE: BALANCE,
-    mgmt: mgmtMod,
-    effectiveRoundIntervalMs: effectiveRoundIntervalMs,
-    effectiveMatchMinuteMs: effectiveMatchMinuteMs,
-    segmentRealMs: segmentRealMs,
-    segmentRealMsForMatch: segmentRealMsForMatch,
-    repairRoundSchedule: repairRoundSchedule,
+    teamMap: teamMap,
+    worldSnapshot: worldSnapshot,
+    liveView: liveView,
+    matchView: matchView,
+    setCoaching: setCoaching,
+    ensureUserCredits: ensureUserCredits,
+    activeTournament: activeTournament,
+    currentRound: currentRound,
+    roundsOf: roundsOf,
+    fixturesOf: fixturesOf,
+    getActiveRound: function ($app) {
+      var t = activeTournament($app);
+      return t ? currentRound($app, t.id) : null;
+    },
+    lastPublished: lastPublished,
+    publishedEvents: publishedEvents,
+    fixtureCard: fixtureCard,
+    drawHidden: drawHidden,
+    modelOf: modelOf,
+    readJson: readJson,
+    parsePbDate: parsePbDate,
+    toPbDate: toPbDate,
     applyBetweenRoundToWaiting: applyBetweenRoundToWaiting,
-    kickOffRound: kickOffRound,
+    BALANCE: BALANCE,
   };
 }

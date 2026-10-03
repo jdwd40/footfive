@@ -22,14 +22,13 @@ export default function LandingPage() {
             <span className="block text-cyan">Watch the Proball live.</span>
           </h1>
           <p className="mt-4 max-w-md text-base text-muted">
-            One shared Proball runs 24/7. Claim a free team (or spectate), watch every
-            fixture live, coach Defend/Balanced/Attack mid-match, and bet fictional
-            credits on the rest of the round.
+            One shared 16-team championship runs around the clock. Watch every match live,
+            bet fictional credits, or claim a free team and leave it competing while you're away.
           </p>
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             {user ? (
-              <Link to="/dashboard" className="btn-primary">
-                Enter career
+              <Link to="/live" className="btn-primary">
+                Watch live
               </Link>
             ) : (
               <>

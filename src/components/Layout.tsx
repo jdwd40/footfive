@@ -1,69 +1,102 @@
 import { Link, NavLink } from "react-router-dom";
-import { useAuth } from "../lib/auth";
 import type { ReactNode } from "react";
-import RoundCountdownBanner from "./RoundCountdownBanner";
+import { useAuth } from "../lib/auth";
+import { useLive, credits } from "../lib/live";
+import { useSlip } from "./BetSlip";
 
-export default function Layout({
-  children,
-  title,
-}: {
-  children: ReactNode;
-  title?: string;
-}) {
-  const { user, logout, isAdmin } = useAuth();
+const NAV = [
+  { to: "/live", label: "Live", icon: "◉" },
+  { to: "/betting", label: "Betting", icon: "◈" },
+  { to: "/my-team", label: "My Team", icon: "⬡" },
+  { to: "/history", label: "History", icon: "☰" },
+];
+
+/** Connection truth: never claim to be live when we aren't. */
+export function ConnectionBanner() {
+  const { live, stale, conn, error } = useLive();
+  if ((!live && !error) || !stale) return null;
+  const text =
+    conn === "auth"
+      ? "Session expired — please log in again."
+      : conn === "offline"
+        ? "Offline — scores shown may be out of date."
+        : "Reconnecting… scores shown may be out of date.";
   return (
-    <div className="min-h-dvh flex flex-col overflow-x-hidden">
-      <header className="sticky top-0 z-20 border-b border-cyan/15 bg-ink/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 px-3 py-3">
-          <Link
-            to={user ? "/dashboard" : "/"}
-            className="font-display shrink-0 text-sm text-cyan sm:text-base"
-          >
-            FOOTFIVE
+    <div className="border-b border-amber/30 bg-amber/15 px-3 py-1.5 text-center text-sm font-semibold text-amber" role="status" data-testid="conn-banner">
+      {text}
+    </div>
+  );
+}
+
+export default function Layout({ children, wide = false }: { children: ReactNode; wide?: boolean; title?: string }) {
+  const { user, logout, isAdmin } = useAuth();
+  const { balance } = useSlip();
+  const max = wide ? "max-w-[1400px]" : "max-w-5xl";
+  return (
+    <div className="flex min-h-dvh flex-col">
+      <header className="sticky top-0 z-30 border-b border-line bg-ink/90 backdrop-blur-md">
+        <div className={`mx-auto flex ${max} items-center gap-3 px-3 py-2`}>
+          <Link to={user ? "/live" : "/"} className="font-display shrink-0 text-base font-black tracking-widest text-cyan">
+            FOOT<span className="text-magenta">FIVE</span>
           </Link>
-          {title ? (
-            <div className="min-w-0 flex-1 truncate text-center text-sm uppercase tracking-widest text-muted">
-              {title}
-            </div>
-          ) : (
-            <div className="flex-1" />
-          )}
           {user ? (
-            <div className="flex shrink-0 items-center gap-1">
-              {isAdmin ? (
-                <NavLink
-                  to="/admin"
-                  data-testid="nav-admin"
-                  className={({ isActive }) =>
-                    `btn-ghost !min-h-9 !px-2.5 !py-1.5 text-xs font-semibold ${
-                      isActive ? "text-cyan ring-1 ring-cyan/40" : "text-amber"
-                    }`
-                  }
-                >
-                  Admin
-                </NavLink>
-              ) : null}
-              <button
-                type="button"
-                className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs"
-                onClick={logout}
+          <nav className="hidden flex-1 items-center gap-1 md:flex" aria-label="Main">
+            {NAV.map((n) => (
+              <NavLink
+                key={n.to}
+                to={n.to}
+                className={({ isActive }) =>
+                  `rounded-lg px-3 py-2 text-sm font-bold uppercase tracking-wider ${isActive ? "bg-cyan/15 text-cyan" : "text-muted hover:text-white"}`
+                }
               >
+                {n.label}
+              </NavLink>
+            ))}
+          </nav>
+          ) : null}
+          <div className="ml-auto flex items-center gap-2">
+            {user ? (
+              <Link to="/betting" className="chip chip-lime !text-xs tabular" title="Your fictional betting credits" data-testid="wallet-chip">
+                ◈ {balance == null ? "…" : credits(balance)}
+              </Link>
+            ) : null}
+            {isAdmin ? (
+              <NavLink to="/admin" className="btn-ghost !min-h-9 !px-2.5 !py-1 text-xs text-amber" data-testid="nav-admin">
+                Admin
+              </NavLink>
+            ) : null}
+            {user ? (
+              <button type="button" className="btn-ghost !min-h-9 !px-2.5 !py-1 text-xs" onClick={logout}>
                 Log out
               </button>
-            </div>
-          ) : (
-            <Link to="/login" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
-              Log in
-            </Link>
-          )}
-        </div>
-        {user ? (
-          <div className="mx-auto max-w-3xl px-3 pb-2">
-            <RoundCountdownBanner />
+            ) : (
+              <Link to="/login" className="btn-ghost !min-h-9 !px-2.5 !py-1 text-xs">
+                Log in
+              </Link>
+            )}
           </div>
-        ) : null}
+        </div>
+        {user ? <ConnectionBanner /> : null}
       </header>
-      <main className="mx-auto w-full max-w-3xl flex-1 px-3 py-4 pb-10">{children}</main>
+
+      <main className={`mx-auto w-full ${max} flex-1 px-3 pb-24 pt-3 md:pb-10`}>{children}</main>
+
+      {user ? (
+      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-line bg-ink/95 backdrop-blur-md md:hidden" aria-label="Main">
+        {NAV.map((n) => (
+          <NavLink
+            key={n.to}
+            to={n.to}
+            className={({ isActive }) => `flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-bold uppercase tracking-wider ${isActive ? "text-cyan" : "text-muted"}`}
+          >
+            <span aria-hidden className="text-base leading-none">
+              {n.icon}
+            </span>
+            {n.label}
+          </NavLink>
+        ))}
+      </nav>
+      ) : null}
     </div>
   );
 }

@@ -59,9 +59,9 @@ export default function RecordsPage() {
   return (
     <Layout title="Records">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h1 className="font-display text-xl text-white">Proball records</h1>
-        <Link to="/dashboard" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
-          Home
+        <h1 className="font-display text-xl text-white">History</h1>
+        <Link to="/live" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
+          Live round
         </Link>
       </div>
 

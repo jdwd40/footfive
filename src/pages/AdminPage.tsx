@@ -14,8 +14,10 @@ export default function AdminPage() {
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
-  const [betweenMins, setBetweenMins] = useState(3);
+  const [betweenMins, setBetweenMins] = useState(1);
   const [matchSec, setMatchSec] = useState(15);
+  const [gapMins, setGapMins] = useState(10);
+  const [windowMins, setWindowMins] = useState(5);
   const [tab, setTab] = useState<
     "dash" | "users" | "teams" | "retention" | "tools" | "audit"
   >("dash");
@@ -25,10 +27,12 @@ export default function AdminPage() {
       // Load overview first so shell is never blank if a secondary call fails
       const o = await footfiveApi.adminOverview();
       setOverview(o);
-      const bm = Number(o.betweenRoundMinutes ?? 3);
+      const bm = Number(o.betweenRoundMinutes ?? 1);
       if (!Number.isNaN(bm) && bm >= 1) setBetweenMins(bm);
       const ms = Number(o.matchMinuteRealSeconds ?? 15);
       if (!Number.isNaN(ms) && ms >= 1) setMatchSec(ms);
+      setGapMins(Number(o.championshipGapMinutes ?? 10));
+      setWindowMins(Number(o.fixturesWindowMinutes ?? 5));
 
       const results = await Promise.allSettled([
         footfiveApi.adminUsers(),
@@ -84,7 +88,7 @@ export default function AdminPage() {
           >
             Retry
           </button>
-          <Link to="/dashboard" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
+          <Link to="/live" className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs">
             Exit
           </Link>
         </div>
@@ -245,7 +249,7 @@ export default function AdminPage() {
               </p>
             ) : null}
             <label className="flex items-center gap-2 text-xs">
-              <span className="text-muted">Minutes between rounds</span>
+              <span className="text-muted">Break between rounds (minutes)</span>
               <input
                 className="input !min-h-9 !w-24 !py-1 text-sm"
                 type="number"
@@ -338,6 +342,56 @@ export default function AdminPage() {
               }
             >
               Save match speed
+            </button>
+          </section>
+
+          <section className="glass space-y-2 rounded-2xl p-4 text-sm" data-testid="admin-championship-timing">
+            <p className="text-[11px] uppercase tracking-widest text-muted">Championship cycle</p>
+            <div className="flex flex-wrap gap-3 text-xs">
+              <label className="flex items-center gap-2">
+                <span className="text-muted">Next championship starts (min after final)</span>
+                <input
+                  className="input !min-h-9 !w-24 !py-1 text-sm"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={gapMins}
+                  onChange={(e) => setGapMins(Number(e.target.value))}
+                  data-testid="championship-gap-minutes"
+                />
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-muted">Fixtures shown (min before kick-off)</span>
+                <input
+                  className="input !min-h-9 !w-24 !py-1 text-sm"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={windowMins}
+                  onChange={(e) => setWindowMins(Number(e.target.value))}
+                  data-testid="fixtures-window-minutes"
+                />
+              </label>
+            </div>
+            <p className="text-[11px] text-muted">The fixture window must fit inside the gap. Applies to the next championship that has not been drawn yet.</p>
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              disabled={windowMins > gapMins}
+              data-testid="save-championship-timing"
+              onClick={() =>
+                run(
+                  () =>
+                    footfiveApi.adminWorldSettings({
+                      championship_gap_minutes: gapMins,
+                      fixtures_window_minutes: windowMins,
+                      reason: "admin_championship_timing",
+                    }),
+                  `Saved: next championship ${gapMins} min after the final, fixtures ${windowMins} min before`,
+                )
+              }
+            >
+              Save championship timing
             </button>
           </section>
         </div>

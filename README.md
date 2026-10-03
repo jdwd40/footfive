@@ -42,7 +42,7 @@ Do **not** wipe `pb_data` for additive migrations. PocketBase **0.28.4** only â€
 - All actions server-checked; normal users get 403.
 - Sensitive actions write `admin_audit_logs`.
 - Credits/treasury: transactional ledger, reason required, no negatives.
-- **Between-round minutes** (default **3**): save on admin dashboard; optional apply to waiting round only.
+- **Between-round break** (default **1 minute**), championship gap (10) and fixture window (5): Admin â†’ Dashboard. See `docs/OVERHAUL.md`.
 - Login: email **or** username via `/api/footfive/auth/login`.
 
 ```text

@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="Normal penalty scene">
-  <rect width="800" height="500" fill="#071018"/>
-  <rect x="220" y="80" width="360" height="200" fill="none" stroke="#e8eefc" stroke-width="8"/>
-  <line x1="220" y1="80" x2="580" y2="280" stroke="#e8eefc" stroke-width="2" opacity="0.3"/>
-  <line x1="580" y1="80" x2="220" y2="280" stroke="#e8eefc" stroke-width="2" opacity="0.3"/>
-  <circle cx="400" cy="380" r="18" fill="#b8ff3c" stroke="#00f0ff" stroke-width="3"/>
-  <circle cx="400" cy="250" r="22" fill="#ff2d95" opacity="0.85"/>
-  <text x="400" y="460" text-anchor="middle" fill="#00f0ff" font-family="Orbitron,sans-serif" font-size="20">PENALTY</text>
-</svg>

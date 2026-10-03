@@ -18,7 +18,7 @@ export default function RegisterPage() {
     setError("");
     try {
       await register(email.trim(), password, displayName.trim());
-      nav("/dashboard");
+      nav("/live");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {

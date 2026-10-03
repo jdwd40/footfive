@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="Penalty shootout pressure scene">
-  <rect width="800" height="500" fill="#100818"/>
-  <circle cx="400" cy="220" r="120" fill="none" stroke="#ff2d95" stroke-width="3" opacity="0.5"/>
-  <circle cx="400" cy="220" r="70" fill="none" stroke="#00f0ff" stroke-width="2" opacity="0.6"/>
-  <circle cx="400" cy="360" r="16" fill="#fff"/>
-  <text x="400" y="120" text-anchor="middle" fill="#ff2d95" font-family="Orbitron,sans-serif" font-size="22">SHOOTOUT</text>
-  <text x="400" y="450" text-anchor="middle" fill="#8b9bb8" font-family="Rajdhani,sans-serif" font-size="18">Sudden death pressure</text>
-</svg>

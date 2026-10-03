@@ -120,8 +120,8 @@ print('updated', cur.rowcount, ${JSON.stringify(db)})
   const wA = await json("/api/footfive/world", { token: tokA });
   const wB = await json("/api/footfive/world", { token: tokB });
   ok("same tournament", wA.data.tournament?.id === wB.data.tournament?.id);
-  const sbA = await json("/api/footfive/scoreboard", { token: tokA });
-  const sbB = await json("/api/footfive/scoreboard", { token: tokB });
+  const sbA = await json("/api/footfive/live", { token: tokA });
+  const sbB = await json("/api/footfive/live", { token: tokB });
   const idsA = (sbA.data.fixtures || []).map((f) => f.id).sort().join(",");
   const idsB = (sbB.data.fixtures || []).map((f) => f.id).sort().join(",");
   ok("same fixtures", idsA === idsB);

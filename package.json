@@ -25,7 +25,6 @@
     "setup:local": "bash scripts/setup-local.sh",
     "backup:local": "bash scripts/backup-local.sh",
     "deploy:check": "npm run test && npm run typecheck && npm run build",
-    "smoke:api": "node tests/integration/prompt5-api.smoke.mjs",
     "perf:sample": "node scripts/perf-sample.mjs",
     "pw:libs": "bash scripts/ensure-playwright-libs.sh"
   },

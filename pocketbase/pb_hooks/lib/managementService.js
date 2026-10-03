@@ -49,32 +49,25 @@ function requireManagerTeam($app, userId) {
   return rows[0];
 }
 
-function isManagementOpen($app) {
-  try {
-    var rounds = $app.findRecordsByFilter(
-      "shared_rounds",
-      'status = "live" || status = "completing"',
-      "",
-      1,
-      0,
-    );
-    if (rounds && rounds.length) return false;
-    var liveFx = $app.findRecordsByFilter(
-      "shared_fixtures",
-      'status = "live"',
-      "",
-      1,
-      0,
-    );
-    if (liveFx && liveFx.length) return false;
-  } catch (_) {}
-  return true;
-}
+/**
+ * Management is always open. Live matches use the lineup frozen at their kick-off,
+ * so squad changes, repairs and upgrades take effect from the team's next kick-off.
+ */
 
-function requireOpenWindow($app) {
-  if (!isManagementOpen($app)) {
-    throw new BadRequestError("Management window is closed");
-  }
+/** Message describing when a change takes effect for this team. */
+function effectNote($app, teamId) {
+  try {
+    var live = $app.findRecordsByFilter(
+      "shared_fixtures",
+      'status = "live" && (home_team = {:t} || away_team = {:t})',
+      "",
+      1,
+      0,
+      { t: teamId },
+    );
+    if (live && live.length) return "Saved — applies from your next kick-off (the current match keeps its starting setup).";
+  } catch (_) {}
+  return "Saved — applies from your next kick-off.";
 }
 
 function writeTeamLedger($app, teamId, amount, type, description, balanceAfter, meta) {
@@ -233,6 +226,7 @@ function playerPublic($app, p, coachingStance, overclock) {
   });
   snap.effective_attack = eff.attack;
   snap.effective_defence = eff.defence;
+  snap.upgrade_cost = { attack: upgradeCost(snap.attack), defence: upgradeCost(snap.defence) };
   return snap;
 }
 
@@ -265,6 +259,7 @@ function getSquad($app, userId) {
     team: {
       id: team.id,
       name: team.get("name"),
+      abbreviation: team.get("abbreviation") || "",
       grade: team.get("grade"),
       treasury: treasury,
       battery_count: team.get("battery_count") || 0,
@@ -273,21 +268,103 @@ function getSquad($app, userId) {
       primary_color: team.get("primary_color"),
       secondary_color: team.get("secondary_color"),
       badge_key: team.get("badge_key"),
+      mode: team.get("manager_mode") || "manual",
+      default_stance: team.get("default_stance") || "balanced",
     },
     players: list,
     averages: {
       energy: Math.round(energySum / n),
       condition: Math.round(condSum / n),
     },
-    managementOpen: isManagementOpen($app),
-    upgradeCostPreview: upgradeCost(60),
+    managementOpen: true,
+    effectNote: effectNote($app, team.id),
     batteryCost: BALANCE.batteryCost,
     repairCostPerPoint: BALANCE.repairCostPerPoint,
+    aiRules: AI_RULES,
   };
 }
 
+var AI_RULES = [
+  "Picks the five fittest players (always one goalkeeper) for each kick-off.",
+  "Uses a battery on any starter below 40% energy, and buys one when the treasury is above " + (BALANCE.batteryCost + 500) + ".",
+  "Repairs the most worn player (below 55% condition) when affordable.",
+  "Switches to Attack when behind late on and Defend when protecting a one-goal lead.",
+  "Never touches your personal betting credits and never upgrades players.",
+];
+
+/** Set manager mode: "manual" (My settings) or "ai" (Full AI). Saved setup is untouched. */
+function setMode($app, userId, mode) {
+  if (mode !== "manual" && mode !== "ai") throw new BadRequestError("Mode must be manual or ai");
+  var team = requireManagerTeam($app, userId);
+  team.set("manager_mode", mode);
+  $app.save(team);
+  return { ok: true, mode: mode, note: effectNote($app, team.id) };
+}
+
+/** Default stance for kick-off in My settings mode. */
+function setDefaultStance($app, userId, stance) {
+  if (["defend", "balanced", "attack"].indexOf(stance) < 0) throw new BadRequestError("Invalid stance");
+  var team = requireManagerTeam($app, userId);
+  team.set("default_stance", stance);
+  $app.save(team);
+  return { ok: true, stance: stance, note: effectNote($app, team.id) };
+}
+
+/** Five fittest (one goalkeeper) without mutating the saved lineup. */
+function aiLineup(players) {
+  var list = (players || []).map(function (p) {
+    return {
+      id: p.id,
+      name: p.name,
+      role: p.role,
+      attack: p.attack,
+      defence: p.defence,
+      energy: p.energy,
+      condition: p.condition,
+      intensity: "balanced",
+      is_starter: false,
+      sort_order: p.sort_order,
+    };
+  });
+  function fit(p) {
+    return ((p.attack + p.defence) / 2) * (0.35 + 0.65 * (p.energy / 100)) * (0.3 + 0.7 * (p.condition / 100));
+  }
+  var gks = list.filter(function (p) {
+    return p.role === "gk";
+  });
+  gks.sort(function (a, b) {
+    return fit(b) - fit(a);
+  });
+  var field = list.filter(function (p) {
+    return p !== gks[0];
+  });
+  field.sort(function (a, b) {
+    return fit(b) - fit(a);
+  });
+  if (gks[0]) gks[0].is_starter = true;
+  for (var i = 0; i < field.length && i < (gks[0] ? 4 : 5); i++) field[i].is_starter = true;
+  return list;
+}
+
+/** Persist per-player wear from a finished match (delta, so between-match repairs are kept). */
+function applyWearDelta($app, players) {
+  for (var i = 0; i < (players || []).length; i++) {
+    var sp = players[i];
+    if (!sp.id || !sp.is_starter) continue;
+    try {
+      var p = $app.findRecordById("proball_players", sp.id);
+      materialisePlayerEnergy($app, p);
+      var dE = Math.round((sp.e0 != null ? sp.e0 : 100) - sp.energy);
+      var dC = Math.round((sp.c0 != null ? sp.c0 : 100) - sp.condition);
+      p.set("energy", clamp((p.get("energy") || 0) - dE, 0, 100));
+      p.set("condition", clamp((p.get("condition") || 0) - dC - (sp.sentOff ? BALANCE.conditionOnRed : 0), 0, 100));
+      p.set("energy_updated_at", toPbDate(Date.now()));
+      $app.save(p);
+    } catch (_) {}
+  }
+}
+
 function setLineup($app, userId, starterIds, subIds) {
-  requireOpenWindow($app);
   var team = requireManagerTeam($app, userId);
   if (!starterIds || starterIds.length !== 5) {
     throw new BadRequestError("Exactly 5 starters required");
@@ -328,7 +405,6 @@ function setLineup($app, userId, starterIds, subIds) {
 }
 
 function setIntensity($app, userId, playerId, intensity) {
-  requireOpenWindow($app);
   if (["passive", "balanced", "aggressive"].indexOf(intensity) < 0) {
     throw new BadRequestError("Invalid intensity");
   }
@@ -341,7 +417,6 @@ function setIntensity($app, userId, playerId, intensity) {
 }
 
 function upgradePlayer($app, userId, playerId, attribute) {
-  requireOpenWindow($app);
   if (attribute !== "attack" && attribute !== "defence") {
     throw new BadRequestError("attribute must be attack or defence");
   }
@@ -377,7 +452,6 @@ function upgradePlayer($app, userId, playerId, attribute) {
 }
 
 function buyBattery($app, userId, count) {
-  requireOpenWindow($app);
   count = parseInt(count, 10) || 1;
   if (count < 1 || count > 10) throw new BadRequestError("Invalid count");
   var team = requireManagerTeam($app, userId);
@@ -399,7 +473,6 @@ function buyBattery($app, userId, count) {
 }
 
 function useBattery($app, userId, playerId) {
-  requireOpenWindow($app);
   var team = requireManagerTeam($app, userId);
   var player = $app.findRecordById("proball_players", playerId);
   if (player.get("team") !== team.id) throw new ForbiddenError("Not your player");
@@ -422,7 +495,6 @@ function useBattery($app, userId, playerId) {
 }
 
 function repairPlayer($app, userId, playerId, points) {
-  requireOpenWindow($app);
   points = parseInt(points, 10);
   if (!points || points < 1) throw new BadRequestError("Invalid repair points");
   var presets = [10, 25, 50, 100];
@@ -458,7 +530,6 @@ function repairPlayer($app, userId, playerId, points) {
 }
 
 function commandChargeSpend($app, userId, action, playerId, fixtureId) {
-  requireOpenWindow($app);
   var team = requireManagerTeam($app, userId);
   var costs = BALANCE.commandChargeCosts;
   if (!costs[action]) throw new BadRequestError("Unknown action");
@@ -680,25 +751,6 @@ function loadTeamSnapshot($app, teamId) {
   };
 }
 
-/**
- * Apply match end effects: energy/condition already in snapshot during sim;
- * persist to living players; pay rewards.
- */
-function applyPostMatchPlayerWear($app, teamId, snapshotPlayers) {
-  if (!snapshotPlayers) return;
-  for (var i = 0; i < snapshotPlayers.length; i++) {
-    var sp = snapshotPlayers[i];
-    if (!sp.id) continue;
-    try {
-      var p = $app.findRecordById("proball_players", sp.id);
-      p.set("energy", clamp(sp.energy != null ? sp.energy : p.get("energy"), 0, 100));
-      p.set("condition", clamp(sp.condition != null ? sp.condition : p.get("condition"), 0, 100));
-      p.set("energy_updated_at", toPbDate(Date.now()));
-      $app.save(p);
-    } catch (_) {}
-  }
-}
-
 function settleMatchReward($app, teamId, amount, type, description, meta) {
   if (!amount || amount <= 0) return;
   var key = meta.idempotency_key;
@@ -808,58 +860,19 @@ function rewardChampion($app, teamId, tournamentId) {
 }
 
 /**
- * AI maintenance between rounds: regen energy, repair if rich, batteries, optional upgrades.
+ * AI treasury maintenance before a kick-off — unmanaged teams and Full AI teams only.
+ * Visible rules (AI_RULES): battery for tired starters, buy a battery when rich,
+ * repair the most worn player. Never changes the saved lineup (the AI picks its five
+ * at kick-off via aiLineup) and never touches personal betting credits.
  */
-function aiMaintainTeam($app, team, world) {
-  if (team.get("manager")) return; // human managed
-  var pace = world ? world.get("pace") : getPace($app);
-  var players = $app.findRecordsByFilter(
-    "proball_players",
-    "team = {:t}",
-    "sort_order",
-    20,
-    0,
-    { t: team.id },
-  );
-
-  // Materialise energy + ensure valid lineup
-  var list = [];
-  for (var i = 0; i < players.length; i++) {
-    materialisePlayerEnergy($app, players[i], pace);
-    list.push({
-      name: players[i].get("name"),
-      role: players[i].get("role"),
-      attack: players[i].get("attack"),
-      defence: players[i].get("defence"),
-      energy: players[i].get("energy"),
-      condition: players[i].get("condition"),
-      intensity: "balanced",
-      is_starter: !!players[i].get("is_starter"),
-      _rec: players[i],
-    });
-  }
-  var fixed = defaultStarters(list);
-  for (var j = 0; j < players.length; j++) {
-    var rec = players[j];
-    rec.set("intensity", "balanced");
-    var match = null;
-    for (var k = 0; k < fixed.length; k++) {
-      if (fixed[k].name === rec.get("name")) {
-        match = fixed[k];
-        break;
-      }
-    }
-    if (match) {
-      rec.set("is_starter", !!match.is_starter);
-      rec.set("sort_order", k);
-    }
-    $app.save(rec);
-  }
-
+function aiMaintainTeam($app, team) {
+  if (team.get("manager") && team.get("manager_mode") !== "ai") return;
+  var players = $app.findRecordsByFilter("proball_players", "team = {:t}", "sort_order", 20, 0, { t: team.id });
+  for (var i = 0; i < players.length; i++) materialisePlayerEnergy($app, players[i]);
   var treasury = team.get("treasury");
   if (treasury == null) treasury = BALANCE.startingTreasury;
+  var stamp = Date.now();
 
-  // Repair worst condition if affordable
   var worst = null;
   var worstCond = 100;
   for (var p = 0; p < players.length; p++) {
@@ -874,75 +887,46 @@ function aiMaintainTeam($app, team, world) {
     var need = Math.min(30, 100 - worstCond);
     var cost = repairCost(need);
     if (treasury >= cost) {
-      try {
-        team.set("treasury", treasury - cost);
-        worst.set("condition", worstCond + need);
-        $app.save(worst);
-        $app.save(team);
-        writeTeamLedger($app, team.id, -cost, "ai_repair", "AI repair", treasury - cost, {
-          idempotency_key: "ai_repair:" + team.id + ":" + worst.id + ":" + Date.now(),
-          player_id: worst.id,
-        });
-        treasury -= cost;
-      } catch (_) {}
+      treasury -= cost;
+      worst.set("condition", worstCond + need);
+      $app.save(worst);
+      team.set("treasury", treasury);
+      $app.save(team);
+      writeTeamLedger($app, team.id, -cost, "ai_repair", "AI repair +" + need + " for " + worst.get("name"), treasury, {
+        idempotency_key: "ai_repair:" + team.id + ":" + worst.id + ":" + stamp,
+        player_id: worst.id,
+      });
     }
   }
 
-  // Battery if low energy starters
   var bats = team.get("battery_count") || 0;
-  for (var b = 0; b < players.length; b++) {
-    if (!players[b].get("is_starter")) continue;
+  var fittest = aiLineup(
+    players.map(function (r) {
+      return { id: r.id, name: r.get("name"), role: r.get("role"), attack: r.get("attack"), defence: r.get("defence"), energy: r.get("energy"), condition: r.get("condition") };
+    }),
+  );
+  for (var b = 0; b < players.length && bats > 0; b++) {
+    var starter = fittest.filter(function (x) {
+      return x.id === players[b].id;
+    })[0];
+    if (!starter || !starter.is_starter) continue;
     var en = players[b].get("energy") || 0;
-    if (en < 40 && bats > 0) {
-      players[b].set("energy", clamp(en + BALANCE.batteryRestore, 0, 100));
-      players[b].set("energy_updated_at", toPbDate(Date.now()));
-      $app.save(players[b]);
-      bats -= 1;
-      team.set("battery_count", bats);
-      $app.save(team);
-      break;
-    }
+    if (en >= 40) continue;
+    players[b].set("energy", clamp(en + BALANCE.batteryRestore, 0, 100));
+    players[b].set("energy_updated_at", toPbDate(stamp));
+    $app.save(players[b]);
+    bats -= 1;
   }
-  // Buy battery if none and rich
   if (bats < 1 && treasury >= BALANCE.batteryCost + 500) {
-    team.set("battery_count", 1);
-    team.set("treasury", treasury - BALANCE.batteryCost);
-    $app.save(team);
-    writeTeamLedger($app, team.id, -BALANCE.batteryCost, "ai_battery", "AI battery", treasury - BALANCE.batteryCost, {
-      idempotency_key: "ai_bat:" + team.id + ":" + Date.now(),
+    bats = 1;
+    treasury -= BALANCE.batteryCost;
+    writeTeamLedger($app, team.id, -BALANCE.batteryCost, "ai_battery", "AI bought a battery", treasury, {
+      idempotency_key: "ai_bat:" + team.id + ":" + stamp,
     });
   }
-
-  // Optional slow upgrades
-  var aiProg = false;
-  try {
-    if (world) aiProg = !!world.get("ai_progression_enabled");
-  } catch (_) {}
-  if (aiProg && treasury > 3000) {
-    var target = players[0];
-    for (var u = 0; u < players.length; u++) {
-      if (players[u].get("is_starter") && players[u].get("role") === "att") {
-        target = players[u];
-        break;
-      }
-    }
-    var atk = target.get("attack") || 50;
-    if (atk < 85) {
-      var uc = upgradeCost(atk);
-      if (treasury >= uc + 1000) {
-        try {
-          target.set("attack", atk + 1);
-          team.set("treasury", treasury - uc);
-          $app.save(target);
-          $app.save(team);
-          writeTeamLedger($app, team.id, -uc, "ai_upgrade", "AI attack upgrade", treasury - uc, {
-            idempotency_key: "ai_up:" + target.id + ":" + atk,
-            player_id: target.id,
-          });
-        } catch (_) {}
-      }
-    }
-  }
+  team.set("battery_count", bats);
+  team.set("treasury", treasury);
+  $app.save(team);
 }
 
 if (typeof module !== "undefined") {
@@ -950,6 +934,11 @@ if (typeof module !== "undefined") {
     getSquad: getSquad,
     setLineup: setLineup,
     setIntensity: setIntensity,
+    setMode: setMode,
+    setDefaultStance: setDefaultStance,
+    aiLineup: aiLineup,
+    applyWearDelta: applyWearDelta,
+    effectNote: effectNote,
     upgradePlayer: upgradePlayer,
     buyBattery: buyBattery,
     useBattery: useBattery,
@@ -958,14 +947,13 @@ if (typeof module !== "undefined") {
     getCommandChargeState: getCommandChargeState,
     teamFinances: teamFinances,
     loadTeamSnapshot: loadTeamSnapshot,
-    applyPostMatchPlayerWear: applyPostMatchPlayerWear,
     rewardFixture: rewardFixture,
     rewardElimination: rewardElimination,
     rewardChampion: rewardChampion,
     aiMaintainTeam: aiMaintainTeam,
-    isManagementOpen: isManagementOpen,
     materialisePlayerEnergy: materialisePlayerEnergy,
     requireManagerTeam: requireManagerTeam,
+    upgradeCost: upgradeCost,
     BALANCE: BALANCE,
   };
 }

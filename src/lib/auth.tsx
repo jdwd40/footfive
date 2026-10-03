@@ -184,5 +184,5 @@ export function postLoginPath(user: AuthUser | null | undefined): string {
   if (!user) return "/login";
   if (user.must_change_password) return "/change-password";
   if (user.role === "admin") return "/admin";
-  return "/dashboard";
+  return "/live";
 }
