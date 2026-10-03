@@ -243,6 +243,10 @@ cronAdd("footfive_catchup", "*/1 * * * *", () => {
 // Public health (no secrets)
 routerAdd("GET", "/api/footfive/health", (e) => {
   const health = require(`${__hooks}/lib/healthService.js`);
+  const svc = require(`${__hooks}/lib/worldService.js`);
+  // Like every read: advance the world (throttled). On a fresh DB this creates it,
+  // since onBootstrap runs before migrations and the cron only fires each minute.
+  if (svc.isSchemaReady($app)) svc.tickIfDue($app);
   return e.json(200, health.publicHealth($app));
 });
 
