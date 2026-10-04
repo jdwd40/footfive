@@ -25,14 +25,27 @@ function fold(v: number, lo: number, hi: number) {
   const m = (((v - lo) % (2 * w)) + 2 * w) % (2 * w);
   return lo + (m > w ? 2 * w - m : m);
 }
-/** Same scene, first keyframe moved to `start` (and the actor on the ball with it); the scene object itself stays shared and unmutated. */
+/**
+ * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
+ * `start − ball[0]`, the offset blending out keyframe by keyframe so the destination — which the next scene depends on — is
+ * untouched and the ball never doubles back via the authored route. Points already off the pitch (a net) stay put.
+ * The scene object itself stays shared and unmutated.
+ */
 function fromStart(scene: Scene, start: Pt): Scene {
   const [x0, y0] = scene.ball[0];
-  if (x0 === start[0] && y0 === start[1]) return scene;
+  const dx = start[0] - x0;
+  const dy = start[1] - y0;
+  if (!dx && !dy) return scene;
+  const blend = (path: Pt[]): Pt[] => {
+    const n = path.length - 1;
+    return path.map(([x, y], i) => {
+      const w = n ? 1 - i / n : 1;
+      return [clamp(x + dx * w, Math.min(0, x), Math.max(100, x)), clamp(y + dy * w, Math.min(0, y), Math.max(64, y))];
+    });
+  };
   const near = scene.actors.filter((a) => a.side !== "ref" && !a.keeper).sort((a, b) => Math.hypot(a.path[0][0] - x0, a.path[0][1] - y0) - Math.hypot(b.path[0][0] - x0, b.path[0][1] - y0))[0];
   const onBall = near && Math.hypot(near.path[0][0] - x0, near.path[0][1] - y0) < 3 ? near : null;
-  const shift = (a: Actor): Actor => ({ ...a, path: [[clamp(a.path[0][0] + start[0] - x0, 0, 100), clamp(a.path[0][1] + start[1] - y0, 0, 64)], ...a.path.slice(1)] });
-  return { ...scene, ball: [start, ...scene.ball.slice(1)], actors: scene.actors.map((a) => (a === onBall ? shift(a) : a)) };
+  return { ...scene, ball: blend(scene.ball), actors: scene.actors.map((a) => (a === onBall ? { ...a, path: blend(a.path) } : a)) };
 }
 const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
 const PEN_ARC = new Set(["penalty_setup", "shootout_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);

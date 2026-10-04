@@ -213,11 +213,33 @@ describe("frameAt", () => {
     expect(dwellEnd).not.toEqual(next.ball[0]);
     const f = frameAt(next, 0, m.lineups, undefined, 0, dwellEnd);
     expect(f.ball).toEqual(dwellEnd);
-    // Only the first keyframe moves: the authored shape (and the shared scene object) is untouched.
+    // The destination is untouched: the authored end (and the shared scene object) stands.
     const a = frameAt(next, 1, m.lineups, undefined, 0, dwellEnd).ball;
     const b = frameAt(next, 1, m.lineups).ball;
-    expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(1e-6);
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(1e-3);
     expect(frameAt(next, 0, m.lineups).ball).toEqual(next.ball[0]);
+  });
+
+  it("a scene started off its authored path heads straight for its destination, never back via the old path", () => {
+    const m = ms[0];
+    // Straight pass 30→60 along y=32; the previous dwell carried the ball on to x=50, past the authored start.
+    const s: Scene = { key: "off-1", seq: 9002, type: "pass", ms: 1500, ball: [[30, 32], [45, 32], [60, 32]], actors: [{ id: "p", side: "home", path: [[29, 32], [30, 32], [33, 32]] }], caption: "" };
+    const start: Pt = [50, 32];
+    expect(frameAt(s, 0, m.lineups, undefined, 0, start).ball).toEqual(start);
+    expect(frameAt(s, 1, m.lineups, undefined, 0, start).ball[0]).toBeCloseTo(60, 2);
+    let last = start[0];
+    for (let t = 0.05; t <= 1; t += 0.05) {
+      const x = frameAt(s, t, m.lineups, undefined, 0, start).ball[0];
+      expect(x, `t=${t}`).toBeGreaterThanOrEqual(last);
+      last = x;
+    }
+    // The carrier starts on the moved ball and his path blends back onto the authored one too.
+    const p0 = frameAt(s, 0, m.lineups, undefined, 0, start).players.find((p) => p.hot)!;
+    expect(Math.hypot(p0.x - start[0], p0.y - start[1])).toBeLessThan(1.5);
+    // Clamping respects keyframes authored off the pitch (a goal's net): an outward offset never pushes past them.
+    const g: Scene = { ...s, key: "off-2", type: "goal", flash: "goal", ball: [[80, 32], [100, 32], [102, 32], [102, 32], [102, 32]], actors: [], impact: [102, 32] };
+    for (let t = 0; t <= 1; t += 0.05) expect(frameAt(g, t, m.lineups, undefined, 0, [90, 34]).ball[0]).toBeLessThanOrEqual(102);
+    expect(frameAt(g, 1, m.lineups, undefined, 0, [90, 34]).ball[0]).toBeCloseTo(102, 3);
   });
 
   it("skips sent-off players and survives missing lineups", () => {
