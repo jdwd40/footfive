@@ -291,16 +291,6 @@ main {
   overflow-x: clip;
 }
 
-/* Player name labels on the highlight pitch: larger on small screens. */
-.pitch-label {
-  font-size: 2.3px;
-}
-@media (max-width: 640px) {
-  .pitch-label {
-    font-size: 3.4px;
-  }
-}
-
 @supports (padding: env(safe-area-inset-bottom)) {
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom);

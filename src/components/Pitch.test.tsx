@@ -8,6 +8,35 @@ const home = { id: "h", name: "Home Town", abbreviation: "HOM", primary_color: "
 const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "#ff2d95" } as TeamPublic;
 const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ...f });
 
+describe("Pitch kits and numbers", () => {
+  const players: Frame["players"] = [
+    { side: "home", name: "Ann Able", no: 7, gk: false, x: 30, y: 30, hot: true },
+    { side: "home", name: "Gus Glove", no: 1, gk: true, x: 4, y: 32, hot: false },
+    { side: "away", name: "Bo Bell", no: 9, gk: false, x: 70, y: 30, hot: false },
+  ];
+  it("shows shirt numbers, never names; hot players get the ring", () => {
+    const { container } = render(<Pitch frame={frame({ players })} home={home} away={away} />);
+    const nodes = screen.getAllByTestId("player");
+    expect(nodes.map((n) => n.textContent)).toEqual(["7", "1", "9"]);
+    expect(container.textContent).not.toContain("Ann");
+    expect(nodes[0].querySelector("[data-ring]")).toBeTruthy();
+    expect(nodes[2].querySelector("[data-ring]")).toBeNull();
+  });
+  it("home is filled in the team colour, away is white with a team-colour ring, keeper keeps lime plus the ring", () => {
+    render(<Pitch frame={frame({ players })} home={home} away={away} />);
+    const kit = (i: number) => screen.getAllByTestId("player")[i].querySelector("[data-kit]")!;
+    expect(kit(0).getAttribute("fill")).toBe("#00f0ff");
+    expect(kit(2).getAttribute("fill")).toBe("#f4f7ff");
+    expect(kit(2).getAttribute("stroke")).toBe("#ff2d95");
+    expect(kit(1).getAttribute("fill")).toBe("#c6ff00");
+    expect(kit(1).getAttribute("stroke")).toBe("#00f0ff");
+  });
+  it("has a kit legend with both abbreviations", () => {
+    render(<Pitch frame={frame({ players })} home={home} away={away} />);
+    expect(screen.getByTestId("kit-legend").textContent).toMatch(/HOM.*AWY/);
+  });
+});
+
 describe("Pitch goal banner", () => {
   it("shows GOOOAL with scorer and score once the ball is in", () => {
     const { rerender } = render(<Pitch frame={frame({ type: "goal", flash: "goal", side: "away", who: "Jo Striker", score: [1, 2], p: 0.3 })} home={home} away={away} />);

@@ -38,8 +38,17 @@ export default function Pitch({ frame, home, away, replay }: Props) {
             : null;
 
   return (
-    <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
-      <svg viewBox={`-4 -3 ${W + 8} ${H + 6}`} className="block h-auto w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
+    <>
+      <div className="mb-1 flex gap-3 font-display text-[10px] font-bold tracking-wider text-muted" data-testid="kit-legend">
+        <span className="flex items-center gap-1">
+          <i className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: hc }} /> {home.abbreviation}
+        </span>
+        <span className="flex items-center gap-1">
+          <i className="inline-block h-2.5 w-2.5 rounded-full bg-[#f4f7ff]" style={{ boxShadow: `0 0 0 2px ${ac}` }} /> {away.abbreviation}
+        </span>
+      </div>
+      <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
+        <svg viewBox={`-4 -3 ${W + 8} ${H + 6}`} className="block h-auto w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
             <rect width="6.25" height={H} fill="#0f3a22" />
@@ -71,15 +80,15 @@ export default function Pitch({ frame, home, away, replay }: Props) {
         {frame?.players.map((p) => {
           const c = p.side === "home" ? hc : ac;
           const isAway = p.side === "away";
+          const r = p.hot ? 2.2 : 1.7;
           return (
-            <g key={`${p.side}-${p.name}`} transform={`translate(${p.x} ${p.y})${p.hot ? " scale(1.15)" : ""}`} data-testid="player">
-              <ellipse cx={0} cy={1.6} rx={1.7} ry={0.6} fill="rgba(0,0,0,0.35)" />
-              <circle r={p.gk ? 1.9 : 1.7} fill={p.gk ? "#c6ff00" : isAway ? "#f4f7ff" : c} stroke={p.gk || isAway ? c : "rgba(255,255,255,0.7)"} strokeWidth={isAway || p.gk ? 0.7 : 0.3} />
-              {p.hot ? (
-                <text y={-2.6} textAnchor="middle" className="pitch-label" fontWeight={700} fill="#fff" stroke="#000" strokeWidth="0.5" paintOrder="stroke">
-                  {p.name}
-                </text>
-              ) : null}
+            <g key={`${p.side}-${p.name}`} transform={`translate(${p.x} ${p.y})`} data-testid="player">
+              <ellipse cx={0} cy={r} rx={r} ry={0.6} fill="rgba(0,0,0,0.35)" />
+              {p.hot ? <circle r={r + 0.7} fill="none" stroke="#fff" strokeWidth={0.5} data-ring /> : null}
+              <circle r={r} fill={p.gk ? "#c6ff00" : isAway ? "#f4f7ff" : c} stroke={p.gk || isAway ? c : "rgba(255,255,255,0.7)"} strokeWidth={isAway || p.gk ? 0.9 : 0.3} data-kit />
+              <text y={r * 0.42} textAnchor="middle" fontWeight={700} fill={p.gk || isAway ? "#0b1404" : "#fff"} fontSize={r * 1.1}>
+                {p.no}
+              </text>
             </g>
           );
         })}
@@ -133,7 +142,8 @@ export default function Pitch({ frame, home, away, replay }: Props) {
           </span>
         </div>
       ) : null}
-      {replay ? <span className="chip chip-amber absolute left-2 top-2">Replay</span> : null}
-    </div>
+        {replay ? <span className="chip chip-amber absolute left-2 top-2">Replay</span> : null}
+      </div>
+    </>
   );
 }
