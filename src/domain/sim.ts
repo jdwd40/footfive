@@ -63,6 +63,31 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
+/** Rendered frame chases the target: exponential approach per value, players speed-capped so nobody teleports. */
+const MAX_SPEED = 60; // units per second
+export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
+  if (!prev) return target;
+  const k = (tau: number) => 1 - Math.exp(-dtMs / tau);
+  const kb = k(90);
+  const kp = k(220);
+  const maxStep = (MAX_SPEED * dtMs) / 1000;
+  const was = new Map(prev.players.map((p) => [p.side + ":" + p.no, p]));
+  const players = target.players.map((p) => {
+    const q = was.get(p.side + ":" + p.no);
+    if (!q) return p;
+    let dx = (p.x - q.x) * kp;
+    let dy = (p.y - q.y) * kp;
+    const d = Math.hypot(dx, dy);
+    if (d > maxStep) {
+      dx *= maxStep / d;
+      dy *= maxStep / d;
+    }
+    return { ...p, x: q.x + dx, y: q.y + dy };
+  });
+  const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
+  return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players };
+}
+
 /** Current event at server time `t` (last with `at ≤ t`), its predecessor, and ms elapsed since it. */
 export function playhead(events: MatchEvent[], t: number) {
   let i = events.length - 1;

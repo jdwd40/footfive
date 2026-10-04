@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { frameAt, playhead } from "./sim";
+import { frameAt, playhead, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -89,6 +89,25 @@ describe("frameAt", () => {
     expect(f.players).toHaveLength(9);
     expect(f.players.some((p) => p.name === off.name)).toBe(false);
     expect(frameAt(s, 0.5, null).players).toHaveLength(0);
+  });
+});
+
+describe("smooth", () => {
+  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], caption: "", flash: null, type: "pass", seq: 1, p: 0 });
+  it("players chase a jumped target instead of snapping, and settle on it", () => {
+    let s = smooth(null, at(10), 16);
+    expect(s.players[0].x).toBe(10); // first frame: nothing to chase from
+    s = smooth(s, at(60), 16);
+    expect(s.players[0].x - 10).toBeGreaterThan(0);
+    expect(s.players[0].x - 10).toBeLessThan(2);
+    // 60 units/s cap needs ≥ 833 ms for a 50-unit jump: 40 frames at 50 ms.
+    for (let i = 0; i < 40; i++) s = smooth(s, at(60), 50);
+    expect(Math.abs(s.players[0].x - 60)).toBeLessThan(0.5);
+  });
+  it("the ball is uncapped and new players take their target directly", () => {
+    const s = smooth(at(10), { ...at(60), players: [{ side: "away", name: "B", no: 3, gk: false, x: 90, y: 10, hot: false }] }, 100);
+    expect(s.ball[0]).toBeGreaterThan(40);
+    expect(s.players[0]).toMatchObject({ no: 3, x: 90, y: 10 });
   });
 });
 

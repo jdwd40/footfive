@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { frameAt, playhead } from "../domain/sim";
+import { frameAt, playhead, smooth, type Frame } from "../domain/sim";
 import { countdown, noteServerTime, phaseInfo, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -61,6 +61,9 @@ export default function MatchPage() {
   const inflight = useRef(false);
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
+  // Rendered frame chases the target frame (item 1): reset whenever the timeline jumps.
+  const shownFrame = useRef<Frame | null>(null);
+  const tick = useRef(0);
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -71,7 +74,11 @@ export default function MatchPage() {
     setStay(false);
     lastSeq.current = 0;
     inflight.current = false;
+    shownFrame.current = null;
   }, [fixtureId]);
+  useEffect(() => {
+    shownFrame.current = null;
+  }, [replay]);
 
   const poll = useCallback(async () => {
     if (inflight.current) return;
@@ -127,7 +134,11 @@ export default function MatchPage() {
   // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
   const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
   const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph && scene?.ms ? Math.min(1, ph.elapsed / scene.ms) : 1;
-  const frame = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
+  const target = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
+  const t0 = performance.now();
+  const dt = Math.min(100, Math.max(0, t0 - tick.current));
+  tick.current = t0;
+  const frame = target ? (shownFrame.current = smooth(shownFrame.current, target, dt)) : (shownFrame.current = null);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
   // Public state as the lagged pitch shows it: every event carries its own snapshot. Auto-return keys off the real state.
