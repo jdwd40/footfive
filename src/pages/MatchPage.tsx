@@ -42,7 +42,7 @@ function usePref(): [Pref, (p: Pref) => void, boolean] {
 
 /** Period markers, coaching, ...: ball held where it was, caption only. */
 function idleScene(e: MatchEvent, ball: Pt): Scene {
-  return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, important: false, side: e.side ?? null };
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
 export default function MatchPage() {

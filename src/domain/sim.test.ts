@@ -32,7 +32,7 @@ function matches(n = 10) {
   return out;
 }
 
-const idle = (e: MatchEvent, ball: Pt): Scene => ({ key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, important: false });
+const idle = (e: MatchEvent, ball: Pt): Scene => ({ key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text });
 
 describe("frameAt", () => {
   const ms = matches();
