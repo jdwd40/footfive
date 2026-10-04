@@ -212,6 +212,23 @@ describe("MatchPage timeline player", () => {
     expect(screen.getAllByTestId("player")).toHaveLength(9);
   });
 
+  it("replaying an event from before a red card restores the player on the pitch, but the line-ups keep striking him through", async () => {
+    const now = Date.now();
+    const goal = { ...ev(1, now - 60000, "GOAL ONE"), t: "goal", target: [100, 32] as [number, number] };
+    const red = { ...ev(2, now - 40000, "Red card!"), t: "red_card", p: "Home P3", p2: undefined };
+    const { container } = await mount(view([goal, red, ev(3, now - 3000, "Pass")], { home: names("Home"), away: names("Away") }, now));
+    await act(() => new Promise((r) => setTimeout(r, 60)));
+    expect(screen.getAllByTestId("player")).toHaveLength(9);
+    expect(container.querySelectorAll(".line-through")).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Replay: GOAL ONE"));
+    });
+    await act(() => new Promise((r) => setTimeout(r, 60)));
+    expect(screen.getByText("Replay")).toBeTruthy();
+    expect(screen.getAllByTestId("player")).toHaveLength(10); // the replay shows the match as it was
+    expect(container.querySelectorAll(".line-through")).toHaveLength(1); // the line-ups follow the live match
+  });
+
   it("renders the pitch with ball only when lineups are missing", async () => {
     const now = Date.now();
     await mount(view([ev(1, now - 3000, "Pass")], null, now));

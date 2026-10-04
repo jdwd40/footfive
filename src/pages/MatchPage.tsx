@@ -46,7 +46,7 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
-type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */ };
+type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */ };
 
 /** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
 function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
@@ -70,7 +70,7 @@ export default function MatchPage() {
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set() }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -141,6 +141,11 @@ export default function MatchPage() {
     let last = performance.now();
     // Dismissals whose red_card event has rolled out of the events buffer: the server's list is the only record left, always applied.
     const seeded = (serverSentOff ?? []).filter((s) => !events.some((e) => e.t === "red_card" && e.side === s.side && e.p === s.p)).map((s) => s.side + ":" + s.p);
+    const dismissed = (seq: number) => {
+      const out = sentOffAt(events, seq);
+      for (const k of seeded) out.add(k);
+      return out;
+    };
     const step = () => {
       id = requestAnimationFrame(step);
       const t0 = performance.now();
@@ -157,15 +162,14 @@ export default function MatchPage() {
       const scene = replay ? replay.scene : liveScene;
       const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
       setAnim((a) => {
-        if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set() };
+        if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() };
         const same = a.frame?.seq === scene.seq;
         // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
         const jumped = !!a.frame && !same && Math.abs(scene.seq - a.frame.seq) > 1;
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
         const startBall = same ? a.startBall : jumped ? null : a.frame?.ball ?? null;
         // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
-        const sentOff = sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1);
-        for (const k of seeded) sentOff.add(k);
+        const sentOff = dismissed(same && a.revealed ? scene.seq : scene.seq - 1);
         const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined, prevScene);
         // A result event that landed late (scene already over) has the drawn ball still travelling: settle puts it on the impact this tick.
         const frame = settle(scene, p, sysReduced ? target : smooth(jumped ? null : a.frame, target, dt), same && a.reached);
@@ -173,13 +177,15 @@ export default function MatchPage() {
         const gate = reveal(scene, p, frame.ball, same && a.reached);
         // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
         const liveRevealed = replay ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
-        return { now, frame, startBall, sentOff, ...gate, liveRevealed };
+        // The line-ups follow the live playhead: a replay of something older than a red card must not un-strike the player.
+        const liveSentOff = replay && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
+        return { now, frame, startBall, sentOff, liveSentOff, ...gate, liveRevealed };
       });
     };
     step();
     return () => cancelAnimationFrame(id);
   }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
-  const { now, frame, revealed, liveRevealed, sentOff } = anim;
+  const { now, frame, revealed, liveRevealed, liveSentOff } = anim;
   const ph = playhead(events, now - LAG_MS);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
@@ -305,7 +311,7 @@ export default function MatchPage() {
               <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} />
             </section>
           ) : null}
-          {view.lineups ? <Lineups view={view} sentOff={sentOff} /> : null}
+          {view.lineups ? <Lineups view={view} sentOff={liveSentOff} /> : null}
         </aside>
       </div>
     </Layout>
@@ -588,7 +594,7 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
   );
 }
 
-/** `sentOff` is the pitch's set (cards as the lagged playhead has shown them), so the strike-through never beats the pitch. */
+/** `sentOff` is the live playhead's set (cards as the lagged pitch has shown them), so the strike-through never beats the pitch — and a replay of older play never lifts it. */
 function Lineups({ view, sentOff: off }: { view: MatchView; sentOff: Set<string> }) {
   const fx = view.fixture;
   return (
