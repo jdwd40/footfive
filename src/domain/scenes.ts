@@ -347,8 +347,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     case "et_half_time":
     case "shootout_start": {
       // Ball held where it was; the banner lives the whole break — real ms, whatever the pace, like the setup scenes.
-      const BREAK: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000 }; // matches balance.js halfTimeMs / etBreakMs / etHalfTimeMs
-      return { ...base, ms: BREAK[e.t] ?? 3000, ball: [prevBall], actors: [] };
+      const BREAK: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000, shootout_start: 10000 }; // matches balance.js halfTimeMs / etBreakMs / etHalfTimeMs / shootoutIntroMs
+      return { ...base, ms: BREAK[e.t], ball: [prevBall], actors: [], cam: e.t === "shootout_start" ? penCam("home") : undefined }; // shootout intro: frameAt choreographs it and holds the full pitch for the first 70 %
     }
     case "match_end":
       return { ...base, ms: 5000, ball: [prevBall], actors: [] }; // full-time banner; the last event, so it holds

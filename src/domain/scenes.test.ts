@@ -265,7 +265,7 @@ describe("highlight scenes agree with the simulation", () => {
   });
 
   it("period markers get a banner-life scene whatever the pace — breaks last the engine's real break; the ball stays where it was", () => {
-    const life: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000, second_half: 3000, extra_time: 3000, et_second_half: 3000, shootout_start: 3000 }; // balance.js halfTimeMs / etBreakMs / etHalfTimeMs
+    const life: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000, second_half: 3000, extra_time: 3000, et_second_half: 3000, shootout_start: 10000 }; // balance.js halfTimeMs / etBreakMs / etHalfTimeMs / shootoutIntroMs
     for (const t of Object.keys(life)) {
       const e = all.find((e) => e.t === t);
       if (!e) continue; // not every seed goes the distance

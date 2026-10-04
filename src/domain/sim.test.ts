@@ -321,6 +321,28 @@ describe("frameAt", () => {
     expect(ys(at("restart", 0)).every((y) => y <= 64)).toBe(true);
     expect(ys(at("pass", 0)).every((y) => y <= 64)).toBe(true);
   });
+
+  it("shootout intro (10 s): everyone to the centre circle, a huddle at half-way, then the keepers to the shootout end and the rest to the halfway line; camera full then penalty", () => {
+    const m = ms.find((x) => x.events.some((e) => e.t === "shootout_start")) ?? ms[0];
+    const e = { ...(m.events.find((e) => e.t === "shootout_start") ?? m.events.find((e) => e.t === "kickoff")!), t: "shootout_start", side: "away" as const };
+    const s = sceneFor(e, [30, 20], 1000)!;
+    expect(s.ms).toBe(10000);
+    const at = (p: number) => frameAt(s, p, m.lineups, undefined, 1000);
+    const start = at(0);
+    expect(start.players.filter((p) => p.gk).every((p) => p.x < 10 || p.x > 90)).toBe(true); // keepers start on their own lines
+    expect(start.cam).toEqual([-4, -3, 108, 77]);
+    const mid = at(0.5);
+    expect(mid.players).toHaveLength(10);
+    for (const p of mid.players) expect(Math.hypot(p.x - 50, p.y - 32)).toBeLessThan(10);
+    expect(mid.cam).toEqual([-4, -3, 108, 77]);
+    const end = at(1);
+    for (const p of end.players.filter((p) => p.gk)) expect(p.x).toBeGreaterThanOrEqual(90);
+    expect(end.players.find((p) => p.gk && p.side === "home")!.y).toBeCloseTo(32, 3); // away kick first: the home keeper takes the line
+    for (const p of end.players.filter((p) => !p.gk)) expect(Math.abs(p.x - 50)).toBeLessThan(4);
+    expect(end.cam).not.toEqual([-4, -3, 108, 77]);
+    expect(end.ref).toEqual([89, 32]);
+    expect(at(1.5).players.map((p) => [p.x, p.y])).toEqual(end.players.map((p) => [p.x, p.y])); // holds while the setup is awaited
+  });
 });
 
 describe("smooth", () => {

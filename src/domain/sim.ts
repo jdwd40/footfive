@@ -108,6 +108,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   // No ref actor: he trails play, ten behind the ball on the far side, so he is always on the pitch and only ever jogs (smooth) into a scene.
   const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(ball[1] > 32 ? ball[1] - 14 : ball[1] + 14, 0, 64)];
   let refPt = ref ?? home;
+  let cam = scene.cam ?? FULL_CAM;
   const walk = WALK_OFF.has(scene.type) ? 6000 : WALK_ON.has(scene.type) ? 4000 : 0;
   if (walk) {
     // Tunnel walk: each one's target is eased between where he would stand and the tunnel (sample's ease); smoothing makes it a glide.
@@ -115,8 +116,24 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     const to = (p: Pt): Pt => (WALK_OFF.has(scene.type) ? sample([p, TUNNEL], f) : sample([TUNNEL, p], f));
     for (const p of players) [p.x, p.y] = to([p.x, p.y]);
     refPt = to(refPt);
+  } else if (scene.type === "shootout_start") {
+    // Shootout intro (10 s): everyone walks to the centre circle (0–35 %) and huddles there in two arcs of five (35–70 %); then the
+    // keepers go to the shootout end — the first kick's keeper on his line, the other by the post — and the rest line the halfway
+    // line in two rows (70–100 %). The ref is at the spot; the camera holds the full pitch until the keepers set off, then glides in.
+    const seg = (a: number, b: number) => Math.max(0, Math.min(1, (t - a) / (b - a)));
+    const lineGk = other(scene.side); // faces the first kick
+    for (const side of ["home", "away"] as Side[]) {
+      players.filter((p) => p.side === side).forEach((p, i) => {
+        const ang = (Math.PI * (i - 2)) / 6 + (side === "home" ? Math.PI : 0); // five on a ±60° arc, home facing away across the spot
+        const ring: Pt = [50 + 6 * Math.cos(ang), 32 + 6 * Math.sin(ang)];
+        const end: Pt = p.gk ? [97, side === lineGk ? 32 : 39] : [side === "home" ? 48 : 52, 17 + i * 6];
+        [p.x, p.y] = t < 0.35 ? sample([[p.x, p.y], ring], seg(0, 0.35)) : t < 0.7 ? ring : sample([ring, end], seg(0.7, 1));
+      });
+    }
+    refPt = [89, 32];
+    if (t < 0.7) cam = FULL_CAM;
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
