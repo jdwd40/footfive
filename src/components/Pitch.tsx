@@ -23,6 +23,19 @@ export default function Pitch({ frame, home, away, replay }: Props) {
   const flash = frame && frame.p > 0.62 ? frame.flash : null;
   // Match goals (not shootout kicks): big banner for the whole goal scene and the celebration after it.
   const goal = frame?.flash === "goal" && (frame.type === "goal" || frame.type === "penalty_goal" || frame.type === "celebration") ? frame : null;
+  // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
+  const kick = frame?.kick;
+  const team = frame?.side === "away" ? away : home;
+  const pen =
+    frame?.type === "shootout_end" && frame.side
+      ? { text: `${team.name} are through!`, cls: "bg-lime text-ink text-xl sm:text-3xl" }
+      : frame?.type === "shootout_setup" && kick?.sd && kick.no === 6
+        ? { text: "SUDDEN DEATH", cls: "bg-magenta text-white text-xl sm:text-3xl" }
+        : kick?.win
+          ? { text: `${team.abbreviation} score this and they're through!`, cls: "bg-lime text-ink text-sm sm:text-lg" }
+          : kick?.must
+            ? { text: `${team.abbreviation} must score to stay in`, cls: "bg-amber text-ink text-sm sm:text-lg" }
+            : null;
 
   return (
     <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
@@ -110,6 +123,13 @@ export default function Pitch({ frame, home, away, replay }: Props) {
                     : flash === "pen"
                       ? "PENALTY"
                       : "NO GOAL"}
+          </span>
+        </div>
+      ) : null}
+      {pen ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-2">
+          <span className={`goal-pop rounded-md px-3 py-1 text-center font-display font-black tracking-wide shadow-lg ${pen.cls}`} data-testid="pen-banner">
+            {pen.text}
           </span>
         </div>
       ) : null}

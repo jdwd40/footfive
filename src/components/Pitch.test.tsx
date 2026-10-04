@@ -27,3 +27,15 @@ describe("Pitch goal banner", () => {
     expect(screen.queryByTestId("goal-banner")).toBeNull();
   });
 });
+
+describe("Pitch shootout banners", () => {
+  const pen = (f: Partial<Frame>) => {
+    render(<Pitch frame={frame({ type: "shootout_setup", flash: "pen", side: "home", ...f })} home={home} away={away} />);
+    return screen.queryByTestId("pen-banner")?.textContent;
+  };
+  it("SUDDEN DEATH on the first sudden-death kick", () => expect(pen({ kick: { no: 6, sd: 1 } })).toBe("SUDDEN DEATH"));
+  it("score to go through", () => expect(pen({ kick: { no: 5, sd: 0, win: 1 } })).toBe("HOM score this and they're through!"));
+  it("must score to stay in", () => expect(pen({ side: "away", kick: { no: 4, sd: 0, must: 1 } })).toBe("AWY must score to stay in"));
+  it("winner through at shootout end", () => expect(pen({ type: "shootout_end", flash: null, side: "away" })).toBe("Away City are through!"));
+  it("nothing on an ordinary kick", () => expect(pen({ kick: { no: 2, sd: 0 } })).toBeUndefined());
+});
