@@ -48,6 +48,12 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 /** What the animation loop committed last: server time it ran at, the frame it drew, and whether the result may show. */
 type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean };
 
+/** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
+function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
+  if (!ph) return null;
+  return revealed || !ph.prev ? ph.cur.st : ph.prev.st;
+}
+
 export default function MatchPage() {
   const { fixtureId = "" } = useParams();
   const navigate = useNavigate();
@@ -160,8 +166,8 @@ export default function MatchPage() {
   const ph = playhead(events, now - LAG_MS);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
-  // Public state as the lagged pitch shows it: every event carries its own snapshot. Auto-return keys off the real state.
-  const st: PubState | null = ph?.cur.st ?? view?.fixture.st ?? null;
+  // Public state as the lagged pitch shows it: every event carries its own snapshot, held back until the result is revealed. Auto-return keys off the real state.
+  const st: PubState | null = shownState(ph, revealed) ?? view?.fixture.st ?? null;
   const finished = view?.fixture.st?.ph === "finished";
   const finishedAt = useMemo(() => (finished ? Date.now() : 0), [finished]);
   useEffect(() => {
@@ -205,6 +211,8 @@ export default function MatchPage() {
   const current = replay ? null : ph?.cur;
   // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
   const text = current && !revealed && ph?.prev ? ph.prev.text : current?.text;
+  // Events as the playhead has shown them: nothing newer, and the current one only once its result is revealed.
+  const seen = ph ? events.filter((e) => e.seq < ph.cur.seq || (revealed && e.seq === ph.cur.seq)) : events;
 
   return (
     <Layout wide>
@@ -253,12 +261,12 @@ export default function MatchPage() {
             </div>
           </section>
 
-          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={shown} events={events} /> : null}
+          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={shown} events={seen} /> : null}
 
           <section className="panel p-3">
             <h2 className="panel-title mb-2">Match events</h2>
             <EventFeed
-              events={events}
+              events={seen}
               view={view}
               onReplay={(e) => {
                 const s = scenes.get(e.seq);

@@ -72,6 +72,28 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("stats")).toBeTruthy();
   });
 
+  it("score, stats and the feed hold the previous event's state until the goal is revealed", async () => {
+    const run = async (elapsed: number) => {
+      const now = Date.now();
+      const scored = { ...st!, sc: [1, 0] as [number, number], x: [[3, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0]] } as typeof st;
+      const before = { ...st!, x: [[2, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0]] } as typeof st;
+      const shot = { ...ev(1, now - 30000, "Shoots!"), t: "shot", ball: [85, 32] as [number, number], st: before! };
+      const goal = { ...ev(2, now - 1500 - elapsed, "GOAL!"), t: "goal", target: [100, 32] as [number, number], st: scored! };
+      await mount(view([shot, goal], null, now));
+      return { score: screen.getByTestId("match-score").textContent, shots: screen.getByTestId("stats").textContent, feed: screen.getByTestId("event-feed").textContent };
+    };
+    const early = await run(0.3 * 3800);
+    expect(early.score).toBe("0–0");
+    expect(early.shots).toContain("2Shots");
+    expect(early.feed).toContain("Shoots!");
+    expect(early.feed).not.toContain("GOAL!");
+    cleanup();
+    const late = await run(0.8 * 3800);
+    expect(late.score).toBe("1–0");
+    expect(late.shots).toContain("3Shots");
+    expect(late.feed).toContain("GOAL!");
+  });
+
   it("holds the shot's commentary until the ball is in, then shows GOAL!", async () => {
     // LAG_MS = 1500; goal scene ms = 3800 → p = (now − 1500 − at) / 3800
     const run = async (elapsed: number) => {
