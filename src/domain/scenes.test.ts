@@ -115,7 +115,7 @@ describe("highlight scenes agree with the simulation", () => {
     expect(shots).toBeGreaterThan(100);
   });
 
-  it("never emits corners; bounces sit on a side board", () => {
+  it("never emits corners; bounces sit on a side board; every miss bounces back in", () => {
     expect(all.filter((e) => e.t === "corner")).toHaveLength(0);
     const b = all.filter((e) => e.t === "bounce");
     expect(b.length).toBeGreaterThan(0);
@@ -123,6 +123,15 @@ describe("highlight scenes agree with the simulation", () => {
       const hit = e.from as [number, number]; // the wall the ball came off
       expect(hit[1] === 0 || hit[1] === 64 || hit[0] === 0 || hit[0] === 100).toBe(true);
     }
+    let misses = 0;
+    for (const m of matches) {
+      m.forEach((e, i) => {
+        if (e.t !== "miss") return;
+        misses++;
+        expect(m[i + 1]?.t, `miss #${e.seq}`).toBe("bounce");
+      });
+    }
+    expect(misses).toBeGreaterThan(20);
   });
 
   it("every live minute carries at least two on-pitch events", () => {

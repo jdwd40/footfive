@@ -673,8 +673,8 @@ function attack(st, out, ctx, side, c) {
   st.danger = false; // the outcome is public with this event, so markets reopen
   emit(st, out, ctx.at(f), outcome, res);
   st.ball = res.ball;
-  // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues.
-  if ((outcome === "block" || outcome === "miss") && rnd(st) < 0.45) bounce(st, out, ctx, f + 0.06, def, chain);
+  // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues. A miss always leaves the pitch.
+  if (outcome === "miss" || (outcome === "block" && rnd(st) < 0.45)) bounce(st, out, ctx, f + 0.06, def, chain);
 }
 
 /** Ball hits a board and comes back into play; `side` is the team that picks it up. */
