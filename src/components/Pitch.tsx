@@ -73,7 +73,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
         </span>
       </div>
       <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
-        <svg viewBox={(frame?.cam ?? FULL_CAM).join(" ")} className="block h-auto w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
+        <svg viewBox={(frame?.cam ?? FULL_CAM).join(" ")} preserveAspectRatio="xMidYMid meet" className="block w-full" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}` }} role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
             <rect width="6.25" height={H} fill="#0f3a22" />

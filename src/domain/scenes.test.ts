@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sample, sampleN, sceneFor, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, sample, sampleN, sceneFor, type Cam, type Pt, type Scene } from "./scenes";
 import type { MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -27,6 +27,8 @@ function events(n = 40): MatchEvent[][] {
 
 const inMouth = (y: number) => y >= 27.5 && y <= 36.5;
 const end = (s: Scene): Pt => s.ball[s.ball.length - 1];
+/** Penalty camera at the x=100 end: 56 wide at the full-pitch aspect, centred on y=32, pushed left to the right-hand margin (104). */
+const PEN_HOME: Cam = [48, 32 - (56 * 77) / 108 / 2, 56, (56 * 77) / 108];
 
 describe("highlight scenes agree with the simulation", () => {
   const matches = events();
@@ -211,7 +213,7 @@ describe("highlight scenes agree with the simulation", () => {
     const kicks = all.filter((e) => e.t === "shootout_kick");
     for (const e of kicks.slice(0, 10)) {
       const s = sceneFor(e, [50, 32], 15000)!;
-      expect(s.cam).toEqual([63, 16, 50, 32]);
+      expect(s.cam).toEqual(PEN_HOME);
       expect(s.flashAt).toBe(0.75);
       // Ball still on the spot and keeper still central at half-time: nothing gives the outcome away.
       expect(sample(s.ball, 0.5)).toEqual([89, 32]);
@@ -220,14 +222,36 @@ describe("highlight scenes agree with the simulation", () => {
       if (e.pen!.outcome === "goal") expect(x).toBeGreaterThan(100);
     }
     const awayPen = all.find((e) => e.t === "penalty_awarded" && e.side === "away")!;
-    expect(sceneFor(awayPen, [50, 32], 15000)!.cam).toEqual([-13, 16, 50, 32]);
+    expect(sceneFor(awayPen, [50, 32], 15000)!.cam).toEqual([-4, PEN_HOME[1], 56, PEN_HOME[3]]); // mirrored, clamped to the left margin
     const setup = all.find((e) => e.t === "shootout_setup")!;
     const ss = sceneFor(setup, [50, 32], 15000)!;
-    expect(ss.cam).toEqual([63, 16, 50, 32]);
+    expect(ss.cam).toEqual(PEN_HOME);
     expect(ss.pens).toEqual([setup.st.so!.h, setup.st.so!.a]);
     const so = all.find((e) => e.t === "shootout_end")!;
-    expect(sceneFor(so, [50, 32], 15000)!.cam).toEqual([63, 16, 50, 32]);
+    expect(sceneFor(so, [50, 32], 15000)!.cam).toEqual(PEN_HOME);
     expect(sceneFor(all.find((e) => e.t === "pass")!, [50, 32], 15000)!.cam).toBeUndefined();
+  });
+
+  it("every camera window keeps the full-pitch aspect ratio, so zooming never changes the SVG's height", () => {
+    const ratio = FULL_CAM[2] / FULL_CAM[3];
+    let n = 0;
+    for (const m of matches.slice(0, 20)) {
+      let prev: Pt = [50, 32];
+      for (const e of m) {
+        const s = sceneFor(e, prev, 15000);
+        if (!s) continue;
+        prev = end(s);
+        if (!s.cam) continue;
+        n++;
+        expect(Math.abs(s.cam[2] / s.cam[3] - ratio), `${e.t} #${e.seq}`).toBeLessThan(0.01);
+        expect(s.cam[2], `${e.t} #${e.seq}`).toBe(56); // the box and the goal fit
+        expect(s.cam[0]).toBeGreaterThanOrEqual(FULL_CAM[0]); // inside the full-pitch margins
+        expect(s.cam[0] + s.cam[2]).toBeLessThanOrEqual(FULL_CAM[0] + FULL_CAM[2]);
+        expect(s.cam[1]).toBeGreaterThanOrEqual(FULL_CAM[1]);
+        expect(s.cam[1] + s.cam[3]).toBeLessThanOrEqual(FULL_CAM[1] + FULL_CAM[3]);
+      }
+    }
+    expect(n).toBeGreaterThan(20);
   });
 
   it("setup scenes fill the engine's wait for the kick: taker places, walks back and settles; keeper bounces; the ref jogs in", () => {

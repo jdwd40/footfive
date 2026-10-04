@@ -70,9 +70,15 @@ export function short(name?: string) {
 function keeperSpot(defSide: Side): Pt {
   return [defSide === "home" ? 3 : 97, GOAL_Y];
 }
-/** Broadcast camera for a penalty: 50×32 window centred 12 in from the attacked goal line. */
+/** Camera window `w` wide centred on (cx, cy) at the full-pitch aspect (so the SVG never reflows on a zoom), kept inside the full-pitch margins. */
+function camAt(cx: number, cy: number, w: number): Cam {
+  const [fx, fy, fw, fh] = FULL_CAM;
+  const h = (w * fh) / fw;
+  return [Math.max(fx, Math.min(fx + fw - w, cx - w / 2)), Math.max(fy, Math.min(fy + fh - h, cy - h / 2)), w, h];
+}
+/** Broadcast camera for a penalty: 56 wide (the box and the goal fit) centred 12 in from the attacked goal line. */
 function penCam(g: Side): Cam {
-  return [goalX(g) + toward(g, -12) - 25, 16, 50, 32];
+  return camAt(goalX(g) + toward(g, -12), GOAL_Y, 56);
 }
 /** Celebration spots by the nearest corner flag of the attacked end: scorer, mate 1, mate 2. */
 function huddle(atk: Side, y: number): [Pt, Pt, Pt] {

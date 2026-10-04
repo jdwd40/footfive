@@ -9,9 +9,13 @@ const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "
 const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ms: 1500, cam: [-4, -3, 108, 77], ...f });
 
 describe("Pitch penalty camera and shootout reveal", () => {
-  it("viewBox follows the frame camera", () => {
+  it("viewBox follows the frame camera; the element's aspect ratio is fixed to the full pitch so a zoom never reflows the page", () => {
     const { container } = render(<Pitch frame={frame({ cam: [63, 16, 50, 32] })} home={home} away={away} revealed />);
-    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("63 16 50 32");
+    const svg = container.querySelector("svg")!;
+    expect(svg.getAttribute("viewBox")).toBe("63 16 50 32");
+    expect(svg.style.aspectRatio.replace(/\s/g, "")).toBe("108/77");
+    expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
+    expect(svg.className.baseVal).not.toContain("h-auto");
   });
   it("tension strip names the kick and taker; GOAL reveals the pens score, SAVED! on a save, both gated by `revealed`", () => {
     const { rerender } = render(<Pitch frame={frame({ type: "shootout_setup", flash: "pen", side: "away", who: "Jo Striker", kick: { no: 3, sd: 0 }, pens: [2, 1] })} home={home} away={away} revealed />);

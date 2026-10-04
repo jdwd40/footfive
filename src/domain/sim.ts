@@ -156,7 +156,7 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
   }
   // Penalty: everyone who isn't taking or saving lines the edge of the D, home and away alternating.
   if (scene.cam && PEN_ARC.has(scene.type)) {
-    const x = scene.cam[0] > 50 ? 80 : 20;
+    const x = scene.cam[0] + scene.cam[2] / 2 > 50 ? 80 : 20; // which end the camera looks at
     const named = new Set(scene.actors.map((a) => (a.keeper ? a.side + ":gk" : a.label)));
     const free = (side: Side) => players.filter((p) => !named.has(p.gk ? side + ":gk" : short(p.name)) && p.side === side);
     const h = free("home");

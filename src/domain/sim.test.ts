@@ -151,7 +151,7 @@ describe("frameAt", () => {
     expect(arc).toHaveLength(8);
     for (const p of arc) expect(Math.abs(p.x - 80)).toBeLessThan(8);
     for (let i = 1; i < arc.length; i++) expect(arc[i].side).not.toBe(arc[i - 1].side);
-    expect(f.cam).toEqual([63, 16, 50, 32]);
+    expect(f.cam).toEqual([48, 32 - (56 * 77) / 108 / 2, 56, (56 * 77) / 108]);
     expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 77]);
   });
 
