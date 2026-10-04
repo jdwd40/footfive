@@ -58,6 +58,9 @@ export default function MatchPage() {
   const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
   const [stay, setStay] = useState(false);
   const lastSeq = useRef(0);
+  const inflight = useRef(false);
+  const fxRef = useRef(fixtureId);
+  fxRef.current = fixtureId;
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -67,15 +70,15 @@ export default function MatchPage() {
     setError("");
     setStay(false);
     lastSeq.current = 0;
+    inflight.current = false;
   }, [fixtureId]);
 
-  const inflight = useRef(false);
   const poll = useCallback(async () => {
     if (inflight.current) return;
     inflight.current = true;
     try {
       const v = await footfiveApi.match(fixtureId, lastSeq.current);
-      if (v.fixture.id !== fixtureId) return;
+      if (v.fixture.id !== fxRef.current) return;
       noteServerTime(v.serverTimeMs);
       reportConnectionOk();
       setLastOk(Date.now());

@@ -1,5 +1,5 @@
 import { render, screen, act, cleanup, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatchEvent, MatchView } from "../lib/pocketbase";
 
@@ -82,6 +82,35 @@ describe("MatchPage timeline player", () => {
     expect(await run(0.3 * 3800)).toBe("Shoots!");
     cleanup();
     expect(await run(0.8 * 3800)).toBe("GOAL!");
+  });
+
+  it("ignores a late poll response for the previous fixture after switching", async () => {
+    const now = Date.now();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const { default: MatchPage } = await import("./MatchPage");
+    let resolveA!: (v: MatchView) => void;
+    const vA = view([ev(1, now - 3000, "A pass")], null, now);
+    const vB = view([ev(1, now - 3000, "B pass")], null, now);
+    vB.fixture = { ...vB.fixture, id: "fx2" };
+    vi.mocked(footfiveApi.match).mockImplementation((id: string) => (id === "fx1" ? new Promise<MatchView>((r) => (resolveA = r)) : Promise.resolve(vB)));
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={["/match/fx1"]}>
+          <Link to="/match/fx2">go B</Link>
+          <Routes>
+            <Route path="/match/:fixtureId" element={<MatchPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    expect(screen.getByTestId("match-loading")).toBeTruthy();
+    // Navigate to B: the first fx2 poll must not be blocked by A's in-flight request.
+    await act(async () => {
+      fireEvent.click(screen.getByText("go B"));
+    });
+    await act(async () => resolveA(vA));
+    expect(screen.queryByText("A pass")).toBeNull();
+    expect(screen.getByTestId("commentary").textContent).toBe("B pass");
   });
 
   it("renders the pitch with ball only when lineups are missing", async () => {
