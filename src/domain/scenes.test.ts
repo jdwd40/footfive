@@ -69,6 +69,32 @@ describe("highlight scenes agree with the simulation", () => {
     expect(end(sceneFor(penRestart, [7, 24], 15000)!)).toEqual(penRestart.ball);
   });
 
+  it("every result scene names its impact point, and the ball passes through it", () => {
+    let n = 0;
+    for (const m of matches) {
+      let prev: Pt = [50, 32];
+      for (const e of m) {
+        const s = sceneFor(e, prev, 15000);
+        if (!s) continue;
+        prev = end(s);
+        if (!s.flash) {
+          expect(s.impact, `${e.t} #${e.seq}`).toBeUndefined();
+          continue;
+        }
+        n++;
+        const [ix, iy] = s.impact!;
+        let best = Infinity;
+        for (let t = 0; t <= 1.0001; t += 0.01) {
+          const [x, y] = sample(s.ball, t);
+          best = Math.min(best, Math.hypot(x - ix, y - iy));
+        }
+        expect(best, `${e.t} #${e.seq}`).toBeLessThan(0.05);
+        if (s.flash === "goal" && e.t !== "celebration") expect(Math.abs(ix - (e.t === "shootout_kick" ? 100 : e.side === "home" ? 100 : 0))).toBeLessThanOrEqual(2);
+      }
+    }
+    expect(n).toBeGreaterThan(200);
+  });
+
   it("saved, missed, blocked and woodwork shots never cross the goal line inside the mouth", () => {
     let n = 0;
     for (const e of all) {

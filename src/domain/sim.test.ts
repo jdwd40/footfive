@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { frameAt, playhead, smooth, type Frame } from "./sim";
+import { frameAt, playhead, reveal, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -228,6 +228,20 @@ describe("smooth", () => {
     const s = smooth({ ...at(10), cam: [-4, -3, 108, 70] }, { ...at(10), cam: [63, 16, 50, 32] }, 100);
     expect(s.cam[0]).toBeGreaterThan(-4);
     expect(s.cam[0]).toBeLessThan(20);
+  });
+});
+
+describe("reveal", () => {
+  const goal: Scene = { key: "g", seq: 5, type: "goal", ms: 3800, ball: [[80, 30], [100, 32], [102, 32], [102, 32], [102, 32]], actors: [], caption: "", flash: "goal", impact: [102, 32] };
+  it("waits for the flash moment and for the displayed ball to reach the impact point, then latches", () => {
+    expect(reveal(goal, 0.8, [92, 32], false)).toEqual({ reached: false, revealed: false }); // ball still short of the net
+    expect(reveal(goal, 0.3, [102, 32], false)).toEqual({ reached: true, revealed: false }); // in the net, but the scene says not yet
+    expect(reveal(goal, 0.8, [101, 31], false)).toEqual({ reached: true, revealed: true });
+    expect(reveal(goal, 0.9, [60, 20], true)).toEqual({ reached: true, revealed: true }); // once reached, stays revealed
+    expect(reveal({ ...goal, flashAt: 0.75 }, 0.7, [102, 32], true).revealed).toBe(false);
+  });
+  it("scenes without a result have nothing to hide", () => {
+    expect(reveal({ ...goal, flash: null, impact: undefined }, 0, [10, 10], false).revealed).toBe(true);
   });
 });
 

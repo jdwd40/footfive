@@ -164,6 +164,15 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, cam };
 }
 
+/**
+ * May the result show? Only once the scene reaches its flash moment AND the *displayed* ball has got to the impact
+ * point (the drawn ball lags the target). `reached` latches for the scene's life so the badge never flickers off.
+ */
+export function reveal(scene: Scene, p: number, ball: Pt, reachedBefore: boolean) {
+  const reached = reachedBefore || !scene.impact || Math.hypot(ball[0] - scene.impact[0], ball[1] - scene.impact[1]) < 1.5;
+  return { reached, revealed: !scene.flash || (p >= (scene.flashAt ?? 0.62) && reached) };
+}
+
 /** Current event at server time `t` (last with `at ≤ t`), its predecessor, and ms elapsed since it. */
 export function playhead(events: MatchEvent[], t: number) {
   let i = events.length - 1;

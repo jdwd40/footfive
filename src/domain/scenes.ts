@@ -33,6 +33,7 @@ export type Scene = {
   pens?: [number, number]; // shootout score after the event
   cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
   flashAt?: number; // progress at which the result badge may show (default 0.62)
+  impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
 };
 export type Cam = [number, number, number, number];
 export const FULL_CAM: Cam = [-4, -3, 108, 70];
@@ -208,6 +209,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
         ],
         flash: "goal",
         focus: atk,
+        impact: net,
       };
     }
     case "celebration": {
@@ -225,6 +227,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
         ],
         flash: "goal",
         focus: side,
+        flashAt: 0, // the goal is already in: banner and caption from the first frame
+        impact: prevBall,
       };
     }
     case "save": {
@@ -244,6 +248,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
         ],
         flash: "save",
+        impact: catchPt,
       };
     }
     case "block": {
@@ -261,6 +266,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           { id: "gk", side, keeper: true, path: [keeperSpot(side), keeperSpot(side), keeperSpot(side)] },
         ],
         flash: "miss",
+        impact: blockAt,
       };
     }
     case "woodwork":
@@ -279,6 +285,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           { id: "gk", side: other(side), keeper: true, path: [gk, [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.4], [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.5], gk] },
         ],
         flash: e.t === "woodwork" ? "wood" : "miss",
+        impact: target,
       };
     }
     case "bounce": {
@@ -299,6 +306,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           { id: "ref", side: "ref" as const, path: [clampPt([at[0] - 8, at[1] - 8]), clampPt([at[0] - 4, at[1] - 4])] },
         ],
         flash: e.t === "foul" ? null : "card",
+        impact: e.t === "foul" ? undefined : at,
       };
     }
     case "penalty_awarded": {
@@ -314,6 +322,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
         ],
         flash: "pen",
         cam: penCam(side),
+        impact: spot,
       };
     }
     case "shootout_end":
@@ -355,6 +364,7 @@ function setupScene(e: MatchEvent, prevBall: Pt, d: ReturnType<typeof pace>): Sc
     ],
     flash: "pen",
     cam: penCam(g),
+    impact: spot,
   };
 }
 
@@ -402,6 +412,7 @@ function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnTyp
     flashAt: 0.75,
     cam: penCam(g),
     focus: outcome === "goal" ? side : outcome === "save" ? def : null,
+    impact: strikeAt,
   };
 }
 

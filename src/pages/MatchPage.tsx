@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { frameAt, playhead, smooth, type Frame } from "../domain/sim";
+import { frameAt, playhead, reveal, smooth, type Frame } from "../domain/sim";
 import { countdown, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -45,8 +45,8 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
   return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
-/** What the animation loop committed last: server time it ran at and the frame it drew. */
-type Anim = { now: number; frame: Frame | null };
+/** What the animation loop committed last: server time it ran at, the frame it drew, and whether the result may show. */
+type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean };
 
 export default function MatchPage() {
   const { fixtureId = "" } = useParams();
@@ -64,7 +64,7 @@ export default function MatchPage() {
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -146,12 +146,17 @@ export default function MatchPage() {
       const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
       const p = sysReduced ? 1 : replay ? Math.min(1, (t0 - replay.startedAt) / replay.scene.ms) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
       const target = scene ? frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now) : null;
-      setAnim((a) => ({ now, frame: target && !sysReduced ? smooth(a.frame, target, dt) : target }));
+      setAnim((a) => {
+        const frame = target && !sysReduced ? smooth(a.frame, target, dt) : target;
+        // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
+        const r = scene && frame ? reveal(scene, p, frame.ball, a.frame?.seq === scene.seq && a.reached) : { reached: false, revealed: true };
+        return { now, frame, ...r };
+      });
     };
     step();
     return () => cancelAnimationFrame(id);
   }, [events, scenes, lineups, sentOff, replay, sysReduced]);
-  const { now, frame } = anim;
+  const { now, frame, revealed } = anim;
   const ph = playhead(events, now - LAG_MS);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
@@ -198,8 +203,8 @@ export default function MatchPage() {
   const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
-  // The shot is still travelling before p ≈ 0.62 (Pitch's flash gate): keep the previous caption until the ball is in.
-  const text = current && frame?.flash && frame.p <= (frame.flashAt ?? 0.62) && ph?.prev ? ph.prev.text : current?.text;
+  // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
+  const text = current && !revealed && ph?.prev ? ph.prev.text : current?.text;
 
   return (
     <Layout wide>
@@ -232,7 +237,7 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">

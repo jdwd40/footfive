@@ -86,6 +86,22 @@ describe("MatchPage timeline player", () => {
     expect(await run(0.8 * 3800)).toBe("GOAL!");
   });
 
+  it("the result waits for the drawn ball, not just the clock: a lagging ball keeps the shot's caption a few frames longer", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); // real rAF, frozen clock we move by hand
+    const now = Date.now();
+    const shot = { ...ev(1, now - 30000, "Shoots!"), t: "shot", ball: [85, 32] as [number, number] };
+    const goal = { ...ev(2, now + 1000, "GOAL!"), t: "goal", target: [100, 32] as [number, number] };
+    await mount(view([shot, goal], null, now));
+    expect(screen.getByTestId("commentary").textContent).toBe("Shoots!");
+    // Jump straight to p = 0.8 of the goal: the target ball is in the net, the drawn one is still chasing it.
+    vi.setSystemTime(now + 1000 + 1500 + 0.8 * 3800);
+    await act(() => new Promise((r) => setTimeout(r, 40)));
+    expect(screen.getByTestId("commentary").textContent).toBe("Shoots!");
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    expect(screen.getByTestId("commentary").textContent).toBe("GOAL!");
+    vi.useRealTimers();
+  });
+
   it("ignores a late poll response for the previous fixture after switching", async () => {
     const now = Date.now();
     const { footfiveApi } = await import("../lib/pocketbase");

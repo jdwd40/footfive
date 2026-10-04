@@ -11,17 +11,18 @@ type Props = {
   home: TeamPublic;
   away: TeamPublic;
   replay?: boolean;
+  revealed: boolean; // MatchPage decides when the result may show (flash moment + displayed ball at the impact point)
 };
 
 const W = 100;
 const H = 64;
 
-export default function Pitch({ frame, home, away, replay }: Props) {
+export default function Pitch({ frame, home, away, replay, revealed }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
   const ball = frame?.ball ?? ([50, 32] as [number, number]);
   const lift = frame?.lift ?? 0;
-  const flash = frame && frame.p > (frame.flashAt ?? 0.62) ? frame.flash : null;
+  const flash = frame && revealed ? frame.flash : null;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
   const goal = frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
   // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
