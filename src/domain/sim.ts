@@ -3,10 +3,10 @@
  * at formation anchors drifted toward the ball, so all 10 players are always on the pitch.
  */
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
-import { sample, sampleN, short, type Actor, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number } & Pick<Scene, "side" | "who" | "score" | "kick">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -19,6 +19,7 @@ const ANCHORS: Pt[] = [
 ];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
+const PEN_ARC = new Set(["penalty_setup", "shootout_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
 
 function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   const live = list.filter((p) => p.starter && !sentOff?.has(side + ":" + p.name));
@@ -33,7 +34,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     const q = players.find((p) => p.side + ":" + p.no === bind[a.id] && !p.hot);
     if (q) place(q, a, t);
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t, cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
@@ -52,6 +53,20 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
       const x = gk ? ax : clamp(ax + (b[0] - ax) * 0.3, 1, 99);
       const y = clamp(ay + (b[1] - ay) * (gk ? 0.4 : 0.3), 2, 62);
       players.push({ side, name: p.name, no: p.no, gk, x, y, hot: false });
+    });
+  }
+  // Penalty: everyone who isn't taking or saving lines the edge of the D, home and away alternating.
+  if (scene.cam && PEN_ARC.has(scene.type)) {
+    const x = scene.cam[0] > 50 ? 80 : 20;
+    const named = new Set(scene.actors.map((a) => (a.keeper ? a.side + ":gk" : a.label)));
+    const free = (side: Side) => players.filter((p) => !named.has(p.gk ? side + ":gk" : short(p.name)) && p.side === side);
+    const h = free("home");
+    const a = free("away");
+    const arc: Player[] = [];
+    for (let i = 0; h.length || a.length; i++) arc.push(((i % 2 ? a : h).shift() ?? (i % 2 ? h : a).shift())!);
+    arc.forEach((p, i) => {
+      p.y = 10 + (i * 44) / Math.max(1, arc.length - 1);
+      p.x = x + (x > 50 ? -1 : 1) * 4 * (1 - Math.abs(p.y - 32) / 22); // bows away from the goal at the top of the D
     });
   }
   // Named actors ride their path: keepers bind to the GK, labels to short(name).
@@ -114,7 +129,9 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
     return { ...p, x: q.x + dx, y: q.y + dy };
   });
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
-  return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players };
+  const kc = k(350);
+  const cam = target.cam.map((v, i) => prev.cam[i] + (v - prev.cam[i]) * kc) as Cam;
+  return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, cam };
 }
 
 /** Current event at server time `t` (last with `at ≤ t`), its predecessor, and ms elapsed since it. */

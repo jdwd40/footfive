@@ -186,7 +186,7 @@ export default function MatchPage() {
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
   // The shot is still travelling before p ≈ 0.62 (Pitch's flash gate): keep the previous caption until the ball is in.
-  const text = current && frame?.flash && frame.p <= 0.62 && ph?.prev ? ph.prev.text : current?.text;
+  const text = current && frame?.flash && frame.p <= (frame.flashAt ?? 0.62) && ph?.prev ? ph.prev.text : current?.text;
 
   return (
     <Layout wide>

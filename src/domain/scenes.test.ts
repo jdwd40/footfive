@@ -143,6 +143,29 @@ describe("highlight scenes agree with the simulation", () => {
     expect(sceneFor(goal, [50, 32], 1000)!.ms).toBe(1800); // k floors at 0.15 and goals at 1800
   });
 
+  it("penalties get a broadcast camera on the attacked end; the kick keeps its secret until the strike", () => {
+    const kicks = all.filter((e) => e.t === "shootout_kick");
+    for (const e of kicks.slice(0, 10)) {
+      const s = sceneFor(e, [50, 32], 15000)!;
+      expect(s.cam).toEqual([63, 16, 50, 32]);
+      expect(s.flashAt).toBe(0.75);
+      // Ball still on the spot and keeper still central at half-time: nothing gives the outcome away.
+      expect(sample(s.ball, 0.5)).toEqual([89, 32]);
+      expect(sample(s.actors.find((a) => a.keeper)!.path, 0.5)[1]).toBe(32);
+      const [x] = end(s);
+      if (e.pen!.outcome === "goal") expect(x).toBeGreaterThan(100);
+    }
+    const awayPen = all.find((e) => e.t === "penalty_awarded" && e.side === "away")!;
+    expect(sceneFor(awayPen, [50, 32], 15000)!.cam).toEqual([-13, 16, 50, 32]);
+    const setup = all.find((e) => e.t === "shootout_setup")!;
+    const ss = sceneFor(setup, [50, 32], 15000)!;
+    expect(ss.cam).toEqual([63, 16, 50, 32]);
+    expect(ss.pens).toEqual([setup.st.so!.h, setup.st.so!.a]);
+    const so = all.find((e) => e.t === "shootout_end")!;
+    expect(sceneFor(so, [50, 32], 15000)!.cam).toEqual([63, 16, 50, 32]);
+    expect(sceneFor(all.find((e) => e.t === "pass")!, [50, 32], 15000)!.cam).toBeUndefined();
+  });
+
   it("every live minute carries at least two on-pitch events", () => {
     for (const m of matches) {
       const byMin = new Map<number, number>();

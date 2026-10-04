@@ -140,6 +140,19 @@ describe("frameAt", () => {
     expect(n).toBeGreaterThan(5);
   });
 
+  it("penalty setup: the other eight line the edge of the D, alternating sides", () => {
+    const m = ms.find((x) => x.events.some((e) => e.t === "shootout_setup"))!;
+    const e = m.events.find((e) => e.t === "shootout_setup")!;
+    const s = sceneFor(e, [50, 32], 15000)!;
+    const f = frameAt(s, 0.5, m.lineups);
+    const arc = f.players.filter((p) => !p.hot).sort((a, b) => a.y - b.y);
+    expect(arc).toHaveLength(8);
+    for (const p of arc) expect(Math.abs(p.x - 80)).toBeLessThan(8);
+    for (let i = 1; i < arc.length; i++) expect(arc[i].side).not.toBe(arc[i - 1].side);
+    expect(f.cam).toEqual([63, 16, 50, 32]);
+    expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 70]);
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];
@@ -153,7 +166,7 @@ describe("frameAt", () => {
 });
 
 describe("smooth", () => {
-  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], caption: "", flash: null, type: "pass", seq: 1, p: 0 });
+  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], caption: "", flash: null, type: "pass", seq: 1, p: 0, cam: [-4, -3, 108, 70] });
   it("players chase a jumped target instead of snapping, and settle on it", () => {
     let s = smooth(null, at(10), 16);
     expect(s.players[0].x).toBe(10); // first frame: nothing to chase from
@@ -168,6 +181,11 @@ describe("smooth", () => {
     const s = smooth(at(10), { ...at(60), players: [{ side: "away", name: "B", no: 3, gk: false, x: 90, y: 10, hot: false }] }, 100);
     expect(s.ball[0]).toBeGreaterThan(40);
     expect(s.players[0]).toMatchObject({ no: 3, x: 90, y: 10 });
+  });
+  it("the camera glides", () => {
+    const s = smooth({ ...at(10), cam: [-4, -3, 108, 70] }, { ...at(10), cam: [63, 16, 50, 32] }, 100);
+    expect(s.cam[0]).toBeGreaterThan(-4);
+    expect(s.cam[0]).toBeLessThan(20);
   });
 });
 

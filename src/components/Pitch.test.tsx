@@ -6,7 +6,25 @@ import type { TeamPublic } from "../lib/pocketbase";
 
 const home = { id: "h", name: "Home Town", abbreviation: "HOM", primary_color: "#00f0ff" } as TeamPublic;
 const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "#ff2d95" } as TeamPublic;
-const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ...f });
+const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, cam: [-4, -3, 108, 70], ...f });
+
+describe("Pitch penalty camera and shootout reveal", () => {
+  it("viewBox follows the frame camera", () => {
+    const { container } = render(<Pitch frame={frame({ cam: [63, 16, 50, 32] })} home={home} away={away} />);
+    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("63 16 50 32");
+  });
+  it("tension strip names the kick and taker; GOAL reveals the pens score, SAVED! on a save, both gated by flashAt", () => {
+    const { rerender } = render(<Pitch frame={frame({ type: "shootout_setup", flash: "pen", side: "away", who: "Jo Striker", kick: { no: 3, sd: 0 }, pens: [2, 1] })} home={home} away={away} />);
+    expect(screen.getByTestId("pen-strip").textContent).toBe("Kick 3 · AWY · Jo Striker");
+    rerender(<Pitch frame={frame({ type: "shootout_kick", flash: "goal", side: "away", pens: [2, 2], p: 0.7, flashAt: 0.75 })} home={home} away={away} />);
+    expect(screen.queryByText(/GOAL/)).toBeNull();
+    rerender(<Pitch frame={frame({ type: "shootout_kick", flash: "goal", side: "away", pens: [2, 2], p: 0.8, flashAt: 0.75 })} home={home} away={away} />);
+    expect(screen.getByText(/GOAL/).textContent).toBe("GOAL! 2–2");
+    expect(screen.queryByTestId("goal-banner")).toBeNull();
+    rerender(<Pitch frame={frame({ type: "shootout_kick", flash: "save", side: "away", pens: [2, 1], p: 0.8, flashAt: 0.75 })} home={home} away={away} />);
+    expect(screen.getByText("SAVED!")).toBeTruthy();
+  });
+});
 
 describe("Pitch kits and numbers", () => {
   const players: Frame["players"] = [

@@ -4,6 +4,7 @@
  */
 import type { TeamPublic } from "../lib/pocketbase";
 import type { Frame } from "../domain/sim";
+import { FULL_CAM } from "../domain/scenes";
 
 type Props = {
   frame: Frame | null;
@@ -20,12 +21,13 @@ export default function Pitch({ frame, home, away, replay }: Props) {
   const ac = away.primary_color || "#ff2d95";
   const ball = frame?.ball ?? ([50, 32] as [number, number]);
   const lift = frame?.lift ?? 0;
-  const flash = frame && frame.p > 0.62 ? frame.flash : null;
+  const flash = frame && frame.p > (frame.flashAt ?? 0.62) ? frame.flash : null;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
   const goal = frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
   // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
   const kick = frame?.kick;
   const team = frame?.side === "away" ? away : home;
+  const strip = frame?.type === "shootout_setup" && kick ? `Kick ${kick.no} · ${team.abbreviation} · ${frame.who ?? ""}` : null;
   const pen =
     frame?.type === "shootout_end" && frame.side
       ? { text: `${team.name} are through!`, cls: "bg-lime text-ink text-xl sm:text-3xl" }
@@ -48,7 +50,7 @@ export default function Pitch({ frame, home, away, replay }: Props) {
         </span>
       </div>
       <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
-        <svg viewBox={`-4 -3 ${W + 8} ${H + 6}`} className="block h-auto w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
+        <svg viewBox={(frame?.cam ?? FULL_CAM).join(" ")} className="block h-auto w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
             <rect width="6.25" height={H} fill="#0f3a22" />
@@ -127,9 +129,11 @@ export default function Pitch({ frame, home, away, replay }: Props) {
             }`}
           >
             {flash === "goal"
-              ? "GOAL!"
+              ? frame.type === "shootout_kick" && frame.pens
+                ? `GOAL! ${frame.pens[0]}–${frame.pens[1]}`
+                : "GOAL!"
               : flash === "save"
-                ? "SAVED"
+                ? "SAVED!"
                 : flash === "wood"
                   ? "WOODWORK"
                   : flash === "card"
@@ -142,8 +146,13 @@ export default function Pitch({ frame, home, away, replay }: Props) {
           </span>
         </div>
       ) : null}
+      {strip ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 py-0.5 text-center font-display text-[11px] font-bold tracking-widest text-white" data-testid="pen-strip">
+          {strip}
+        </div>
+      ) : null}
       {pen ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-2">
+        <div className={`pointer-events-none absolute inset-x-0 ${strip ? "bottom-7" : "bottom-3"} flex justify-center px-2`}>
           <span className={`goal-pop rounded-md px-3 py-1 text-center font-display font-black tracking-wide shadow-lg ${pen.cls}`} data-testid="pen-banner">
             {pen.text}
           </span>

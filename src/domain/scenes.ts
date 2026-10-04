@@ -30,7 +30,12 @@ export type Scene = {
   who?: string; // event's main player
   score?: [number, number]; // score after the event
   kick?: MatchEvent["kick"];
+  pens?: [number, number]; // shootout score after the event
+  cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
+  flashAt?: number; // progress at which the result badge may show (default 0.62)
 };
+export type Cam = [number, number, number, number];
+export const FULL_CAM: Cam = [-4, -3, 108, 70];
 
 const GOAL_Y = 32;
 
@@ -63,6 +68,10 @@ export function short(name?: string) {
 function keeperSpot(defSide: Side): Pt {
   return [defSide === "home" ? 3 : 97, GOAL_Y];
 }
+/** Broadcast camera for a penalty: 50×32 window centred 12 in from the attacked goal line. */
+function penCam(g: Side): Cam {
+  return [goalX(g) + toward(g, -12) - 25, 16, 50, 32];
+}
 /** Celebration spots by the nearest corner flag of the attacked end: scorer, mate 1, mate 2. */
 function huddle(atk: Side, y: number): [Pt, Pt, Pt] {
   const c: Pt = [goalX(atk) + toward(atk, -6), y >= GOAL_Y ? 58 : 6];
@@ -78,7 +87,8 @@ function pace(minuteMs: number) {
 
 /** Fields every scene copies from its event. */
 function head(e: MatchEvent) {
-  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick };
+  const so = e.st?.so;
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick, pens: so ? ([so.h, so.a] as [number, number]) : undefined };
 }
 
 /**
@@ -293,8 +303,11 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
           { id: "ref", side: "ref", path: [clampPt([spot[0] - toward(side, 10), spot[1] - 12]), clampPt([spot[0] - toward(side, 2), spot[1] - 6]), clampPt([spot[0] - toward(side, 1), spot[1] - 5])] },
         ],
         flash: "pen",
+        cam: penCam(side),
       };
     }
+    case "shootout_end":
+      return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
     case "penalty_setup":
     case "shootout_setup":
       return setupScene(e, d);
@@ -321,15 +334,18 @@ function setupScene(e: MatchEvent, d: ReturnType<typeof pace>): Scene {
   const g = geomSide(e, side);
   const spot: Pt = [goalX(g) + toward(g, -11), GOAL_Y];
   const gk = keeperSpot(other(g));
+  const carry: Pt = clampPt([spot[0] - toward(g, 8), spot[1] + 3]);
+  const back: Pt = clampPt([spot[0] - toward(g, 5), spot[1] + 2]);
   return {
     ...head(e),
     ms: d(2600, 1800),
-    ball: [spot, spot],
+    ball: [carry, spot, spot, spot], // taker carries the ball to the spot, places it, steps back
     actors: [
-      { id: "taker", side, label: short(e.p), path: [clampPt([spot[0] - toward(g, 8), spot[1] + 6]), clampPt([spot[0] - toward(g, 4), spot[1] + 3])] },
-      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [[gk[0], GOAL_Y - 1.5], [gk[0], GOAL_Y + 1.5]] },
+      { id: "taker", side, label: short(e.p), path: [carry, spot, spot, back] },
+      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [[gk[0], GOAL_Y - 1.5], [gk[0], GOAL_Y + 1.5], [gk[0], GOAL_Y - 1.5]] },
     ],
     flash: "pen",
+    cam: penCam(g),
   };
 }
 
@@ -370,10 +386,12 @@ function penaltyScene(e: MatchEvent, outcome: string, d: ReturnType<typeof pace>
     ball: [spot, spot, spot, strikeAt, end],
     ballHeight: pen.height === 2 || pen.post === "bar" ? [0, 0, 0, 1, 1] : pen.height === 1 ? [0, 0, 0, 0.5, 0.3] : undefined,
     actors: [
-      { id: "taker", side, label: short(e.p), path: [runStart, lerp(runStart, spot, 0.5), clampPt([spot[0] - toward(g, 1), spot[1]]), spot, spot] },
-      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [gk, gk, gk, [gk[0], diveY], [gk[0], diveY]] },
+      { id: "taker", side, label: short(e.p), path: [runStart, lerp(runStart, spot, 0.4), spot, spot, spot] }, // accelerating run-up, strike at 50 %
+      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [gk, gk, gk, [gk[0], diveY], [gk[0], diveY]] }, // dives at the strike, not before
     ],
     flash,
+    flashAt: 0.75,
+    cam: penCam(g),
     focus: outcome === "goal" ? side : outcome === "save" ? def : null,
   };
 }
