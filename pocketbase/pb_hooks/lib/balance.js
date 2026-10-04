@@ -86,6 +86,7 @@ var BALANCE = {
     shootoutKickMs: 12000,
     shootoutRevealMs: 6500,
     endMs: 6000,
+    resultHoldMs: 1200, // min real gap after a shot result / card so the client can show it before the next event
   },
 
   baseAttackChance: 0.22,

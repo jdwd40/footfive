@@ -83,6 +83,7 @@ function buildTiming(minuteMs, scale) {
     "shootoutKickMs",
     "shootoutRevealMs",
     "endMs",
+    "resultHoldMs",
   ];
   for (var i = 0; i < keys.length; i++) t[keys[i]] = Math.max(20, Math.round(M[keys[i]] / k));
   return t;
@@ -296,13 +297,17 @@ function snapshot(st, clk) {
   };
 }
 
+/** Events whose outcome the client animates; the next event waits resultHoldMs after them. */
+var HOLD_AFTER = { miss: 1, block: 1, woodwork: 1, save: 1, yellow_card: 1, red_card: 1 };
+
 function emit(st, out, t, type, ev) {
   st.seq += 1;
   var e = ev || {};
   e.seq = st.seq;
-  // Publication order must equal sequence order.
-  e.at = Math.max(Math.round(t), st.lastAt || 0);
+  // Publication order must equal sequence order; a result is held on screen before play moves on.
+  e.at = Math.max(Math.round(t), (st.lastAt || 0) + (st.hold || 0));
   st.lastAt = e.at;
+  st.hold = HOLD_AFTER[type] ? st.timing.resultHoldMs : 0;
   e.t = type;
   if (e.min == null) e.min = st.minute;
   e.st = snapshot(st, e.clk === undefined ? null : e.clk);
