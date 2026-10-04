@@ -183,8 +183,12 @@ describe("highlight scenes agree with the simulation", () => {
     const goal = all.find((e) => e.t === "goal")!;
     expect(sceneFor(pass, [50, 32], 15000)!.ms).toBe(1500);
     expect(sceneFor(pass, [50, 32], 8000)!.ms).toBeLessThanOrEqual(900);
-    expect(sceneFor(goal, [50, 32], 8000)!.ms).toBeGreaterThanOrEqual(1800);
-    expect(sceneFor(goal, [50, 32], 1000)!.ms).toBe(1800); // k floors at 0.15 and goals at 1800
+    expect(sceneFor(goal, [50, 32], 8000)!.ms).toBeGreaterThanOrEqual(2400);
+    expect(sceneFor(goal, [50, 32], 1000)!.ms).toBe(2400); // k floors at 0.15 and goals at 2400
+    expect(sceneFor(goal, [50, 32], 15000)!.ms).toBe(3800);
+    const cel = all.find((e) => e.t === "celebration")!;
+    expect(sceneFor(cel, [102, 32], 15000)!.ms).toBe(2600); // the GOOOAL banner's life: never under 2.6 s
+    expect(sceneFor(cel, [102, 32], 1000)!.ms).toBe(2600);
   });
 
   it("penalties get a broadcast camera on the attacked end; the kick keeps its secret until the strike", () => {

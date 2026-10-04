@@ -58,8 +58,16 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
 }
 
-/** `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the previous scene actually left the ball (dwell), overriding the first keyframe only. */
-export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt): Frame {
+/** Result badges that outlive their scene by 1.2 s: SAVED!, WOODWORK, NO GOAL and every shootout reveal. Match goals have the banner, cards their own type-specific text. */
+function lingers(prev: Scene | undefined, scene: Scene, t: number) {
+  return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < 1200 && (prev.type === "shootout_kick" || prev.flash === "save" || prev.flash === "wood" || prev.flash === "miss");
+}
+
+/**
+ * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
+ * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 1.2 s.
+ */
+export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene): Frame {
   const { ball: b, players, unlabelled } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
   const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
   const bind = binding(scene, lineups, sentOff);
@@ -91,7 +99,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       p.y += Math.cos(nowMs / 400 + ph) * amp * 0.5;
     }
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
+  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */

@@ -152,6 +152,7 @@ export default function MatchPage() {
       // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
       // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
       const liveScene = ph ? scenes.get(ph.cur.seq) : null;
+      const prevScene = ph?.prev && !replay ? scenes.get(ph.prev.seq) : undefined; // its result badge lingers into the new scene
       const liveP = sysReduced ? 1 : ph && liveScene?.ms ? ph.elapsed / liveScene.ms : 1;
       const scene = replay ? replay.scene : liveScene;
       const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
@@ -165,7 +166,7 @@ export default function MatchPage() {
         // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
         const sentOff = sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1);
         for (const k of seeded) sentOff.add(k);
-        const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined);
+        const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined, prevScene);
         const frame = sysReduced ? target : smooth(jumped ? null : a.frame, target, dt);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
         const gate = reveal(scene, p, frame.ball, same && a.reached);

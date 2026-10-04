@@ -242,6 +242,24 @@ describe("frameAt", () => {
     expect(frameAt(g, 1, m.lineups, undefined, 0, [90, 34]).ball[0]).toBeCloseTo(102, 3);
   });
 
+  it("a result badge lingers 1.2 s into the next routine scene: SAVED!, WOODWORK, shootout reveals — not match goals (banner) or cards (own text)", () => {
+    const m = ms[0];
+    const save = m.events.find((e) => e.t === "save")!;
+    const sv = sceneFor(save, [70, 30], 15000)!;
+    const pass: Scene = { key: "l-1", seq: save.seq + 1, type: "pass", ms: 1500, ball: [sv.ball[sv.ball.length - 1], [50, 32], [60, 32]], actors: [], caption: "" };
+    const at = (elapsed: number, prev?: Scene) => frameAt(pass, elapsed / pass.ms, m.lineups, undefined, 0, undefined, prev).flash;
+    expect(at(0, sv)).toBe("save");
+    expect(at(1100, sv)).toBe("save");
+    expect(at(1200, sv)).toBeNull();
+    expect(at(0)).toBeNull();
+    expect(at(0, { ...sv, flash: "wood" })).toBe("wood");
+    expect(at(0, { ...sv, type: "shootout_kick", flash: "goal" })).toBe("goal");
+    expect(at(0, { ...sv, type: "celebration", flash: "goal" })).toBeNull();
+    expect(at(0, { ...sv, type: "red_card", flash: "card" })).toBeNull();
+    // A scene with its own result never borrows one.
+    expect(frameAt(sv, 0, m.lineups, undefined, 0, undefined, { ...sv, flash: "wood" }).flash).toBe("save");
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];

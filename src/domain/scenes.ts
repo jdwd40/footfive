@@ -200,7 +200,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const t2: Pt = clampPt([shotFrom[0] - toward(atk, 8), shotFrom[1] - 10]);
       return {
         ...base,
-        ms: d(3800, 1800),
+        ms: d(3800, 2400),
         ball: [shotFrom, target, net, net, net],
         actors: [
           { id: "s", side: atk, label: short(e.p), path: [shotFrom, shotFrom, lerp(shotFrom, corner, 0.5), corner, corner] },
@@ -219,7 +219,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const bob = (p: Pt): Pt => [p[0], p[1] + (corner[1] > GOAL_Y ? -1 : 1)];
       return {
         ...base,
-        ms: d(2000, 1500),
+        ms: d(2000, 2600), // the GOOOAL banner lives here: never under 2.6 s
         ball: [prevBall],
         actors: [
           { id: "s", side, label: short(e.p), path: [corner, bob(corner), corner] },
