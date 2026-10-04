@@ -181,10 +181,18 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
 /**
  * May the result show? Only once the scene reaches its flash moment AND the *displayed* ball has got to the impact
  * point (the drawn ball lags the target). `reached` latches for the scene's life so the badge never flickers off.
+ * A ball first drawn already past the impact (late join, resumed tab) counts, and a finished scene hides nothing.
  */
 export function reveal(scene: Scene, p: number, ball: Pt, reachedBefore: boolean) {
-  const reached = reachedBefore || !scene.impact || Math.hypot(ball[0] - scene.impact[0], ball[1] - scene.impact[1]) < 1.5;
+  const i = scene.impact;
+  const reached = reachedBefore || !i || p >= 1 || Math.hypot(ball[0] - i[0], ball[1] - i[1]) < 1.5 || crossed(scene.ball[0], i, ball);
   return { reached, revealed: !scene.flash || (p >= (scene.flashAt ?? 0.62) && reached) };
+}
+/** Is `ball` at or beyond `impact` along the line from `start`? (projection onto start→impact, 1.5 of slack) */
+function crossed(start: Pt, impact: Pt, ball: Pt) {
+  const vx = impact[0] - start[0];
+  const vy = impact[1] - start[1];
+  return (ball[0] - start[0]) * vx + (ball[1] - start[1]) * vy >= vx * vx + vy * vy - 1.5;
 }
 
 /** Players sent off by the events published up to `seq` (inclusive): `side:name`. */

@@ -268,6 +268,11 @@ describe("reveal", () => {
   it("scenes without a result have nothing to hide", () => {
     expect(reveal({ ...goal, flash: null, impact: undefined }, 0, [10, 10], false).revealed).toBe(true);
   });
+  it("a late join that first draws the ball past the impact, or a scene already over, counts as reached", () => {
+    expect(reveal(goal, 0.8, [104, 33], false)).toEqual({ reached: true, revealed: true }); // beyond the net along the shot
+    expect(reveal(goal, 0.8, [95, 40], false).reached).toBe(false); // short of it, off to the side: still travelling
+    expect(reveal(goal, 1, [10, 10], false)).toEqual({ reached: true, revealed: true }); // scene over: nothing left to wait for
+  });
 });
 
 describe("sentOffAt", () => {
