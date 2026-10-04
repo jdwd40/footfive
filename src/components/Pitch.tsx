@@ -39,7 +39,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           : frame?.type === "shootout_setup" && kick?.sd && kick.no === 6
             ? { text: "SUDDEN DEATH", cls: "bg-magenta text-white text-xl sm:text-3xl" } // first SD kick has no stakes flag; the reply kick always does
             : null;
-  // Full-pitch banner: GOOOAL (team glow + confetti) or a period marker (amber, for the scene's 3 s life).
+  // Full-pitch banner: GOOOAL (team glow + confetti), FULL-TIME with the winner (lime, held: match_end is the last event), or a period marker (amber, for the scene's 3 s life).
   const sc = frame?.score ?? [0, 0];
   const PERIOD: Record<string, string> = {
     half_time: `HALF-TIME · ${home.abbreviation} ${sc[0]}–${sc[1]} ${away.abbreviation}`,
@@ -50,12 +50,15 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
     shootout_start: "PENALTY SHOOTOUT",
   };
   const period = frame && frame.p < 1 ? PERIOD[frame.type] : undefined;
+  const ft = frame?.type === "match_end" && frame.side ? frame : null;
   const glow = goal ? (goal.side === "away" ? ac : hc) : null;
   const banner = goal
     ? { id: "goal-banner", title: "GOOOAL!", sub: goal.score ? `${home.abbreviation} ${goal.score[0]}–${goal.score[1]} ${away.abbreviation}` : "", who: goal.who, cls: "goal-pop text-white", big: true }
-    : period
-      ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber", big: false }
-      : null;
+    : ft
+      ? { id: "ft-banner", title: "FULL-TIME", sub: `${team.name} go through!`, who: ft.by === "aet" ? "after extra time" : ft.by === "pens" && ft.pens ? `on penalties ${Math.max(...ft.pens)}–${Math.min(...ft.pens)}` : "", cls: "goal-pop text-lime", big: true }
+      : period
+        ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber", big: false }
+        : null;
 
   return (
     <>

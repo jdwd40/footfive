@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -91,7 +91,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       p.y += Math.cos(nowMs / 400 + ph) * amp * 0.5;
     }
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */

@@ -31,6 +31,7 @@ export type Scene = {
   score?: [number, number]; // score after the event
   kick?: MatchEvent["kick"];
   pens?: [number, number]; // shootout score after the event
+  by?: MatchEvent["st"]["by"]; // how the match was won (match_end)
   cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
   flashAt?: number; // progress at which the result badge may show (default 0.62)
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
@@ -89,7 +90,7 @@ function pace(minuteMs: number) {
 /** Fields every scene copies from its event. */
 function head(e: MatchEvent) {
   const so = e.st?.so;
-  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick, pens: so ? ([so.h, so.a] as [number, number]) : undefined };
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick, pens: so ? ([so.h, so.a] as [number, number]) : undefined, by: e.st?.by };
 }
 
 /**
@@ -345,6 +346,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     case "end_of_normal_time":
     case "shootout_start":
       return { ...base, ms: 3000, ball: [prevBall], actors: [] }; // ball held where it was; the banner lives 3 s
+    case "match_end":
+      return { ...base, ms: 5000, ball: [prevBall], actors: [] }; // full-time banner; the last event, so it holds
     case "penalty_setup":
     case "shootout_setup":
       return setupScene(e, prevBall);
@@ -355,7 +358,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     case "shootout_kick":
       return e.pen ? penaltyScene(e, prevBall, e.pen.outcome, d) : null;
     default:
-      return null; // period markers, coaching, shootout_start/end, match_end → caption only
+      return null; // et_half_time, coaching → caption only
   }
 }
 

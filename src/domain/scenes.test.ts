@@ -256,6 +256,16 @@ describe("highlight scenes agree with the simulation", () => {
     expect(sceneFor(all.find((e) => e.t === "half_time")!, [20, 30], 15000)!.actors).toEqual([]);
   });
 
+  it("match_end is a 5 s scene carrying the winner (side) and how (by), for the full-time banner", () => {
+    const e = all.find((e) => e.t === "match_end")!;
+    const s = sceneFor(e, [20, 30], 1000)!;
+    expect(s.ms).toBe(5000);
+    expect(s.side).toBe(e.st.win);
+    expect(s.by).toBe(e.st.by);
+    expect(s.score).toEqual(e.st.sc);
+    expect(s.ball).toEqual([[20, 30]]);
+  });
+
   it("every live minute carries at least two on-pitch events", () => {
     for (const m of matches) {
       const byMin = new Map<number, number>();

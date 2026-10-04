@@ -109,3 +109,14 @@ describe("Pitch period banners", () => {
   });
   it("nothing on a pass", () => expect(period({})).toBeUndefined());
 });
+
+describe("Pitch full-time banner", () => {
+  const ft = (f: Partial<Frame>) => {
+    render(<Pitch frame={frame({ type: "match_end", side: "home", score: [2, 1], p: 1, ...f })} home={home} away={away} revealed />);
+    return screen.queryByTestId("ft-banner")?.textContent;
+  };
+  it("names the winner, and holds after the scene", () => expect(ft({ by: "normal" })).toBe("FULL-TIMEHome Town go through!"));
+  it("after extra time", () => expect(ft({ side: "away", by: "aet" })).toBe("FULL-TIMEAway City go through!after extra time"));
+  it("on penalties with the shootout score", () => expect(ft({ by: "pens", pens: [3, 4], side: "away" })).toBe("FULL-TIMEAway City go through!on penalties 4–3"));
+  it("nothing without a winner", () => expect(ft({ side: null })).toBeUndefined());
+});
