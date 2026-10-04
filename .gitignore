@@ -41,3 +41,4 @@ logs/
 *.pem
 footfive_gha_deploy
 footfive_gha_deploy.pub
+pocketbase/pb_data_preview/
