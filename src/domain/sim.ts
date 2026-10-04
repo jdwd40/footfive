@@ -63,13 +63,11 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
-/** Current event at server time `t` (last with `at ≤ t`) and progress through it toward the next. */
+/** Current event at server time `t` (last with `at ≤ t`), its predecessor, and ms elapsed since it. */
 export function playhead(events: MatchEvent[], t: number) {
   let i = events.length - 1;
   while (i >= 0 && events[i].at > t) i--;
   if (i < 0) return null;
   const cur = events[i];
-  const next = events[i + 1];
-  const span = next ? next.at - cur.at : 2500; // last event: play over 2.5 s then hold
-  return { cur, p: Math.min(1, Math.max(0, (t - cur.at) / Math.max(400, span))) };
+  return { cur, prev: events[i - 1] as MatchEvent | undefined, elapsed: t - cur.at };
 }

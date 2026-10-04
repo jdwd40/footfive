@@ -122,8 +122,8 @@ export default function MatchPage() {
     if (replay && replayP >= 1 + 900 / replay.scene.ms) setReplay(null);
   }, [replay, replayP]);
   // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
-  const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph?.p ?? 0;
   const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
+  const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph && scene?.ms ? Math.min(1, ph.elapsed / scene.ms) : 1;
   const frame = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.

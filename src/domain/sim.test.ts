@@ -95,12 +95,17 @@ describe("frameAt", () => {
 describe("playhead", () => {
   const ev = (seq: number, at: number) => ({ seq, at, t: "pass", min: 1, text: `e${seq}`, st: {} as MatchEvent["st"] }) as MatchEvent;
   const evs = [ev(1, 1000), ev(2, 2000), ev(3, 2100), ev(4, 6000)];
-  it("picks the last event at or before t and eases over the gap to the next (min 400 ms)", () => {
+  it("picks the last event at or before t, with its predecessor and the time elapsed since it", () => {
     expect(playhead(evs, 500)).toBeNull();
-    expect(playhead(evs, 1500)).toEqual({ cur: evs[0], p: 0.5 });
-    expect(playhead(evs, 2050)!.cur.seq).toBe(2);
-    expect(playhead(evs, 2050)!.p).toBeCloseTo(50 / 400); // 100 ms gap floored to 400
-    expect(playhead(evs, 7250)).toEqual({ cur: evs[3], p: 0.5 }); // last event: 2.5 s then hold
-    expect(playhead(evs, 99999)!.p).toBe(1);
+    expect(playhead(evs, 1500)).toEqual({ cur: evs[0], prev: undefined, elapsed: 500 });
+    expect(playhead(evs, 2050)).toEqual({ cur: evs[1], prev: evs[0], elapsed: 50 });
+    expect(playhead(evs, 99999)).toEqual({ cur: evs[3], prev: evs[2], elapsed: 93999 });
+  });
+  it("a later event arriving never changes progress through the current one", () => {
+    const before = playhead(evs, 7250)!;
+    const after = playhead([...evs, ev(5, 7300)], 7250)!;
+    expect(after.cur).toBe(before.cur);
+    expect(after.elapsed).toBe(1250);
+    expect(before.elapsed).toBe(1250);
   });
 });
