@@ -164,10 +164,11 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
-/** Rendered frame chases the target: exponential approach per value, players speed-capped so nobody teleports. */
+/** Rendered frame chases the target: exponential approach per value, players speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. */
 const MAX_SPEED = 60; // units per second
 export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
-  if (!prev) return target;
+  if (!prev || dtMs > 1000) return target;
+  dtMs = Math.min(100, dtMs); // a stutter still reads as a chase, not a jump
   const k = (tau: number) => 1 - Math.exp(-dtMs / tau);
   const kb = k(90);
   const kp = k(220);

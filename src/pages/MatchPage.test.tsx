@@ -52,6 +52,7 @@ async function mount(v: MatchView) {
 }
 
 describe("MatchPage timeline player", () => {
+  afterEach(() => vi.useRealTimers()); // a failed fake-Date test must not leak into the next
   it("renders 10 players and the commentary of the event under the playhead", async () => {
     const now = Date.now();
     const events = [ev(1, now - 30000, "Older pass"), ev(2, now - 3000, "Current pass"), ev(3, now + 60000, "Future pass")];
@@ -121,6 +122,22 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("commentary").textContent).toBe("Shoots!");
     await act(() => new Promise((r) => setTimeout(r, 400)));
     expect(screen.getByTestId("commentary").textContent).toBe("GOAL!");
+    vi.useRealTimers();
+  });
+
+  it("a resumed tab that skipped events snaps the pitch to the current scene instead of chasing across the gap", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = Date.now();
+    const e1 = ev(1, now - 30000, "Pass");
+    const e2 = ev(2, now + 1000, "Pass two");
+    const e3 = { ...ev(3, now + 1100, "Pass three"), from: [10, 10] as [number, number], ball: [10, 10] as [number, number] };
+    const { container } = await mount(view([e1, e2, e3], { home: names("Home"), away: names("Away") }, now));
+    const ball = () => Number(container.querySelector('svg circle[stroke="#111"]')!.getAttribute("cx"));
+    expect(ball()).toBeGreaterThan(40);
+    // The clock leaps straight from e1 to 90 % through e3: a chase from the old ball would still be mid-pitch frames later.
+    vi.setSystemTime(now + 1100 + 1500 + 0.9 * 1500);
+    await act(() => new Promise((r) => setTimeout(r, 40)));
+    expect(ball()).toBeCloseTo(10, 1);
     vi.useRealTimers();
   });
 

@@ -276,6 +276,10 @@ describe("smooth", () => {
     expect(s.cam[0]).toBeGreaterThan(-4);
     expect(s.cam[0]).toBeLessThan(20);
   });
+  it("a tick after a long gap (suspended tab) snaps to the target instead of chasing from stale positions", () => {
+    expect(smooth(at(10), at(60), 1500)).toEqual(at(60));
+    expect(smooth(at(10), at(60), 1000).players[0].x).toBeLessThan(60); // up to a second: still a (fast) chase
+  });
 });
 
 describe("reveal", () => {

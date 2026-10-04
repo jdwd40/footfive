@@ -144,7 +144,7 @@ export default function MatchPage() {
     const step = () => {
       id = requestAnimationFrame(step);
       const t0 = performance.now();
-      const dt = Math.min(100, Math.max(0, t0 - last));
+      const dt = Math.max(0, t0 - last); // smooth() clamps a stutter and snaps after a long gap
       last = t0;
       const now = serverNow();
       if (replay && (t0 - replay.startedAt) / replay.scene.ms >= 1 + 900 / replay.scene.ms) return setReplay(null);
@@ -158,13 +158,15 @@ export default function MatchPage() {
       setAnim((a) => {
         if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set() };
         const same = a.frame?.seq === scene.seq;
+        // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
+        const jumped = !!a.frame && !same && Math.abs(scene.seq - a.frame.seq) > 1;
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
-        const startBall = same ? a.startBall : a.frame?.ball ?? null;
+        const startBall = same ? a.startBall : jumped ? null : a.frame?.ball ?? null;
         // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
         const sentOff = sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1);
         for (const k of seeded) sentOff.add(k);
         const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined);
-        const frame = sysReduced ? target : smooth(a.frame, target, dt);
+        const frame = sysReduced ? target : smooth(jumped ? null : a.frame, target, dt);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
         const gate = reveal(scene, p, frame.ball, same && a.reached);
         // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
