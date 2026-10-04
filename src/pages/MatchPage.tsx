@@ -46,7 +46,7 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
-type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveRevealed: boolean; startBall: Pt | null };
+type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */ };
 
 /** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
 function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
@@ -70,7 +70,7 @@ export default function MatchPage() {
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set() }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -156,7 +156,7 @@ export default function MatchPage() {
       const scene = replay ? replay.scene : liveScene;
       const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
       setAnim((a) => {
-        if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null };
+        if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set() };
         const same = a.frame?.seq === scene.seq;
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
         const startBall = same ? a.startBall : a.frame?.ball ?? null;
@@ -169,13 +169,13 @@ export default function MatchPage() {
         const gate = reveal(scene, p, frame.ball, same && a.reached);
         // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
         const liveRevealed = replay ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
-        return { now, frame, startBall, ...gate, liveRevealed };
+        return { now, frame, startBall, sentOff, ...gate, liveRevealed };
       });
     };
     step();
     return () => cancelAnimationFrame(id);
   }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
-  const { now, frame, revealed, liveRevealed } = anim;
+  const { now, frame, revealed, liveRevealed, sentOff } = anim;
   const ph = playhead(events, now - LAG_MS);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
@@ -301,7 +301,7 @@ export default function MatchPage() {
               <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} />
             </section>
           ) : null}
-          {view.lineups ? <Lineups view={view} /> : null}
+          {view.lineups ? <Lineups view={view} sentOff={sentOff} /> : null}
         </aside>
       </div>
     </Layout>
@@ -584,9 +584,9 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
   );
 }
 
-function Lineups({ view }: { view: MatchView }) {
+/** `sentOff` is the pitch's set (cards as the lagged playhead has shown them), so the strike-through never beats the pitch. */
+function Lineups({ view, sentOff: off }: { view: MatchView; sentOff: Set<string> }) {
   const fx = view.fixture;
-  const off = new Set(view.sentOff.map((s) => s.side + ":" + s.p));
   return (
     <section className="panel p-3">
       <h2 className="panel-title mb-2">Line-ups</h2>
