@@ -262,7 +262,7 @@ describe("frameAt", () => {
     expect(frameAt(sv, 0, m.lineups, undefined, 0, undefined, { ...sv, flash: "wood" }).flash).toBe("save");
   });
 
-  it("the referee rides his actor path as Frame.ref; scenes without one have none", () => {
+  it("the referee rides his actor path as Frame.ref; without one he trails ten behind the ball on the far side", () => {
     const m = ms[0];
     const foul = m.events.find((e) => e.t === "foul")!;
     const s = sceneFor(foul, [50, 32], 15000)!;
@@ -270,7 +270,16 @@ describe("frameAt", () => {
     expect(frameAt(s, 0, m.lineups).ref).toEqual(sample(refPath, 0));
     expect(frameAt(s, 1, m.lineups).ref).toEqual(sample(refPath, 1));
     expect(frameAt(s, 0.5, m.lineups).players).toHaveLength(10); // never drawn as a player
-    expect(frameAt(sceneFor(m.events.find((e) => e.t === "pass")!, [50, 32], 15000)!, 0.5, m.lineups).ref).toBeUndefined();
+    const pass: Scene = { key: "p", seq: 2, type: "pass", ms: 1200, ball: [[40, 20], [60, 20]], actors: [], caption: "", side: "home" };
+    const f = frameAt(pass, 0.5, m.lineups);
+    expect(f.ref[0]).toBeCloseTo(f.ball[0] - 10, 5);
+    expect(f.ref[1]).toBeCloseTo(f.ball[1] + 14, 5);
+    const away = frameAt({ ...pass, side: "away", ball: [[60, 50], [40, 50]] }, 0.5, m.lineups);
+    expect(away.ref[0]).toBeCloseTo(away.ball[0] + 10, 5);
+    expect(away.ref[1]).toBeCloseTo(away.ball[1] - 14, 5);
+    const edge = frameAt({ ...pass, ball: [[3, 3], [3, 3]] }, 0.5, m.lineups).ref;
+    expect(edge[0]).toBeGreaterThanOrEqual(0);
+    expect(edge[1]).toBeLessThanOrEqual(64);
   });
 
   it("skips sent-off players and survives missing lineups", () => {
@@ -286,7 +295,7 @@ describe("frameAt", () => {
 });
 
 describe("smooth", () => {
-  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], caption: "", flash: null, type: "pass", seq: 1, p: 0, cam: [-4, -3, 108, 70] });
+  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, cam: [-4, -3, 108, 70] });
   it("players chase a jumped target instead of snapping, and settle on it", () => {
     let s = smooth(null, at(10), 16);
     expect(s.players[0].x).toBe(10); // first frame: nothing to chase from
@@ -307,12 +316,12 @@ describe("smooth", () => {
     expect(s.cam[0]).toBeGreaterThan(-4);
     expect(s.cam[0]).toBeLessThan(20);
   });
-  it("the referee is smoothed like the ball, and appears/disappears with the scene", () => {
+  it("the referee jogs after his target — eased over 350 ms, never faster than 40 u/s — so entering or leaving a scene is a run, not a pop", () => {
     const s = smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [60, 10] }, 100);
-    expect(s.ref![0]).toBeGreaterThan(20);
-    expect(s.ref![0]).toBeLessThan(60);
-    expect(smooth(at(10), { ...at(10), ref: [60, 10] }, 100).ref).toEqual([60, 10]);
-    expect(smooth({ ...at(10), ref: [10, 10] }, at(10), 100).ref).toBeUndefined();
+    expect(s.ref[0]).toBeGreaterThan(12);
+    expect(s.ref[0]).toBeLessThanOrEqual(14); // 40 u/s cap: 4 per 100 ms
+    const tick = smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [60, 10] }, 16);
+    expect(Math.hypot(tick.ref[0] - 10, tick.ref[1] - 10)).toBeLessThan(2);
   });
   it("a tick after a long gap (suspended tab) snaps to the target instead of chasing from stale positions", () => {
     expect(smooth(at(10), at(60), 1500)).toEqual(at(60));

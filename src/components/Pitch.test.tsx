@@ -6,7 +6,7 @@ import type { TeamPublic } from "../lib/pocketbase";
 
 const home = { id: "h", name: "Home Town", abbreviation: "HOM", primary_color: "#00f0ff" } as TeamPublic;
 const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "#ff2d95" } as TeamPublic;
-const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, cam: [-4, -3, 108, 70], ...f });
+const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, cam: [-4, -3, 108, 70], ...f });
 
 describe("Pitch penalty camera and shootout reveal", () => {
   it("viewBox follows the frame camera", () => {
@@ -49,15 +49,13 @@ describe("Pitch kits and numbers", () => {
     expect(kit(1).getAttribute("fill")).toBe("#c6ff00");
     expect(kit(1).getAttribute("stroke")).toBe("#00f0ff");
   });
-  it("draws the referee as a small yellow circle with a black stroke, only when the frame has one", () => {
-    const { rerender } = render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
+  it("always draws the referee as a small yellow circle with a black stroke", () => {
+    render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
     const ref = screen.getByTestId("ref");
     expect(ref.getAttribute("cx")).toBe("40");
     expect(ref.getAttribute("cy")).toBe("20");
     expect(ref.getAttribute("r")).toBe("1.4");
     expect(ref.getAttribute("stroke")).toBe("#000");
-    rerender(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
-    expect(screen.queryByTestId("ref")).toBeNull();
   });
   it("has a kit legend with both abbreviations", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);

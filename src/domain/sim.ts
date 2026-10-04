@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; ref?: Pt /* referee, when the scene has one */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -100,7 +100,9 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     }
   }
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
-  return { ball, lift: sampleN(scene.ballHeight, t), players, ref, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  // No ref actor: he trails play, ten behind the ball on the far side, so he is always on the pitch and only ever jogs (smooth) into a scene.
+  const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(ball[1] > 32 ? ball[1] - 14 : ball[1] + 14, 0, 64)];
+  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: ref ?? home, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
@@ -177,32 +179,37 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
-/** Rendered frame chases the target: exponential approach per value, players speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. */
+/** Rendered frame chases the target: exponential approach per value, players and the ref speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. */
 const MAX_SPEED = 60; // units per second
+const REF_SPEED = 40;
 export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   if (!prev || dtMs > 1000) return target;
   dtMs = Math.min(100, dtMs); // a stutter still reads as a chase, not a jump
   const k = (tau: number) => 1 - Math.exp(-dtMs / tau);
   const kb = k(90);
   const kp = k(220);
-  const maxStep = (MAX_SPEED * dtMs) / 1000;
-  const was = new Map(prev.players.map((p) => [p.side + ":" + p.no, p]));
-  const players = target.players.map((p) => {
-    const q = was.get(p.side + ":" + p.no);
-    if (!q) return p;
-    let dx = (p.x - q.x) * kp;
-    let dy = (p.y - q.y) * kp;
+  const chase = (ax: number, ay: number, bx: number, by: number, kk: number, speed: number): Pt => {
+    let dx = (bx - ax) * kk;
+    let dy = (by - ay) * kk;
     const d = Math.hypot(dx, dy);
+    const maxStep = (speed * dtMs) / 1000;
     if (d > maxStep) {
       dx *= maxStep / d;
       dy *= maxStep / d;
     }
-    return { ...p, x: q.x + dx, y: q.y + dy };
+    return [ax + dx, ay + dy];
+  };
+  const was = new Map(prev.players.map((p) => [p.side + ":" + p.no, p]));
+  const players = target.players.map((p) => {
+    const q = was.get(p.side + ":" + p.no);
+    if (!q) return p;
+    const [x, y] = chase(q.x, q.y, p.x, p.y, kp, MAX_SPEED);
+    return { ...p, x, y };
   });
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
   const kc = k(350);
   const cam = target.cam.map((v, i) => prev.cam[i] + (v - prev.cam[i]) * kc) as Cam;
-  const ref: Pt | undefined = target.ref && prev.ref ? [prev.ref[0] + (target.ref[0] - prev.ref[0]) * kb, prev.ref[1] + (target.ref[1] - prev.ref[1]) * kb] : target.ref;
+  const ref = chase(prev.ref[0], prev.ref[1], target.ref[0], target.ref[1], kc, REF_SPEED);
   return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, ref, cam };
 }
 
