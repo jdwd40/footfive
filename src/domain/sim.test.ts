@@ -297,7 +297,7 @@ describe("frameAt", () => {
 });
 
 describe("smooth", () => {
-  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, cam: [-4, -3, 108, 70] });
+  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, ms: 1500, cam: [-4, -3, 108, 70] });
   it("players chase a jumped target instead of snapping, and settle on it", () => {
     let s = smooth(null, at(10), 16);
     expect(s.players[0].x).toBe(10); // first frame: nothing to chase from
@@ -349,7 +349,7 @@ describe("reveal", () => {
     expect(reveal(goal, 1, [82, 32], false)).toEqual({ reached: false, revealed: false }); // late result event, drawn ball 20 short: the shot is still on its way
   });
   it("settle puts the drawn ball on the impact once the scene is over, so reveal follows next tick; never once reached", () => {
-    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, cam: [-4, -3, 108, 70] };
+    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, ms: 3800, cam: [-4, -3, 108, 70] };
     const s = settle(goal, 1, f, false);
     expect(s.ball).toEqual([102, 32]);
     expect(s.ref).toEqual([70, 20]); // only the ball snaps

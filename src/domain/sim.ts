@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -103,7 +103,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
   // No ref actor: he trails play, ten behind the ball on the far side, so he is always on the pitch and only ever jogs (smooth) into a scene.
   const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(ball[1] > 32 ? ball[1] - 14 : ball[1] + 14, 0, 64)];
-  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: ref ?? home, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: ref ?? home, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */

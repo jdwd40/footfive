@@ -344,8 +344,12 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
     case "half_time":
     case "end_of_normal_time":
-    case "shootout_start":
-      return { ...base, ms: 3000, ball: [prevBall], actors: [] }; // ball held where it was; the banner lives 3 s
+    case "et_half_time":
+    case "shootout_start": {
+      // Ball held where it was; the banner lives the whole break — real ms, whatever the pace, like the setup scenes.
+      const BREAK: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000 }; // matches balance.js halfTimeMs / etBreakMs / etHalfTimeMs
+      return { ...base, ms: BREAK[e.t] ?? 3000, ball: [prevBall], actors: [] };
+    }
     case "match_end":
       return { ...base, ms: 5000, ball: [prevBall], actors: [] }; // full-time banner; the last event, so it holds
     case "penalty_setup":
@@ -358,7 +362,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     case "shootout_kick":
       return e.pen ? penaltyScene(e, prevBall, e.pen.outcome, d) : null;
     default:
-      return null; // et_half_time, coaching → caption only
+      return null; // coaching → caption only
   }
 }
 

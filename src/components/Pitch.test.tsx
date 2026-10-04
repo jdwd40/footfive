@@ -6,7 +6,7 @@ import type { TeamPublic } from "../lib/pocketbase";
 
 const home = { id: "h", name: "Home Town", abbreviation: "HOM", primary_color: "#00f0ff" } as TeamPublic;
 const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "#ff2d95" } as TeamPublic;
-const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, cam: [-4, -3, 108, 70], ...f });
+const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ms: 1500, cam: [-4, -3, 108, 70], ...f });
 
 describe("Pitch penalty camera and shootout reveal", () => {
   it("viewBox follows the frame camera", () => {
@@ -108,6 +108,16 @@ describe("Pitch period banners", () => {
     return screen.queryByTestId("period-banner")?.textContent;
   };
   it("half-time with the score", () => expect(period({ type: "half_time" })).toBe("HALF-TIME · HOM 1–0 AWY"));
+  it("extra-time half-time with the score", () => expect(period({ type: "et_half_time", score: [2, 2] })).toBe("ET HALF-TIME · HOM 2–2 AWY"));
+  it("is GOOOAL-sized, and dims to 85 % after 4 s so the pitch shows through the break", () => {
+    period({ type: "half_time", ms: 30000, p: 3000 / 30000 });
+    const b = screen.getByTestId("period-banner");
+    expect(b.querySelector(".font-black")!.className).toContain("text-6xl");
+    expect(b.style.opacity).toBe("");
+    cleanup();
+    period({ type: "half_time", ms: 30000, p: 5000 / 30000 });
+    expect(screen.getByTestId("period-banner").style.opacity).toBe("0.85");
+  });
   it("second half", () => expect(period({ type: "second_half" })).toBe("SECOND HALF"));
   it("end of normal time with the score", () => expect(period({ type: "end_of_normal_time", score: [1, 1] })).toBe("FULL-TIME · 1–1 · EXTRA TIME"));
   it("extra time", () => expect(period({ type: "extra_time" })).toBe("EXTRA TIME"));
