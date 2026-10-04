@@ -185,14 +185,39 @@ describe("frameAt", () => {
     const carrier = later.players.filter((p) => p.side === pass.side && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 1.5);
     expect(carrier).toHaveLength(1);
     expect(later.players.some((p) => p.side === pass.side && p !== carrier[0] && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 7)).toBe(true);
+    // A long gap: still jogging (never a wall-hug), turning 12 short of the goal he attacks and never off the pitch.
     const far = frameAt(s, 1 + 60000 / s.ms, m.lineups);
-    expect(Math.hypot(far.ball[0] - end.ball[0], far.ball[1] - end.ball[1])).toBeLessThanOrEqual(10);
-    expect(far.ball[0]).toBeGreaterThanOrEqual(1);
-    expect(far.ball[0]).toBeLessThanOrEqual(99);
+    const farther = frameAt(s, 1 + 61000 / s.ms, m.lineups);
+    expect(Math.hypot(farther.ball[0] - far.ball[0], farther.ball[1] - far.ball[1])).toBeGreaterThan(1);
+    for (let sec = 2; sec <= 90; sec += 2) {
+      const f = frameAt(s, 1 + (sec * 1000) / s.ms, m.lineups);
+      expect(f.ball[0]).toBeGreaterThanOrEqual(1);
+      expect(f.ball[0]).toBeLessThanOrEqual(99);
+      if (pass.side === "home") expect(f.ball[0]).toBeLessThanOrEqual(88);
+      else expect(f.ball[0]).toBeGreaterThanOrEqual(12);
+      expect(f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5)).toHaveLength(1);
+    }
     // A goal keeps its final frame (plus breathing only).
     const goal = m.events.find((e) => e.t === "goal")!;
     const g = sceneFor(goal, [80, 30], 15000)!;
     expect(frameAt(g, 1 + 2000 / g.ms, m.lineups).ball).toEqual(frameAt(g, 1, m.lineups).ball);
+  });
+
+  it("the next scene starts from the dwell endpoint, not its authored first keyframe", () => {
+    const m = ms[0];
+    const i = m.events.findIndex((e, k) => e.t === "pass" && !!sceneFor(m.events[k + 1], [50, 32], 15000));
+    const pass = m.events[i];
+    const s = sceneFor(pass, [50, 32], 15000)!;
+    const dwellEnd = frameAt(s, 1 + 3000 / s.ms, m.lineups).ball;
+    const next = sceneFor(m.events[i + 1], s.ball[s.ball.length - 1], 15000)!;
+    expect(dwellEnd).not.toEqual(next.ball[0]);
+    const f = frameAt(next, 0, m.lineups, undefined, 0, dwellEnd);
+    expect(f.ball).toEqual(dwellEnd);
+    // Only the first keyframe moves: the authored shape (and the shared scene object) is untouched.
+    const a = frameAt(next, 1, m.lineups, undefined, 0, dwellEnd).ball;
+    const b = frameAt(next, 1, m.lineups).ball;
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(1e-6);
+    expect(frameAt(next, 0, m.lineups).ball).toEqual(next.ball[0]);
   });
 
   it("skips sent-off players and survives missing lineups", () => {

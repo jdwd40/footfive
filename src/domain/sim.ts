@@ -18,6 +18,22 @@ const ANCHORS: Pt[] = [
   [42, 40],
 ];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+/** Reflect `v` into [lo, hi]: a runner who turns at both ends (triangle wave). */
+function fold(v: number, lo: number, hi: number) {
+  const w = hi - lo;
+  if (w <= 0) return lo;
+  const m = (((v - lo) % (2 * w)) + 2 * w) % (2 * w);
+  return lo + (m > w ? 2 * w - m : m);
+}
+/** Same scene, first keyframe moved to `start` (and the actor on the ball with it); the scene object itself stays shared and unmutated. */
+function fromStart(scene: Scene, start: Pt): Scene {
+  const [x0, y0] = scene.ball[0];
+  if (x0 === start[0] && y0 === start[1]) return scene;
+  const near = scene.actors.filter((a) => a.side !== "ref" && !a.keeper).sort((a, b) => Math.hypot(a.path[0][0] - x0, a.path[0][1] - y0) - Math.hypot(b.path[0][0] - x0, b.path[0][1] - y0))[0];
+  const onBall = near && Math.hypot(near.path[0][0] - x0, near.path[0][1] - y0) < 3 ? near : null;
+  const shift = (a: Actor): Actor => ({ ...a, path: [[clamp(a.path[0][0] + start[0] - x0, 0, 100), clamp(a.path[0][1] + start[1] - y0, 0, 64)], ...a.path.slice(1)] });
+  return { ...scene, ball: [start, ...scene.ball.slice(1)], actors: scene.actors.map((a) => (a === onBall ? shift(a) : a)) };
+}
 const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
 const PEN_ARC = new Set(["penalty_setup", "shootout_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
 /** Routine play: once the scene is over the carrier keeps going until the next event instead of standing on the ball. */
@@ -29,9 +45,9 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
 }
 
-/** `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. */
-export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0): Frame {
-  const { ball: b, players, unlabelled } = layout(scene, t, lineups, sentOff);
+/** `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the previous scene actually left the ball (dwell), overriding the first keyframe only. */
+export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt): Frame {
+  const { ball: b, players, unlabelled } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
   const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
   const bind = binding(scene, lineups, sentOff);
   for (const a of unlabelled) {
@@ -40,20 +56,18 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   }
   const over = Math.max(0, t - 1) * scene.ms;
   if (over > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
-    // Dwell: carrier jogs on at 3 u/s with a gentle weave, at most 10 from where the scene ended; nearest mate shadows 6 behind.
+    // Dwell: carrier jogs on at 3 u/s with a gentle weave until the next event, turning 12 short of the goal he attacks
+    // and at the far x-bound, so a long gap reads as patient possession, never a wall-hug. Nearest mate shadows 6 behind.
     const dir = scene.side === "home" ? 1 : -1;
-    let dx = (dir * 3 * over) / 1000;
-    let dy = 2 * Math.sin((2 * Math.PI * over) / 1600);
-    const r = Math.hypot(dx, dy);
-    if (r > 10) {
-      dx *= 10 / r;
-      dy *= 10 / r;
-    }
-    ball[0] = clamp(ball[0] + dx, 1, 99);
-    ball[1] = clamp(ball[1] + dy, 2, 62);
+    const lo = Math.min(dir > 0 ? 1 : 12, b[0]);
+    const hi = Math.max(dir > 0 ? 88 : 99, b[0]);
+    const x = fold(b[0] + (dir * 3 * over) / 1000, lo, hi);
+    const mdir = Math.sign(fold(b[0] + (dir * 3 * (over + 1)) / 1000, lo, hi) - x) || dir; // which way he's running right now
+    ball[0] = x;
+    ball[1] = clamp(b[1] + 2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
     const [carrier, mate] = players.filter((p) => p.side === scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - b[0], p.y - b[1]) - Math.hypot(q.x - b[0], q.y - b[1]));
-    if (carrier) Object.assign(carrier, { x: clamp(ball[0] - dir * 0.8, 0, 100), y: ball[1], hot: true });
-    if (mate) Object.assign(mate, { x: clamp(ball[0] - dir * 6, 0, 100), y: ball[1] });
+    if (carrier) Object.assign(carrier, { x: clamp(ball[0] - mdir * 0.8, 0, 100), y: ball[1], hot: true });
+    if (mate) Object.assign(mate, { x: clamp(ball[0] - mdir * 6, 0, 100), y: ball[1] });
   } else if (t >= 1 && nowMs) {
     // Idle breathing: scene over, nothing newer yet — everyone sways a touch so the frame never looks frozen.
     ball[0] += Math.sin(nowMs / 400) * 0.4;

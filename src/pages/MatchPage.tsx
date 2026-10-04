@@ -45,8 +45,8 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
   return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
-/** What the animation loop committed last: server time it ran at, the frame it drew, and whether the result may show. */
-type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean };
+/** What the animation loop committed last: server time it ran at, the frame it drew, whether the result may show, and where the drawn ball was when the current scene began. */
+type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; startBall: Pt | null };
 
 /** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
 function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
@@ -70,7 +70,7 @@ export default function MatchPage() {
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, startBall: null }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -151,13 +151,15 @@ export default function MatchPage() {
       const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
       const p = sysReduced ? 1 : replay ? Math.min(1, (t0 - replay.startedAt) / replay.scene.ms) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
       setAnim((a) => {
-        if (!scene) return { now, frame: null, reached: false, revealed: true };
+        if (!scene) return { now, frame: null, reached: false, revealed: true, startBall: null };
         const same = a.frame?.seq === scene.seq;
+        // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
+        const startBall = same ? a.startBall : a.frame?.ball ?? null;
         // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
-        const target = frameAt(scene, p, lineups, sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1), sysReduced ? 0 : now);
+        const target = frameAt(scene, p, lineups, sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1), sysReduced ? 0 : now, startBall ?? undefined);
         const frame = sysReduced ? target : smooth(a.frame, target, dt);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
-        return { now, frame, ...reveal(scene, p, frame.ball, same && a.reached) };
+        return { now, frame, startBall, ...reveal(scene, p, frame.ball, same && a.reached) };
       });
     };
     step();
