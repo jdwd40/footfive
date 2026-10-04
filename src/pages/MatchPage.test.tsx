@@ -1,6 +1,6 @@
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatchEvent, MatchView } from "../lib/pocketbase";
 
 const team = (n: string) => ({ id: n, slug: n, name: n, abbreviation: n.slice(0, 3).toUpperCase(), primary_color: "#fff" }) as unknown as MatchView["fixture"]["home"];
@@ -42,6 +42,7 @@ async function mount(v: MatchView) {
       <MemoryRouter initialEntries={["/match/fx1"]}>
         <Routes>
           <Route path="/match/:fixtureId" element={<MatchPage />} />
+          <Route path="/live" element={<p>ROUND SCREEN</p>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -73,5 +74,33 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("ticker")).toBeTruthy();
     expect(screen.getByTestId("ticker-current").textContent).toContain("Goal elsewhere");
     h.live = null;
+  });
+});
+
+describe("MatchPage auto-return after full time", () => {
+  const finished = () => {
+    const v = view([], null, Date.now());
+    v.fixture = { ...v.fixture, status: "finished", st: { ...st!, ph: "finished", win: "home", by: "normal" } };
+    return v;
+  };
+  afterEach(() => vi.useRealTimers());
+
+  it("goes back to the round 20 s after the final whistle", async () => {
+    vi.useFakeTimers();
+    await mount(finished());
+    expect(screen.getByTestId("auto-return").textContent).toContain("tap to stay");
+    await act(() => vi.advanceTimersByTimeAsync(19000));
+    expect(screen.queryByText("ROUND SCREEN")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(1500));
+    expect(screen.getByText("ROUND SCREEN")).toBeTruthy();
+  });
+
+  it("stays when the user interacts after full time", async () => {
+    vi.useFakeTimers();
+    await mount(finished());
+    fireEvent.pointerDown(window);
+    await act(() => vi.advanceTimersByTimeAsync(25000));
+    expect(screen.queryByText("ROUND SCREEN")).toBeNull();
+    expect(screen.queryByTestId("auto-return")).toBeNull();
   });
 });

@@ -24,6 +24,7 @@ const STAT_ROWS: Array<[string, number]> = [
 const PREF_KEY = "ff_highlights";
 type Pref = "full" | "off";
 const LAG_MS = 1500; // ponytail: fixed latency buffer; make adaptive if poll jitter shows
+const RETURN_MS = 20000;
 
 /** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
@@ -55,8 +56,8 @@ export default function MatchPage() {
   const [lastOk, setLastOk] = useState(0);
   const [pref, setPref, sysReduced] = usePref();
   const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
+  const [stay, setStay] = useState(false);
   const lastSeq = useRef(0);
-  const lastActive = useRef(Date.now());
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -64,6 +65,7 @@ export default function MatchPage() {
     setEvents([]);
     setReplay(null);
     setError("");
+    setStay(false);
     lastSeq.current = 0;
   }, [fixtureId]);
 
@@ -124,26 +126,24 @@ export default function MatchPage() {
   const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
   const frame = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
 
-  // Return to the main screen 60 s after the final whistle if the user is idle.
-  useEffect(() => {
-    const mark = () => (lastActive.current = Date.now());
-    const evs = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
-    evs.forEach((e) => window.addEventListener(e, mark, { passive: true }));
-    return () => evs.forEach((e) => window.removeEventListener(e, mark));
-  }, []);
+  // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
   const st: PubState | null = view?.fixture.st || null;
   const finished = st?.ph === "finished";
   const finishedAt = useMemo(() => (finished ? Date.now() : 0), [finished]);
   useEffect(() => {
     if (!finished) return;
-    const id = setInterval(() => {
-      const idle = Date.now() - lastActive.current;
-      const sinceEnd = Date.now() - finishedAt;
-      const slipOpen = !!document.querySelector('[data-testid="bet-slip"]');
-      if (sinceEnd >= 60000 && idle >= 60000 && !slipOpen) navigate("/live");
-    }, 2000);
-    return () => clearInterval(id);
-  }, [finished, finishedAt, navigate]);
+    const cancel = () => setStay(true);
+    const evs = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
+    evs.forEach((e) => window.addEventListener(e, cancel, { passive: true, once: true }));
+    return () => evs.forEach((e) => window.removeEventListener(e, cancel));
+  }, [finished]);
+  useEffect(() => {
+    if (!finished || stay) return;
+    const id = setTimeout(() => {
+      if (!document.querySelector('[data-testid="bet-slip"]')) navigate("/live");
+    }, RETURN_MS);
+    return () => clearTimeout(id);
+  }, [finished, stay, navigate]);
 
   const stale = !lastOk || Date.now() - lastOk > 8000;
 
@@ -186,6 +186,13 @@ export default function MatchPage() {
       {live?.ticker?.length ? <Ticker items={live.ticker.filter((i) => i.fixtureId !== fx.id)} label="Other matches" /> : null}
 
       <Scoreboard view={view} now={now} stale={stale} />
+      {finished && !stay ? (
+        <div className="mt-2 text-center">
+          <span className="chip chip-amber tabular" data-testid="auto-return">
+            Back to the round in {countdown(finishedAt + RETURN_MS - Date.now())} · tap to stay
+          </span>
+        </div>
+      ) : null}
 
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-3">
