@@ -244,15 +244,17 @@ describe("frameAt", () => {
     expect(frameAt(g, 1, m.lineups, undefined, 0, [90, 34]).ball[0]).toBeCloseTo(102, 3);
   });
 
-  it("a result badge lingers 1.2 s into the next routine scene: SAVED!, WOODWORK, shootout reveals — not match goals (banner) or cards (own text)", () => {
+  it("a result badge lingers 2.5 s into the next routine scene: SAVED!, WOODWORK, shootout reveals — not match goals (banner) or cards (own text)", () => {
     const m = ms[0];
     const save = m.events.find((e) => e.t === "save")!;
     const sv = sceneFor(save, [70, 30], 15000)!;
     const pass: Scene = { key: "l-1", seq: save.seq + 1, type: "pass", ms: 1500, ball: [sv.ball[sv.ball.length - 1], [50, 32], [60, 32]], actors: [], caption: "" };
     const at = (elapsed: number, prev?: Scene) => frameAt(pass, elapsed / pass.ms, m.lineups, undefined, 0, undefined, prev).flash;
+    // Its own scene never drops it, however late the next event lands.
+    expect(frameAt(sv, 1 + 2000 / sv.ms, m.lineups).flash).toBe("save");
     expect(at(0, sv)).toBe("save");
-    expect(at(1100, sv)).toBe("save");
-    expect(at(1200, sv)).toBeNull();
+    expect(at(2400, sv)).toBe("save"); // past the 1.5 s pass's own end: the window is real ms, not scene progress
+    expect(at(2500, sv)).toBeNull();
     expect(at(0)).toBeNull();
     expect(at(0, { ...sv, flash: "wood" })).toBe("wood");
     expect(at(0, { ...sv, type: "shootout_kick", flash: "goal" })).toBe("goal");

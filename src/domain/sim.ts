@@ -58,14 +58,15 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
 }
 
-/** Result badges that outlive their scene by 1.2 s: SAVED!, WOODWORK, NO GOAL and every shootout reveal. Match goals have the banner, cards their own type-specific text. */
+/** Result badges that outlive their scene: SAVED!, WOODWORK, NO GOAL and every shootout reveal stay 2.5 s (real ms, however short the new scene) into the next one. Match goals have the banner, cards their own type-specific text. */
+const LINGER_MS = 2500;
 function lingers(prev: Scene | undefined, scene: Scene, t: number) {
-  return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < 1200 && (prev.type === "shootout_kick" || prev.flash === "save" || prev.flash === "wood" || prev.flash === "miss");
+  return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || prev.flash === "save" || prev.flash === "wood" || prev.flash === "miss");
 }
 
 /**
  * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
- * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 1.2 s.
+ * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 2.5 s.
  */
 export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene): Frame {
   const { ball: b, players, unlabelled, ref } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
