@@ -169,6 +169,14 @@ describe("MatchPage timeline player", () => {
     expect(await run(0.9 * 2200)).toBe(9);
   });
 
+  it("a red card older than the events buffer still keeps its player off the pitch (seeded from the server's list)", async () => {
+    const now = Date.now();
+    const v = view([ev(40, now - 30000, "Pass"), ev(41, now - 3000, "Another pass")], { home: names("Home"), away: names("Away") }, now);
+    v.sentOff = [{ side: "home", p: "Home P3" }];
+    await mount(v);
+    expect(screen.getAllByTestId("player")).toHaveLength(9);
+  });
+
   it("renders the pitch with ball only when lineups are missing", async () => {
     const now = Date.now();
     await mount(view([ev(1, now - 3000, "Pass")], null, now));

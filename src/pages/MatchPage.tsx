@@ -134,10 +134,13 @@ export default function MatchPage() {
   }, [events, minuteMs]);
 
   const lineups = view?.lineups ?? null;
+  const serverSentOff = view?.sentOff;
   // Animation loop: one rAF per frame computes the target frame and chases it; the committed `anim` is all render sees.
   useEffect(() => {
     let id = 0;
     let last = performance.now();
+    // Dismissals whose red_card event has rolled out of the events buffer: the server's list is the only record left, always applied.
+    const seeded = (serverSentOff ?? []).filter((s) => !events.some((e) => e.t === "red_card" && e.side === s.side && e.p === s.p)).map((s) => s.side + ":" + s.p);
     const step = () => {
       id = requestAnimationFrame(step);
       const t0 = performance.now();
@@ -156,7 +159,9 @@ export default function MatchPage() {
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
         const startBall = same ? a.startBall : a.frame?.ball ?? null;
         // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
-        const target = frameAt(scene, p, lineups, sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1), sysReduced ? 0 : now, startBall ?? undefined);
+        const sentOff = sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1);
+        for (const k of seeded) sentOff.add(k);
+        const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined);
         const frame = sysReduced ? target : smooth(a.frame, target, dt);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
         return { now, frame, startBall, ...reveal(scene, p, frame.ball, same && a.reached) };
@@ -164,7 +169,7 @@ export default function MatchPage() {
     };
     step();
     return () => cancelAnimationFrame(id);
-  }, [events, scenes, lineups, replay, sysReduced]);
+  }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
   const { now, frame, revealed } = anim;
   const ph = playhead(events, now - LAG_MS);
 
