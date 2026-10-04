@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { frameAt, playhead, reveal, sentOffAt, smooth, type Frame } from "./sim";
+import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -332,10 +332,20 @@ describe("reveal", () => {
   it("scenes without a result have nothing to hide", () => {
     expect(reveal({ ...goal, flash: null, impact: undefined }, 0, [10, 10], false).revealed).toBe(true);
   });
-  it("a late join that first draws the ball past the impact, or a scene already over, counts as reached", () => {
+  it("a late join that first draws the ball past the impact counts as reached; a finished scene with the ball still short does not", () => {
     expect(reveal(goal, 0.8, [104, 33], false)).toEqual({ reached: true, revealed: true }); // beyond the net along the shot
     expect(reveal(goal, 0.8, [95, 40], false).reached).toBe(false); // short of it, off to the side: still travelling
-    expect(reveal(goal, 1, [10, 10], false)).toEqual({ reached: true, revealed: true }); // scene over: nothing left to wait for
+    expect(reveal(goal, 1, [82, 32], false)).toEqual({ reached: false, revealed: false }); // late result event, drawn ball 20 short: the shot is still on its way
+  });
+  it("settle puts the drawn ball on the impact once the scene is over, so reveal follows next tick; never once reached", () => {
+    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, cam: [-4, -3, 108, 70] };
+    const s = settle(goal, 1, f, false);
+    expect(s.ball).toEqual([102, 32]);
+    expect(s.ref).toEqual([70, 20]); // only the ball snaps
+    expect(reveal(goal, 1, s.ball, false)).toEqual({ reached: true, revealed: true });
+    expect(settle(goal, 0.9, f, false).ball).toEqual([82, 32]); // still playing: chase as usual
+    expect(settle(goal, 1, f, true).ball).toEqual([82, 32]); // already arrived: the ball is on its way out, leave it
+    expect(settle({ ...goal, impact: undefined }, 1, f, false).ball).toEqual([82, 32]);
   });
 });
 

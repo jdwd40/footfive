@@ -209,12 +209,22 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
 /**
  * May the result show? Only once the scene reaches its flash moment AND the *displayed* ball has got to the impact
  * point (the drawn ball lags the target). `reached` latches for the scene's life so the badge never flickers off.
- * A ball first drawn already past the impact (late join, resumed tab) counts, and a finished scene hides nothing.
+ * A ball first drawn already past the impact (late join, resumed tab) counts. Nothing else does: a result event that
+ * lands late (scene already over) still waits for the drawn ball — `settle` guarantees it gets there next tick.
  */
 export function reveal(scene: Scene, p: number, ball: Pt, reachedBefore: boolean) {
-  const i = scene.impact;
-  const reached = reachedBefore || !i || p >= 1 || Math.hypot(ball[0] - i[0], ball[1] - i[1]) < 1.5 || crossed(scene.ball[0], i, ball);
+  const reached = reachedBefore || arrived(scene, ball);
   return { reached, revealed: !scene.flash || (p >= (scene.flashAt ?? 0.62) && reached) };
+}
+/** Scene over but the drawn ball still short of the impact (late result event, frames still coming): the ball goes on the impact this tick — players keep chasing — so the reveal, which follows the drawn ball, never lags a finished shot by more than one frame. */
+export function settle(scene: Scene, p: number, frame: Frame, reachedBefore: boolean): Frame {
+  const i = scene.impact;
+  return i && p >= 1 && !reachedBefore && !arrived(scene, frame.ball) ? { ...frame, ball: [i[0], i[1]] } : frame;
+}
+/** Is `ball` on the impact point (1.5 of slack) or past it along the shot? Scenes without an impact have nothing to reach. */
+function arrived(scene: Scene, ball: Pt) {
+  const i = scene.impact;
+  return !i || Math.hypot(ball[0] - i[0], ball[1] - i[1]) < 1.5 || crossed(scene.ball[0], i, ball);
 }
 /** Is `ball` at or beyond `impact` along the line from `start`? (projection onto start→impact, 1.5 of slack) */
 function crossed(start: Pt, impact: Pt, ball: Pt) {
