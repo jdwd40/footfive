@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { frameAt, playhead, reveal, smooth, type Frame } from "./sim";
+import { frameAt, playhead, reveal, sentOffAt, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -242,6 +242,17 @@ describe("reveal", () => {
   });
   it("scenes without a result have nothing to hide", () => {
     expect(reveal({ ...goal, flash: null, impact: undefined }, 0, [10, 10], false).revealed).toBe(true);
+  });
+});
+
+describe("sentOffAt", () => {
+  const ev = (seq: number, t: string, side?: "home" | "away", p?: string) => ({ seq, at: seq * 1000, t, min: 1, side, p, text: "", st: {} as MatchEvent["st"] }) as MatchEvent;
+  const evs = [ev(1, "pass"), ev(2, "red_card", "home", "Ann"), ev(3, "pass"), ev(4, "red_card", "away", "Bo")];
+  it("lists the players sent off by events up to seq (inclusive)", () => {
+    expect(sentOffAt(evs, 1)).toEqual(new Set());
+    expect(sentOffAt(evs, 2)).toEqual(new Set(["home:Ann"]));
+    expect(sentOffAt(evs, 3)).toEqual(new Set(["home:Ann"]));
+    expect(sentOffAt(evs, 99)).toEqual(new Set(["home:Ann", "away:Bo"]));
   });
 });
 

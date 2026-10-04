@@ -173,6 +173,13 @@ export function reveal(scene: Scene, p: number, ball: Pt, reachedBefore: boolean
   return { reached, revealed: !scene.flash || (p >= (scene.flashAt ?? 0.62) && reached) };
 }
 
+/** Players sent off by the events published up to `seq` (inclusive): `side:name`. */
+export function sentOffAt(events: MatchEvent[], seq: number) {
+  const out = new Set<string>();
+  for (const e of events) if (e.seq <= seq && e.t === "red_card" && e.side && e.p) out.add(e.side + ":" + e.p);
+  return out;
+}
+
 /** Current event at server time `t` (last with `at ≤ t`), its predecessor, and ms elapsed since it. */
 export function playhead(events: MatchEvent[], t: number) {
   let i = events.length - 1;

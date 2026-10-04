@@ -153,6 +153,22 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("commentary").textContent).toBe("B pass");
   });
 
+  it("a red card leaves the pitch only once its scene is revealed, whatever the server already knows", async () => {
+    // red_card scene ms = 2200, flashAt 0.62 → p = (now − 1500 − at) / 2200
+    const run = async (elapsed: number) => {
+      const now = Date.now();
+      const red = { ...ev(2, now - 1500 - elapsed, "Red card!"), t: "red_card", p: "Home P3", p2: undefined };
+      const v = view([ev(1, now - 30000, "Pass"), red], { home: names("Home"), away: names("Away") }, now);
+      v.sentOff = [{ side: "home", p: "Home P3" }];
+      await mount(v);
+      await act(() => new Promise((r) => setTimeout(r, 60))); // a couple of animation frames: the gate's verdict applies next tick
+      return screen.getAllByTestId("player").length;
+    };
+    expect(await run(0.2 * 2200)).toBe(10);
+    cleanup();
+    expect(await run(0.9 * 2200)).toBe(9);
+  });
+
   it("renders the pitch with ball only when lineups are missing", async () => {
     const now = Date.now();
     await mount(view([ev(1, now - 3000, "Pass")], null, now));

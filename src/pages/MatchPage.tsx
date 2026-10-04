@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { frameAt, playhead, reveal, smooth, type Frame } from "../domain/sim";
+import { frameAt, playhead, reveal, sentOffAt, smooth, type Frame } from "../domain/sim";
 import { countdown, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -133,7 +133,6 @@ export default function MatchPage() {
     return m;
   }, [events, minuteMs]);
 
-  const sentOff = useMemo(() => new Set((view?.sentOff ?? []).map((s) => s.side + ":" + s.p)), [view?.sentOff]);
   const lineups = view?.lineups ?? null;
   // Animation loop: one rAF per frame computes the target frame and chases it; the committed `anim` is all render sees.
   useEffect(() => {
@@ -151,17 +150,19 @@ export default function MatchPage() {
       // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
       const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
       const p = sysReduced ? 1 : replay ? Math.min(1, (t0 - replay.startedAt) / replay.scene.ms) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
-      const target = scene ? frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now) : null;
       setAnim((a) => {
-        const frame = target && !sysReduced ? smooth(a.frame, target, dt) : target;
+        if (!scene) return { now, frame: null, reached: false, revealed: true };
+        const same = a.frame?.seq === scene.seq;
+        // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
+        const target = frameAt(scene, p, lineups, sentOffAt(events, same && a.revealed ? scene.seq : scene.seq - 1), sysReduced ? 0 : now);
+        const frame = sysReduced ? target : smooth(a.frame, target, dt);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
-        const r = scene && frame ? reveal(scene, p, frame.ball, a.frame?.seq === scene.seq && a.reached) : { reached: false, revealed: true };
-        return { now, frame, ...r };
+        return { now, frame, ...reveal(scene, p, frame.ball, same && a.reached) };
       });
     };
     step();
     return () => cancelAnimationFrame(id);
-  }, [events, scenes, lineups, sentOff, replay, sysReduced]);
+  }, [events, scenes, lineups, replay, sysReduced]);
   const { now, frame, revealed } = anim;
   const ph = playhead(events, now - LAG_MS);
 
