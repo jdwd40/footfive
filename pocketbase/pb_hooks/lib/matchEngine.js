@@ -297,17 +297,13 @@ function snapshot(st, clk) {
   };
 }
 
-/** Events whose outcome the client animates; the next event waits resultHoldMs after them. */
-var HOLD_AFTER = { miss: 1, block: 1, woodwork: 1, save: 1, yellow_card: 1, red_card: 1 };
-
 function emit(st, out, t, type, ev) {
   st.seq += 1;
   var e = ev || {};
   e.seq = st.seq;
-  // Publication order must equal sequence order; a result is held on screen before play moves on.
-  e.at = Math.max(Math.round(t), (st.lastAt || 0) + (st.hold || 0));
+  // Publication order must equal sequence order.
+  e.at = Math.max(Math.round(t), st.lastAt || 0);
   st.lastAt = e.at;
-  st.hold = HOLD_AFTER[type] ? st.timing.resultHoldMs : 0;
   e.t = type;
   if (e.min == null) e.min = st.minute;
   e.st = snapshot(st, e.clk === undefined ? null : e.clk);
@@ -488,6 +484,7 @@ function foulEvent(st, out, ctx, side) {
       text: "Yellow card — " + offender.name + " (" + abbr(st, side) + ")",
       clk: ctx.clk(f + 0.05),
     });
+    ctx.pause += st.timing.resultHoldMs; // the card is shown before play moves on
     return;
   }
   offender.sentOff = true;
@@ -500,6 +497,7 @@ function foulEvent(st, out, ctx, side) {
     tick: vs(st) + " — Red card: " + offender.name + " (" + abbr(st, side) + "), " + ctx.m + "′.",
     clk: ctx.clk(f + 0.05),
   });
+  ctx.pause += st.timing.resultHoldMs;
 }
 
 /**
@@ -677,6 +675,7 @@ function attack(st, out, ctx, side, c) {
   }
   st.danger = false; // the outcome is public with this event, so markets reopen
   emit(st, out, ctx.at(f), outcome, res);
+  ctx.pause += st.timing.resultHoldMs; // the save/miss/block is shown before play moves on (shifts the rest of the minute)
   st.ball = res.ball;
   // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues. A miss always leaves the pitch.
   if (outcome === "miss" || (outcome === "block" && rnd(st) < 0.45)) bounce(st, out, ctx, f + 0.06, def, chain);

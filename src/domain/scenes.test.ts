@@ -169,6 +169,8 @@ describe("highlight scenes agree with the simulation", () => {
         if (held.has(m[i].t)) {
           n++;
           expect(m[i + 1].at - m[i].at, `${m[i].t} → ${m[i + 1].t}`).toBeGreaterThanOrEqual(hold);
+          // the hold shifts the whole schedule: the event after next must not collapse onto the next
+          if (i + 2 < m.length && m[i + 2].min === m[i + 1].min) expect(m[i + 2].at, `${m[i + 1].t} → ${m[i + 2].t}`).toBeGreaterThan(m[i + 1].at);
         }
     expect(n).toBeGreaterThan(50);
   });
