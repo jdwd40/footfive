@@ -59,6 +59,17 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("commentary").textContent).toBe("Current pass");
   });
 
+  it("scoreboard shows the score of the event under the playhead, not the newest", async () => {
+    const now = Date.now();
+    const scored = { ...st!, sc: [1, 0] as [number, number] };
+    const events = [ev(1, now - 30000, "Pass"), { ...ev(2, now - 500, "GOAL!"), t: "goal", st: scored }];
+    const v = view(events, null, now);
+    v.fixture = { ...v.fixture, st: scored };
+    await mount(v);
+    expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+    expect(screen.getByTestId("stats")).toBeTruthy();
+  });
+
   it("renders the pitch with ball only when lineups are missing", async () => {
     const now = Date.now();
     await mount(view([ev(1, now - 3000, "Pass")], null, now));

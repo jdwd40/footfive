@@ -127,8 +127,9 @@ export default function MatchPage() {
   const frame = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
-  const st: PubState | null = view?.fixture.st || null;
-  const finished = st?.ph === "finished";
+  // Public state as the lagged pitch shows it: every event carries its own snapshot. Auto-return keys off the real state.
+  const st: PubState | null = ph?.cur.st ?? view?.fixture.st ?? null;
+  const finished = view?.fixture.st?.ph === "finished";
   const finishedAt = useMemo(() => (finished ? Date.now() : 0), [finished]);
   useEffect(() => {
     if (!finished) return;
@@ -166,6 +167,7 @@ export default function MatchPage() {
   }
 
   const fx = view.fixture;
+  const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
 
@@ -185,7 +187,7 @@ export default function MatchPage() {
       </div>
       {live?.ticker?.length ? <Ticker items={live.ticker.filter((i) => i.fixtureId !== fx.id)} label="Other matches" /> : null}
 
-      <Scoreboard view={view} now={now} stale={stale} />
+      <Scoreboard view={shown} now={now} stale={stale} />
       {finished && !stay ? (
         <div className="mt-2 text-center">
           <span className="chip chip-amber tabular" data-testid="auto-return">
@@ -216,7 +218,7 @@ export default function MatchPage() {
             </div>
           </section>
 
-          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={view} events={events} /> : null}
+          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={shown} events={events} /> : null}
 
           <section className="panel p-3">
             <h2 className="panel-title mb-2">Match events</h2>
