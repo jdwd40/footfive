@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { sample, sampleN, short, type Actor, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number };
+export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number } & Pick<Scene, "side" | "who" | "score" | "kick">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -53,7 +53,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     for (const q of players) if (q.side === a.side && !q.hot && !q.gk && (!best || Math.hypot(q.x - x, q.y - y) < Math.hypot(best.x - x, best.y - y))) best = q;
     if (best) place(best, a, t);
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick };
 }
 
 function place(p: Player, a: Actor, t: number) {

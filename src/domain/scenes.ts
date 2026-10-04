@@ -27,6 +27,10 @@ export type Scene = {
   important: boolean;
   flash?: "goal" | "save" | "miss" | "wood" | "card" | "pen" | null;
   focus?: Side | null; // celebrating side
+  side?: Side | null; // event side (banners)
+  who?: string; // event's main player
+  score?: [number, number]; // score after the event
+  kick?: MatchEvent["kick"];
 };
 
 const GOAL_Y = 32;
@@ -77,6 +81,11 @@ function keeperSpot(defSide: Side): Pt {
   return [defSide === "home" ? 3 : 97, GOAL_Y];
 }
 
+/** Fields every scene copies from its event. */
+function head(e: MatchEvent) {
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, important: IMPORTANT.has(e.t), flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick };
+}
+
 /**
  * Build the scene for one event. `prevBall` is where the previous scene ended, so movement
  * connects across scene boundaries.
@@ -88,7 +97,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
   const def = other(side);
   const ball = (e.ball as Pt) || prevBall;
   const from = ((e.from as Pt) || prevBall) as Pt;
-  const base = { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, important: IMPORTANT.has(e.t), flash: null as Scene["flash"] };
+  const base = head(e);
   const s = e.seq;
 
   switch (e.t) {
@@ -182,7 +191,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       };
     }
     case "celebration":
-      return null; // folded into the goal scene
+      return { ...base, ms: 2000 * k, ball: [prevBall], actors: [], flash: "goal", focus: side }; // ball stays in the net, banner stays up
     case "save": {
       // event side = defending team; shooter attacks the other way
       const shooterSide = other(side);
@@ -299,11 +308,7 @@ function setupScene(e: MatchEvent, opts: { fast?: boolean }): Scene {
   const gk = keeperSpot(other(g));
   const k = opts.fast ? 0.6 : 1;
   return {
-    key: `${e.seq}`,
-    seq: e.seq,
-    type: e.t,
-    caption: e.text,
-    important: true,
+    ...head(e),
     ms: 2600 * k,
     ball: [spot, spot],
     actors: [
@@ -347,11 +352,7 @@ function penaltyScene(e: MatchEvent, outcome: string, opts: { fast?: boolean }):
   const strikeAt: Pt = outcome === "save" ? [gk[0], diveY] : outcome === "woodwork" ? [line, pen.post === "bar" ? y : pen.post === "left" ? 28 : 36] : target;
   const k = opts.fast ? 0.6 : 1;
   return {
-    key: `${e.seq}`,
-    seq: e.seq,
-    type: e.t,
-    caption: e.text,
-    important: true,
+    ...head(e),
     ms: 3400 * k,
     ball: [spot, spot, spot, strikeAt, end],
     ballHeight: pen.height === 2 || pen.post === "bar" ? [0, 0, 0, 1, 1] : pen.height === 1 ? [0, 0, 0, 0.5, 0.3] : undefined,

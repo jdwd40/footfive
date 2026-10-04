@@ -21,6 +21,8 @@ export default function Pitch({ frame, home, away, replay }: Props) {
   const ball = frame?.ball ?? ([50, 32] as [number, number]);
   const lift = frame?.lift ?? 0;
   const flash = frame && frame.p > 0.62 ? frame.flash : null;
+  // Match goals (not shootout kicks): big banner for the whole goal scene and the celebration after it.
+  const goal = frame?.flash === "goal" && (frame.type === "goal" || frame.type === "penalty_goal" || frame.type === "celebration") ? frame : null;
 
   return (
     <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
@@ -76,7 +78,19 @@ export default function Pitch({ frame, home, away, replay }: Props) {
         {flash === "goal" ? <circle cx={ball[0]} cy={32} r={9} fill="url(#glow)" opacity={0.7} /> : null}
       </svg>
 
-      {frame && flash ? (
+      {goal ? (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/30" data-testid="goal-banner">
+          <div className="goal-pop text-center">
+            <div className="font-display text-5xl font-black text-white sm:text-6xl" style={{ textShadow: `0 0 18px ${goal.side === "away" ? ac : hc}, 0 0 40px ${goal.side === "away" ? ac : hc}` }}>
+              GOOOAL!
+            </div>
+            <div className="mt-1 text-sm font-bold text-white sm:text-base">
+              {goal.who}
+              {goal.score ? ` · ${goal.score[0]}–${goal.score[1]}` : ""}
+            </div>
+          </div>
+        </div>
+      ) : frame && flash ? (
         <div className="pointer-events-none absolute inset-x-0 top-2 flex justify-center">
           <span
             className={`event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg ${

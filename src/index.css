@@ -189,6 +189,19 @@ h3,
   display: inline-block;
 }
 
+@keyframes goal-pop {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+.goal-pop {
+  animation: goal-pop 0.4s ease-out;
+}
+
 @keyframes card-flash {
   0% {
     box-shadow: 0 0 0 0 rgba(184, 255, 60, 0.7);
@@ -257,6 +270,7 @@ h3,
 @media (prefers-reduced-motion: reduce) {
   .chip-live::before,
   .score-pop,
+  .goal-pop,
   .card-flash,
   .event-enter,
   .toast-in,
