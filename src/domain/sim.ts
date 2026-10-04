@@ -2,7 +2,7 @@
  * Full 5-v-5 frame: maps a Scene's named actors onto real lineup players and parks the rest
  * at formation anchors drifted toward the ball, so all 10 players are always on the pitch.
  */
-import type { LineupPlayer, Side } from "../lib/pocketbase";
+import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { sample, sampleN, short, type Actor, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
@@ -61,4 +61,15 @@ function place(p: Player, a: Actor, t: number) {
   p.x = clamp(x, 0, 100);
   p.y = clamp(y, 0, 64);
   p.hot = true;
+}
+
+/** Current event at server time `t` (last with `at ≤ t`) and progress through it toward the next. */
+export function playhead(events: MatchEvent[], t: number) {
+  let i = events.length - 1;
+  while (i >= 0 && events[i].at > t) i--;
+  if (i < 0) return null;
+  const cur = events[i];
+  const next = events[i + 1];
+  const span = next ? next.at - cur.at : 2500; // last event: play over 2.5 s then hold
+  return { cur, p: Math.min(1, Math.max(0, (t - cur.at) / Math.max(400, span))) };
 }

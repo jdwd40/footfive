@@ -107,7 +107,6 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
           { id: "d", side: other(side), path: [[50 + toward(side, 10), 26], [50 + toward(side, 9), 28], [50 + toward(side, 6), 30]] },
         ],
       };
-    case "possession":
     case "build_up":
     case "pass":
     case "through_ball":
@@ -382,21 +381,4 @@ export function sampleN(vals: number[] | undefined, t: number) {
   const x = Math.min(0.9999, Math.max(0, t)) * seg;
   const i = Math.floor(x);
   return vals[i] + (vals[i + 1] - vals[i]) * (x - i);
-}
-
-/**
- * Bounded live queue: keeps at most `max` scenes, dropping routine ones first so the view
- * never drifts minutes behind; incidents are never dropped in favour of passing moves.
- */
-export function enqueue(queue: Scene[], incoming: Scene[], max = 4): Scene[] {
-  let q = [...queue, ...incoming];
-  // Routine moves queued before the newest incident are stale: keep only its lead-in.
-  const lastImp = q.map((s) => s.important).lastIndexOf(true);
-  if (lastImp > 1) q = q.filter((s, i) => s.important || i >= lastImp - 1);
-  while (q.length > max) {
-    const i = q.findIndex((s) => !s.important);
-    if (i >= 0) q.splice(i, 1);
-    else q = q.slice(q.length - max); // all important: keep the newest
-  }
-  return q;
 }

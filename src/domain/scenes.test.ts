@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { enqueue, sample, sceneFor, type Pt, type Scene } from "./scenes";
+import { sample, sceneFor, type Pt, type Scene } from "./scenes";
 import type { MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -121,18 +121,5 @@ describe("shootout banners have what they need", () => {
     expect(setups.some((e) => e.kick?.sd === 1)).toBe(true);
     expect(setups.some((e) => e.kick?.must === 1)).toBe(true);
     expect(setups.some((e) => e.kick?.win === 1)).toBe(true);
-  });
-});
-
-describe("bounded live queue", () => {
-  const mk = (seq: number, important: boolean): Scene => ({ key: String(seq), seq, type: important ? "goal" : "pass", ms: 1000, ball: [[0, 0]], actors: [], caption: "", important });
-  it("drops stale routine scenes before incidents (keeping the lead-in) and never grows past the cap", () => {
-    let q: Scene[] = [];
-    q = enqueue(q, [mk(1, false), mk(2, false), mk(3, true), mk(4, false), mk(5, false), mk(6, true)], 4);
-    expect(q.map((s) => s.seq)).toEqual([3, 5, 6]);
-    q = enqueue(q, [mk(7, true), mk(8, true), mk(9, true)], 4);
-    expect(q.map((s) => s.seq)).toEqual([6, 7, 8, 9]);
-    q = enqueue([], [mk(10, false), mk(11, false), mk(12, false), mk(13, false), mk(14, false), mk(15, false)], 4);
-    expect(q.map((s) => s.seq)).toEqual([12, 13, 14, 15]);
   });
 });

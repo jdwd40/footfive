@@ -5,7 +5,8 @@ import Pitch from "../components/Pitch";
 import MarketsPanel from "../components/MarketsPanel";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
-import { enqueue, sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { frameAt, playhead } from "../domain/sim";
 import { countdown, noteServerTime, phaseInfo, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -20,12 +21,13 @@ const STAT_ROWS: Array<[string, number]> = [
 ];
 
 const PREF_KEY = "ff_highlights";
-type Pref = "full" | "quick" | "off";
+type Pref = "full" | "off";
+const LAG_MS = 1500; // ponytail: fixed latency buffer; make adaptive if poll jitter shows
 
-/** Highlights speed preference: presentation only, never changes the match. */
+/** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
   const sysReduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) as Pref) || (sysReduced ? "off" : "full"));
+  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) === "off" ? "off" : "full"));
   return [
     p,
     (v) => {
@@ -36,38 +38,37 @@ function usePref(): [Pref, (p: Pref) => void, boolean] {
   ];
 }
 
+/** Period markers, coaching, ...: ball held where it was, caption only. */
+function idleScene(e: MatchEvent, ball: Pt): Scene {
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, important: false };
+}
+
 export default function MatchPage() {
   const { fixtureId = "" } = useParams();
   const navigate = useNavigate();
   const { live } = useLive();
-  const now = useNow(250);
+  const now = useNow(50);
   const [view, setView] = useState<MatchView | null>(null);
   const [events, setEvents] = useState<MatchEvent[]>([]);
   const [error, setError] = useState("");
   const [lastOk, setLastOk] = useState(0);
   const [pref, setPref, sysReduced] = usePref();
-  const [queue, setQueue] = useState<Scene[]>([]);
-  const [scene, setScene] = useState<Scene | null>(null);
-  const [replay, setReplay] = useState(false);
+  const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
   const lastSeq = useRef(0);
-  const lastBall = useRef<Pt>([50, 32]);
-  const joined = useRef(false);
   const lastActive = useRef(Date.now());
 
   // Reset when switching fixtures.
   useEffect(() => {
     setView(null);
     setEvents([]);
-    setQueue([]);
-    setScene(null);
+    setReplay(null);
     setError("");
     lastSeq.current = 0;
-    joined.current = false;
   }, [fixtureId]);
 
   const inflight = useRef(false);
   const poll = useCallback(async () => {
-    if (inflight.current) return; // one request at a time: duplicate events can't double-queue
+    if (inflight.current) return;
     inflight.current = true;
     try {
       const v = await footfiveApi.match(fixtureId, lastSeq.current);
@@ -84,28 +85,6 @@ export default function MatchPage() {
           const seen = new Set(old.map((e) => e.seq));
           return [...old, ...fresh.filter((e) => !seen.has(e.seq))].slice(-150);
         });
-        if (!joined.current) {
-          // Late join: show the current position, don't replay the backlog.
-          joined.current = true;
-          const lastWithBall = [...fresh].reverse().find((e) => e.ball);
-          if (lastWithBall?.ball) lastBall.current = lastWithBall.ball as Pt;
-          const latest = fresh[fresh.length - 1];
-          setScene({ key: "join", seq: latest.seq, type: "join", ms: 0, ball: [lastBall.current], actors: [], caption: latest.text, important: false });
-        } else {
-          let prev = lastBall.current;
-          const scenes: Scene[] = [];
-          for (const e of fresh) {
-            const s = sceneFor(e, prev, { fast: pref === "quick" });
-            if (s) {
-              scenes.push(s);
-              prev = s.ball[s.ball.length - 1];
-            }
-          }
-          lastBall.current = prev;
-          if (scenes.length) setQueue((q) => enqueue(q, scenes, pref === "quick" ? 2 : 4));
-        }
-      } else if (!joined.current) {
-        joined.current = true;
       }
     } catch (err) {
       reportConnectionFail(err);
@@ -113,7 +92,7 @@ export default function MatchPage() {
     } finally {
       inflight.current = false;
     }
-  }, [fixtureId, pref]);
+  }, [fixtureId]);
 
   useEffect(() => {
     void poll();
@@ -121,26 +100,28 @@ export default function MatchPage() {
     return () => clearInterval(id);
   }, [poll]);
 
-  // Pull the next scene off the bounded queue when the pitch is idle.
-  useEffect(() => {
-    if (pref === "off") {
-      if (queue.length) setQueue([]);
-      return;
+  // Scene per event, chained so the ball carries over between scenes. The player ignores `ms`.
+  const scenes = useMemo(() => {
+    const m = new Map<number, Scene>();
+    let prev: Pt = [50, 32];
+    for (const e of events) {
+      const s = sceneFor(e, prev) ?? idleScene(e, prev);
+      prev = s.ball[s.ball.length - 1];
+      m.set(e.seq, s);
     }
-    if ((!scene || scene.ms === 0 || replay) && queue.length && !replay) {
-      setScene(queue[0]);
-      setQueue((q) => q.slice(1));
-    }
-  }, [queue, scene, pref, replay]);
+    return m;
+  }, [events]);
 
-  const onSceneDone = useCallback(() => {
-    if (replay) {
-      setReplay(false);
-      setScene(null);
-      return;
-    }
-    setScene((s) => (s ? { ...s, ms: 0, flash: null } : s));
-  }, [replay]);
+  const ph = playhead(events, now - LAG_MS);
+  const sentOff = useMemo(() => new Set((view?.sentOff ?? []).map((s) => s.side + ":" + s.p)), [view?.sentOff]);
+  const replayP = replay ? (performance.now() - replay.startedAt) / replay.scene.ms : 0;
+  useEffect(() => {
+    if (replay && replayP >= 1 + 900 / replay.scene.ms) setReplay(null);
+  }, [replay, replayP]);
+  // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
+  const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph?.p ?? 0;
+  const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
+  const frame = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
 
   // Return to the main screen 60 s after the final whistle if the user is idle.
   useEffect(() => {
@@ -185,8 +166,7 @@ export default function MatchPage() {
 
   const fx = view.fixture;
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
-  const current = events[events.length - 1];
-  const showingOld = scene && scene.ms > 0 && current && scene.seq < current.seq - 3;
+  const current = replay ? null : ph?.cur;
 
   return (
     <Layout wide>
@@ -211,16 +191,16 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch scene={scene} home={fx.home} away={fx.away} reduced={sysReduced} onDone={onSceneDone} replay={replay || !!showingOld} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
-                {current ? current.text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
+                {replay ? replay.scene.caption : current ? current.text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
               </p>
               <div className="flex gap-1" role="group" aria-label="Highlights">
-                {(["full", "quick", "off"] as const).map((p) => (
+                {(["full", "off"] as const).map((p) => (
                   <button key={p} type="button" className={`chip ${pref === p ? "chip-lime" : "chip-muted"}`} onClick={() => setPref(p)} aria-pressed={pref === p}>
-                    {p === "full" ? "Full" : p === "quick" ? "Quick" : "Off"}
+                    {p === "full" ? "Full" : "Off"}
                   </button>
                 ))}
               </div>
@@ -231,13 +211,14 @@ export default function MatchPage() {
 
           <section className="panel p-3">
             <h2 className="panel-title mb-2">Match events</h2>
-            <EventFeed events={events} view={view} onReplay={(e) => {
-              const s = sceneFor(e, (e.from as Pt) || lastBall.current);
-              if (s && pref !== "off") {
-                setReplay(true);
-                setScene({ ...s, key: `replay-${e.seq}-${Date.now()}` });
-              }
-            }} />
+            <EventFeed
+              events={events}
+              view={view}
+              onReplay={(e) => {
+                const s = scenes.get(e.seq);
+                if (s && s.ms > 0 && pref !== "off") setReplay({ scene: s, startedAt: performance.now() });
+              }}
+            />
           </section>
         </div>
 
@@ -259,6 +240,7 @@ export default function MatchPage() {
     </Layout>
   );
 }
+
 
 function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale: boolean }) {
   const fx = view.fixture;

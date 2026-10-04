@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { frameAt } from "./sim";
+import { frameAt, playhead } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -89,5 +89,18 @@ describe("frameAt", () => {
     expect(f.players).toHaveLength(9);
     expect(f.players.some((p) => p.name === off.name)).toBe(false);
     expect(frameAt(s, 0.5, null).players).toHaveLength(0);
+  });
+});
+
+describe("playhead", () => {
+  const ev = (seq: number, at: number) => ({ seq, at, t: "pass", min: 1, text: `e${seq}`, st: {} as MatchEvent["st"] }) as MatchEvent;
+  const evs = [ev(1, 1000), ev(2, 2000), ev(3, 2100), ev(4, 6000)];
+  it("picks the last event at or before t and eases over the gap to the next (min 400 ms)", () => {
+    expect(playhead(evs, 500)).toBeNull();
+    expect(playhead(evs, 1500)).toEqual({ cur: evs[0], p: 0.5 });
+    expect(playhead(evs, 2050)!.cur.seq).toBe(2);
+    expect(playhead(evs, 2050)!.p).toBeCloseTo(50 / 400); // 100 ms gap floored to 400
+    expect(playhead(evs, 7250)).toEqual({ cur: evs[3], p: 0.5 }); // last event: 2.5 s then hold
+    expect(playhead(evs, 99999)!.p).toBe(1);
   });
 });
