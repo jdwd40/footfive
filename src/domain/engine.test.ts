@@ -144,16 +144,17 @@ describe("legacy persisted-state compatibility", () => {
     delete st.timing.kickoffHoldMs;
   };
 
-  it("repairs the null cursor from the et_second_half resume and finishes with exactly one match_end", () => {
-    const st = etMatch();
+  it("repairs the null cursor at the extra_time_2 minute-105 resume and finishes with exactly one match_end", () => {
+    const st = etMatch(); // et_half_time break at minute 105, exactly where production persisted null
     stripNewFields(st);
-    eng.advanceTo(st, st.nextAt); // hydrated resume publishes et_second_half, as production did
+    st.nextAt = NaN; // the deployed engine persisted null here instead
     const seq = st.seq;
     const seed = Number(st.fx.slice(1));
-    expect(st.phase).toBe("extra_time_2");
-    st.nextAt = NaN; // the deployed engine persisted null here instead
-    const persisted = JSON.parse(JSON.stringify(st));
+    expect(st.minute).toBe(105);
+    const persisted = JSON.parse(JSON.stringify(st)); // exact legacy combination: both fields absent + null cursor, before any engine call
     expect(persisted.nextAt).toBe(null);
+    expect(persisted.timing.resultHoldMs).toBeUndefined();
+    expect(persisted.timing.kickoffHoldMs).toBeUndefined();
     const ev = eng.advanceTo(persisted, Number.MAX_SAFE_INTEGER) as Ev[];
     expect(ev.length).toBeGreaterThan(0);
     expect(ev.every((e) => Number.isFinite(e.at))).toBe(true);
@@ -166,12 +167,12 @@ describe("legacy persisted-state compatibility", () => {
     // the hydrated match follows the identical deterministic path as an unpoisoned twin
     const twin = etMatch(); // same first seed: identical teams and trajectory
     expect(Number(twin.fx.slice(1))).toBe(seed);
-    eng.advanceTo(twin, twin.nextAt); // same hydrated resume point
-    const twinEv = eng.advanceTo(twin, Number.MAX_SAFE_INTEGER) as Ev[];
+    const twinEv = [...(eng.advanceTo(twin, twin.nextAt) as Ev[]), ...(eng.advanceTo(twin, Number.MAX_SAFE_INTEGER) as Ev[])]; // resume + remainder, matching ev's span
     const minOf = (e: Ev) => (e as Ev & { min?: number }).min;
     const twinRest = twinEv.filter((e) => e.seq > seq).map((e) => [e.t, e.seq, minOf(e), e.st.sc]);
     expect(ev.map((e) => [e.t, e.seq, minOf(e), e.st.sc])).toEqual(twinRest);
-    const after = eng.advanceTo(persisted, Number.MAX_SAFE_INTEGER);
+    const reloaded = JSON.parse(JSON.stringify(persisted));
+    const after = eng.advanceTo(reloaded, Number.MAX_SAFE_INTEGER);
     expect(after.filter((e: Ev) => e.t === "match_end")).toHaveLength(0); // no duplicate after reload
   });
 
