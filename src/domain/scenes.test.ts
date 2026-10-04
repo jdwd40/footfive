@@ -115,6 +115,15 @@ describe("highlight scenes agree with the simulation", () => {
   });
 });
 
+describe("shootout banners have what they need", () => {
+  it("some seeded shootout reaches sudden death and flags a must-score kick", () => {
+    const setups = events(200).flat().filter((e) => e.t === "shootout_setup");
+    expect(setups.some((e) => e.kick?.sd === 1)).toBe(true);
+    expect(setups.some((e) => e.kick?.must === 1)).toBe(true);
+    expect(setups.some((e) => e.kick?.win === 1)).toBe(true);
+  });
+});
+
 describe("bounded live queue", () => {
   const mk = (seq: number, important: boolean): Scene => ({ key: String(seq), seq, type: important ? "goal" : "pass", ms: 1000, ball: [[0, 0]], actors: [], caption: "", important });
   it("drops stale routine scenes before incidents (keeping the lead-in) and never grows past the cap", () => {
