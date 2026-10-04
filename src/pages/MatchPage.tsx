@@ -133,8 +133,9 @@ export default function MatchPage() {
     if (replay && replayP >= 1 + 900 / replay.scene.ms) setReplay(null);
   }, [replay, replayP]);
   // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
+  // Live p runs past 1 so frameAt can keep routine play moving until the next event (item 3 dwell).
   const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
-  const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph && scene?.ms ? Math.min(1, ph.elapsed / scene.ms) : 1;
+  const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
   const target = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff, sysReduced ? 0 : now) : null;
   const t0 = performance.now();
   const dt = Math.min(100, Math.max(0, t0 - tick.current));

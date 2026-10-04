@@ -171,6 +171,30 @@ describe("frameAt", () => {
     expect(e.players.map((p) => [p.x, p.y])).toEqual(c.players.map((p) => [p.x, p.y]));
   });
 
+  it("dwells after a routine scene: the ball carrier jogs on with a teammate in tow; result scenes hold", () => {
+    const m = ms[0];
+    const pass = m.events.find((e) => e.t === "pass")!;
+    const s = sceneFor(pass, [50, 32], 15000)!;
+    const end = frameAt(s, 1, m.lineups);
+    const later = frameAt(s, 1 + 2000 / s.ms, m.lineups);
+    const d = Math.hypot(later.ball[0] - end.ball[0], later.ball[1] - end.ball[1]);
+    expect(d).toBeGreaterThan(3);
+    expect(d).toBeLessThan(10);
+    expect(Math.sign(later.ball[0] - end.ball[0])).toBe(pass.side === "home" ? 1 : -1);
+    // Carrier on the ball, a teammate within reach behind him; ball never leaves the pitch.
+    const carrier = later.players.filter((p) => p.side === pass.side && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 1.5);
+    expect(carrier).toHaveLength(1);
+    expect(later.players.some((p) => p.side === pass.side && p !== carrier[0] && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 7)).toBe(true);
+    const far = frameAt(s, 1 + 60000 / s.ms, m.lineups);
+    expect(Math.hypot(far.ball[0] - end.ball[0], far.ball[1] - end.ball[1])).toBeLessThanOrEqual(10);
+    expect(far.ball[0]).toBeGreaterThanOrEqual(1);
+    expect(far.ball[0]).toBeLessThanOrEqual(99);
+    // A goal keeps its final frame (plus breathing only).
+    const goal = m.events.find((e) => e.t === "goal")!;
+    const g = sceneFor(goal, [80, 30], 15000)!;
+    expect(frameAt(g, 1 + 2000 / g.ms, m.lineups).ball).toEqual(frameAt(g, 1, m.lineups).ball);
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];
