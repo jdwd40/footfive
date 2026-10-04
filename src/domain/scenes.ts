@@ -238,13 +238,9 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
         flash: e.t === "woodwork" ? "wood" : "miss",
       };
     }
-    case "corner": {
-      return {
-        ...base,
-        ms: 1500 * k,
-        ball: [ball, ball],
-        actors: [{ id: "c", side, path: [clampPt([ball[0] - toward(side, 3), ball[1] < 32 ? 4 : 60]), ball] }],
-      };
+    case "bounce": {
+      const hit = from; // the wall
+      return { ...base, ms: 1400 * k, ball: [prevBall, hit, lerp(hit, ball, 0.5), ball], actors: [{ id: "c", side, label: short(e.p), path: [clampPt([ball[0] - toward(side, 6), ball[1]]), clampPt([ball[0] - toward(side, 4), ball[1]]), ball, ball] }] };
     }
     case "foul":
     case "yellow_card":

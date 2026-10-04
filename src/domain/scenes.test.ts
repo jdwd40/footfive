@@ -95,6 +95,16 @@ describe("highlight scenes agree with the simulation", () => {
       }
     }
   });
+
+  it("never emits corners; bounces sit on a side board", () => {
+    expect(all.filter((e) => e.t === "corner")).toHaveLength(0);
+    const b = all.filter((e) => e.t === "bounce");
+    expect(b.length).toBeGreaterThan(0);
+    for (const e of b) {
+      const hit = e.from as [number, number]; // the wall the ball came off
+      expect(hit[1] === 0 || hit[1] === 64 || hit[0] === 0 || hit[0] === 100).toBe(true);
+    }
+  });
 });
 
 describe("bounded live queue", () => {

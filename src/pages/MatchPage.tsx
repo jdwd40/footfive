@@ -14,7 +14,6 @@ const STAT_ROWS: Array<[string, number]> = [
   ["Shots", 0],
   ["On target", 1],
   ["Saves", 2],
-  ["Corners", 3],
   ["Fouls", 4],
   ["Yellow cards", 5],
   ["Red cards", 6],
@@ -443,7 +442,6 @@ const FEED_TYPES = new Set([
   "shootout_end",
   "match_end",
   "coaching",
-  "corner",
 ]);
 const REPLAYABLE = new Set(["goal", "penalty_goal", "save", "woodwork", "miss", "block", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
 

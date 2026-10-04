@@ -660,17 +660,25 @@ function attack(st, out, ctx, side, c) {
   st.danger = false; // the outcome is public with this event, so markets reopen
   emit(st, out, ctx.at(f), outcome, res);
   st.ball = res.ball;
-  if (outcome === "block" && rnd(st) < 0.4) {
-    st.stats[side].co += 1;
-    st.ball = pos(side, 100, rnd(st) < 0.5 ? 0 : 64);
-    emit(st, out, ctx.at(f + 0.07), "corner", {
-      side: side,
-      chain: chain,
-      ball: st.ball,
-      text: "Corner to " + tname(st, side),
-      clk: ctx.clk(f + 0.07),
-    });
-  }
+  // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues.
+  if ((outcome === "block" || outcome === "miss") && rnd(st) < 0.45) bounce(st, out, ctx, f + 0.06, def, chain);
+}
+
+/** Ball hits a board and comes back into play; `side` is the team that picks it up. */
+function bounce(st, out, ctx, f, side, chain) {
+  var wall = rnd(st) < 0.5 ? "side" : "end";
+  var hit = wall === "side" ? [clamp(st.ball[0] + Math.round((rnd(st) - 0.5) * 20), 2, 98), rnd(st) < 0.5 ? 0 : 64] : [px(OTHER[side], 100), clamp(st.ball[1] + Math.round((rnd(st) - 0.5) * 24), 4, 60)];
+  var p = defender(st, side);
+  st.ball = pos(side, 20 + rnd(st) * 20, 10 + rnd(st) * 44);
+  emit(st, out, ctx.at(f), "bounce", {
+    side: side,
+    chain: chain,
+    p: p.name,
+    from: hit,
+    ball: st.ball,
+    text: pick(st, ["Off the boards! " + p.name + " collects for " + abbr(st, side), "The ball rattles the " + wall + " board and " + p.name + " brings it back in"]),
+    clk: ctx.clk(f),
+  });
 }
 
 /** Goal at fraction f of the minute. The clock freezes during the celebration. */
