@@ -338,7 +338,8 @@ describe("frameAt", () => {
     const end = at(1);
     for (const p of end.players.filter((p) => p.gk)) expect(p.x).toBeGreaterThanOrEqual(90);
     expect(end.players.find((p) => p.gk && p.side === "home")!.y).toBeCloseTo(32, 3); // away kick first: the home keeper takes the line
-    for (const p of end.players.filter((p) => !p.gk)) expect(Math.abs(p.x - 50)).toBeLessThan(4);
+    for (const p of end.players.filter((p) => !p.gk)) expect(p.x - 1.7 - 3).toBeGreaterThanOrEqual(end.cam[0]); // whole circle + number inside the pen cam
+    for (const p of end.players.filter((p) => !p.gk)) expect(Math.abs(p.x - 58)).toBeLessThan(4); // halfway rows
     expect(end.cam).not.toEqual([-4, -3, 108, 77]);
     expect(end.ref).toEqual([89, 32]);
     expect(at(1.5).players.map((p) => [p.x, p.y])).toEqual(end.players.map((p) => [p.x, p.y])); // holds while the setup is awaited

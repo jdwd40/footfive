@@ -126,7 +126,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       players.filter((p) => p.side === side).forEach((p, i) => {
         const ang = (Math.PI * (i - 2)) / 6 + (side === "home" ? Math.PI : 0); // five on a ±60° arc, home facing away across the spot
         const ring: Pt = [50 + 6 * Math.cos(ang), 32 + 6 * Math.sin(ang)];
-        const end: Pt = p.gk ? [97, side === lineGk ? 32 : 39] : [side === "home" ? 48 : 52, 17 + i * 6];
+        const end: Pt = p.gk ? [97, side === lineGk ? 32 : 39] : [side === "home" ? 56 : 60, 17 + i * 6]; // inside the pen cam (x ≥ 48 + label margin)
         [p.x, p.y] = t < 0.35 ? sample([[p.x, p.y], ring], seg(0, 0.35)) : t < 0.7 ? ring : sample([ring, end], seg(0.7, 1));
       });
     }
