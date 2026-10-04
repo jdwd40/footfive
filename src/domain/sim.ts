@@ -51,6 +51,10 @@ const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
 const PEN_ARC = new Set(["penalty_setup", "shootout_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
 /** Routine play: once the scene is over the carrier keeps going until the next event instead of standing on the ball. */
 const DWELL = new Set(["pass", "build_up", "dribble", "through_ball", "cross", "tackle", "interception", "bounce", "kickoff", "restart"]);
+/** The tunnel, off the bottom touchline: everyone walks off to it over a break's first 6 s (and stays), and on from it over a restart's first 4 s. */
+const TUNNEL: Pt = [50, 70];
+const WALK_OFF = new Set(["half_time", "end_of_normal_time", "et_half_time", "match_end"]);
+const WALK_ON = new Set(["kickoff", "second_half", "extra_time", "et_second_half"]);
 
 function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   const live = list.filter((p) => p.starter && !sentOff?.has(side + ":" + p.name));
@@ -103,7 +107,16 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
   // No ref actor: he trails play, ten behind the ball on the far side, so he is always on the pitch and only ever jogs (smooth) into a scene.
   const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(ball[1] > 32 ? ball[1] - 14 : ball[1] + 14, 0, 64)];
-  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: ref ?? home, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  let refPt = ref ?? home;
+  const walk = WALK_OFF.has(scene.type) ? 6000 : WALK_ON.has(scene.type) ? 4000 : 0;
+  if (walk) {
+    // Tunnel walk: each one's target is eased between where he would stand and the tunnel (sample's ease); smoothing makes it a glide.
+    const f = Math.min(1, (t * scene.ms) / walk);
+    const to = (p: Pt): Pt => (WALK_OFF.has(scene.type) ? sample([p, TUNNEL], f) : sample([TUNNEL, p], f));
+    for (const p of players) [p.x, p.y] = to([p.x, p.y]);
+    refPt = to(refPt);
+  }
+  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */

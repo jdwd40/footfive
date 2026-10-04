@@ -6,7 +6,7 @@ import type { TeamPublic } from "../lib/pocketbase";
 
 const home = { id: "h", name: "Home Town", abbreviation: "HOM", primary_color: "#00f0ff" } as TeamPublic;
 const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "#ff2d95" } as TeamPublic;
-const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ms: 1500, cam: [-4, -3, 108, 70], ...f });
+const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ms: 1500, cam: [-4, -3, 108, 77], ...f });
 
 describe("Pitch penalty camera and shootout reveal", () => {
   it("viewBox follows the frame camera", () => {

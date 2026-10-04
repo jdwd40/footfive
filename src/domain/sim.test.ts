@@ -38,7 +38,8 @@ describe("frameAt", () => {
   const ms = matches();
   const TS = [0, 0.5, 1];
 
-  it("every frame has exactly 10 players inside the pitch, one keeper per side", () => {
+  it("every frame has exactly 10 players, one keeper per side; inside the pitch except on the tunnel walk at a break or restart", () => {
+    const tunnel = new Set(["kickoff", "second_half", "extra_time", "et_second_half", "half_time", "end_of_normal_time", "et_half_time", "match_end"]);
     for (const m of ms) {
       let prev: Pt = [50, 32];
       for (const e of m.events) {
@@ -46,7 +47,7 @@ describe("frameAt", () => {
         prev = s.ball[s.ball.length - 1];
         for (const t of TS) {
           const f = frameAt(s, t, m.lineups);
-          const bad = f.players.filter((p) => p.x < 0 || p.x > 100 || p.y < 0 || p.y > 64);
+          const bad = tunnel.has(e.t) ? [] : f.players.filter((p) => p.x < 0 || p.x > 100 || p.y < 0 || p.y > 64);
           const gks = [f.players.filter((p) => p.side === "home" && p.gk).length, f.players.filter((p) => p.side === "away" && p.gk).length];
           const home = f.players.filter((p) => p.side === "home").length;
           if (f.players.length !== 10 || bad.length || gks[0] !== 1 || gks[1] !== 1 || home !== 5) {
@@ -151,7 +152,7 @@ describe("frameAt", () => {
     for (const p of arc) expect(Math.abs(p.x - 80)).toBeLessThan(8);
     for (let i = 1; i < arc.length; i++) expect(arc[i].side).not.toBe(arc[i - 1].side);
     expect(f.cam).toEqual([63, 16, 50, 32]);
-    expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 70]);
+    expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 77]);
   });
 
   it("breathes once the scene is over: players and ball drift a little with time, never when mid-scene", () => {
@@ -294,10 +295,36 @@ describe("frameAt", () => {
     expect(f.players.some((p) => p.name === off.name)).toBe(false);
     expect(frameAt(s, 0.5, null).players).toHaveLength(0);
   });
+
+  it("teams (and the ref) walk off to the tunnel over a break's first 6 s and stay off; they walk on over a restart's first 4 s", () => {
+    const m = ms[0];
+    const at = (type: string, elapsed: number) => {
+      const e = { ...(m.events.find((e) => e.t === type) ?? m.events.find((e) => e.t === "kickoff")!), t: type }; // not every seed goes to extra time
+      const s = sceneFor(e, [30, 20], 15000)!;
+      return frameAt(s, elapsed / s.ms, m.lineups, undefined, 1000);
+    };
+    const ys = (f: Frame) => [...f.players.map((p) => p.y), f.ref[1]];
+    for (const type of ["half_time", "end_of_normal_time", "et_half_time", "match_end"]) {
+      const a = ys(at(type, 0));
+      expect(a.every((y) => y <= 64), type).toBe(true);
+      expect(ys(at(type, 3000)).every((y, i) => y > a[i] && y < 70), type).toBe(true); // on the way
+      expect(ys(at(type, 6000)).every((y) => y > 64), type).toBe(true);
+      expect(ys(at(type, 90000)).every((y) => y > 64), type).toBe(true); // full time: still off while finished
+    }
+    for (const type of ["kickoff", "second_half", "extra_time", "et_second_half"]) {
+      expect(ys(at(type, 0)).every((y) => y > 64), type).toBe(true);
+      expect(ys(at(type, 4000)).every((y) => y <= 64), type).toBe(true);
+      expect(at(type, 4000).players).toHaveLength(10);
+    }
+    expect(at("kickoff", 0).players.every((p) => Math.abs(p.x - 50) < 1e-6)).toBe(true); // tunnel at [50, 70]
+    // Restarts and routine play are untouched.
+    expect(ys(at("restart", 0)).every((y) => y <= 64)).toBe(true);
+    expect(ys(at("pass", 0)).every((y) => y <= 64)).toBe(true);
+  });
 });
 
 describe("smooth", () => {
-  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, ms: 1500, cam: [-4, -3, 108, 70] });
+  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, ms: 1500, cam: [-4, -3, 108, 77] });
   it("players chase a jumped target instead of snapping, and settle on it", () => {
     let s = smooth(null, at(10), 16);
     expect(s.players[0].x).toBe(10); // first frame: nothing to chase from
@@ -314,7 +341,7 @@ describe("smooth", () => {
     expect(s.players[0]).toMatchObject({ no: 3, x: 90, y: 10 });
   });
   it("the camera glides", () => {
-    const s = smooth({ ...at(10), cam: [-4, -3, 108, 70] }, { ...at(10), cam: [63, 16, 50, 32] }, 100);
+    const s = smooth({ ...at(10), cam: [-4, -3, 108, 77] }, { ...at(10), cam: [63, 16, 50, 32] }, 100);
     expect(s.cam[0]).toBeGreaterThan(-4);
     expect(s.cam[0]).toBeLessThan(20);
   });
@@ -349,7 +376,7 @@ describe("reveal", () => {
     expect(reveal(goal, 1, [82, 32], false)).toEqual({ reached: false, revealed: false }); // late result event, drawn ball 20 short: the shot is still on its way
   });
   it("settle puts the drawn ball on the impact once the scene is over, so reveal follows next tick; never once reached", () => {
-    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, ms: 3800, cam: [-4, -3, 108, 70] };
+    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, ms: 3800, cam: [-4, -3, 108, 77] };
     const s = settle(goal, 1, f, false);
     expect(s.ball).toEqual([102, 32]);
     expect(s.ref).toEqual([70, 20]); // only the ball snaps

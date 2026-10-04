@@ -37,7 +37,7 @@ export type Scene = {
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
 };
 export type Cam = [number, number, number, number];
-export const FULL_CAM: Cam = [-4, -3, 108, 70];
+export const FULL_CAM: Cam = [-4, -3, 108, 77]; // bottom margin reaches the tunnel at y=70
 
 const GOAL_Y = 32;
 
