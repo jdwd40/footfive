@@ -77,11 +77,11 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   }
   const over = Math.max(0, t - 1) * scene.ms;
   if (over > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
-    // Dwell: carrier jogs on at 3 u/s with a gentle weave until the next event, turning 12 short of the goal he attacks
-    // and at the far x-bound, so a long gap reads as patient possession, never a wall-hug. Nearest mate shadows 6 behind.
+    // Dwell: carrier jogs on at 3 u/s with a gentle weave until the next event, turning 12 short of either goal line (never
+    // retreating to his own), so a long gap reads as patient possession, never a wall-hug. Nearest mate shadows 6 behind.
     const dir = scene.side === "home" ? 1 : -1;
-    const lo = Math.min(dir > 0 ? 1 : 12, b[0]);
-    const hi = Math.max(dir > 0 ? 88 : 99, b[0]);
+    const lo = Math.min(12, b[0]);
+    const hi = Math.max(88, b[0]);
     const x = fold(b[0] + (dir * 3 * over) / 1000, lo, hi);
     const mdir = Math.sign(fold(b[0] + (dir * 3 * (over + 1)) / 1000, lo, hi) - x) || dir; // which way he's running right now
     ball[0] = x;

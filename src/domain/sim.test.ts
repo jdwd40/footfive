@@ -185,18 +185,20 @@ describe("frameAt", () => {
     const carrier = later.players.filter((p) => p.side === pass.side && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 1.5);
     expect(carrier).toHaveLength(1);
     expect(later.players.some((p) => p.side === pass.side && p !== carrier[0] && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 7)).toBe(true);
-    // A long gap: still jogging (never a wall-hug), turning 12 short of the goal he attacks and never off the pitch.
+    // A long gap: still jogging (never a wall-hug), turning 12 short of EITHER goal line, so possession never retreats to his own line.
     const far = frameAt(s, 1 + 60000 / s.ms, m.lineups);
     const farther = frameAt(s, 1 + 61000 / s.ms, m.lineups);
     expect(Math.hypot(farther.ball[0] - far.ball[0], farther.ball[1] - far.ball[1])).toBeGreaterThan(1);
+    const xs: number[] = [];
     for (let sec = 2; sec <= 90; sec += 2) {
       const f = frameAt(s, 1 + (sec * 1000) / s.ms, m.lineups);
-      expect(f.ball[0]).toBeGreaterThanOrEqual(1);
-      expect(f.ball[0]).toBeLessThanOrEqual(99);
-      if (pass.side === "home") expect(f.ball[0]).toBeLessThanOrEqual(88);
-      else expect(f.ball[0]).toBeGreaterThanOrEqual(12);
+      xs.push(f.ball[0]);
+      expect(f.ball[0]).toBeGreaterThanOrEqual(Math.min(12, end.ball[0]));
+      expect(f.ball[0]).toBeLessThanOrEqual(Math.max(88, end.ball[0]));
       expect(f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5)).toHaveLength(1);
     }
+    expect(Math.min(...xs)).toBeLessThan(20); // 90 s at 3 u/s covers the pitch: he reached both turning lines
+    expect(Math.max(...xs)).toBeGreaterThan(80);
     // A goal keeps its final frame (plus breathing only).
     const goal = m.events.find((e) => e.t === "goal")!;
     const g = sceneFor(goal, [80, 30], 15000)!;
