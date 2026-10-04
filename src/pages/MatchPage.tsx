@@ -170,6 +170,8 @@ export default function MatchPage() {
   const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
+  // The shot is still travelling before p ≈ 0.62 (Pitch's flash gate): keep the previous caption until the ball is in.
+  const text = current && frame?.flash && frame.p <= 0.62 && ph?.prev ? ph.prev.text : current?.text;
 
   return (
     <Layout wide>
@@ -206,7 +208,7 @@ export default function MatchPage() {
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
-                {replay ? replay.scene.caption : current ? current.text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
+                {replay ? replay.scene.caption : current ? text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
               </p>
               <div className="flex gap-1" role="group" aria-label="Highlights">
                 {(["full", "off"] as const).map((p) => (

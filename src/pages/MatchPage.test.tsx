@@ -1,4 +1,4 @@
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act, cleanup, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatchEvent, MatchView } from "../lib/pocketbase";
@@ -68,6 +68,20 @@ describe("MatchPage timeline player", () => {
     await mount(v);
     expect(screen.getByTestId("match-score").textContent).toBe("0–0");
     expect(screen.getByTestId("stats")).toBeTruthy();
+  });
+
+  it("holds the shot's commentary until the ball is in, then shows GOAL!", async () => {
+    // LAG_MS = 1500; goal scene ms = 3800 → p = (now − 1500 − at) / 3800
+    const run = async (elapsed: number) => {
+      const now = Date.now();
+      const shot = { ...ev(1, now - 30000, "Shoots!"), t: "shot", ball: [85, 32] as [number, number] };
+      const goal = { ...ev(2, now - 1500 - elapsed, "GOAL!"), t: "goal", target: [100, 32] as [number, number] };
+      await mount(view([shot, goal], null, now));
+      return screen.getByTestId("commentary").textContent;
+    };
+    expect(await run(0.3 * 3800)).toBe("Shoots!");
+    cleanup();
+    expect(await run(0.8 * 3800)).toBe("GOAL!");
   });
 
   it("renders the pitch with ball only when lineups are missing", async () => {
