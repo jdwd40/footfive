@@ -12,10 +12,10 @@ const bal = require(
 };
 
 describe("match speed balance", () => {
-  it("defaults to 15 real seconds per match minute", () => {
-    expect(bal.BALANCE.matchMinuteRealSeconds).toBe(15);
-    expect(bal.BALANCE.matchMinuteRealMs).toBe(15000);
-    expect(bal.getTiming("normal").matchMinuteRealMs).toBe(15000);
+  it("defaults to 8 real seconds per match minute", () => {
+    expect(bal.BALANCE.matchMinuteRealSeconds).toBe(8);
+    expect(bal.BALANCE.matchMinuteRealMs).toBe(8000);
+    expect(bal.getTiming("normal").matchMinuteRealMs).toBe(8000);
   });
 
   it("override snapshot wins over pace", () => {
@@ -32,6 +32,6 @@ describe("match speed balance", () => {
 
   it("90 minute wall estimate at default", () => {
     const sec = bal.BALANCE.matchMinuteRealSeconds;
-    expect(90 * sec).toBe(1350); // 22m30s
+    expect(90 * sec).toBe(720); // 12m
   });
 });

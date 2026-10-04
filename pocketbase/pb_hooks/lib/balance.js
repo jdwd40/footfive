@@ -3,9 +3,9 @@
  * Team treasury ≠ personal betting credits.
  */
 var BALANCE = {
-  // Official default: 1 in-game minute = 15 real seconds (~22m30s for 90')
-  matchMinuteRealMs: 15000,
-  matchMinuteRealSeconds: 15,
+  // Official default: 1 in-game minute = 8 real seconds (12m for 90')
+  matchMinuteRealMs: 8000,
+  matchMinuteRealSeconds: 8,
   halfTimeBreakMs: 30000,
   etHalfTimeBreakMs: 15000,
   shootoutKickSpacingMs: 10000,
