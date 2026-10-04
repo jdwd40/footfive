@@ -244,6 +244,18 @@ describe("highlight scenes agree with the simulation", () => {
     expect(Math.hypot(...(sample(s.ball, 1).map((v, i) => v - s.impact![i]) as [number, number]))).toBeLessThan(1e-9);
   });
 
+  it("period markers get a 3 s scene (banner life) whatever the pace; the ball stays where it was", () => {
+    for (const t of ["half_time", "second_half", "end_of_normal_time", "extra_time", "et_second_half", "shootout_start"]) {
+      const e = all.find((e) => e.t === t);
+      if (!e) continue; // not every seed goes the distance
+      const s = sceneFor(e, [20, 30], 1000)!;
+      expect(s.ms, t).toBe(3000);
+      expect(s.ball[0], t).toEqual([20, 30]);
+      expect(s.score, t).toEqual(e.st.sc);
+    }
+    expect(sceneFor(all.find((e) => e.t === "half_time")!, [20, 30], 15000)!.actors).toEqual([]);
+  });
+
   it("every live minute carries at least two on-pitch events", () => {
     for (const m of matches) {
       const byMin = new Map<number, number>();

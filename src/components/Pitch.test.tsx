@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Pitch from "./Pitch";
 import type { Frame } from "../domain/sim";
@@ -88,4 +88,24 @@ describe("Pitch shootout banners", () => {
   it("must score to stay in", () => expect(pen({ side: "away", kick: { no: 4, sd: 0, must: 1 } })).toBe("AWY must score to stay in"));
   it("winner through at shootout end", () => expect(pen({ type: "shootout_end", flash: null, side: "away" })).toBe("Away City are through!"));
   it("nothing on an ordinary kick", () => expect(pen({ kick: { no: 2, sd: 0 } })).toBeUndefined());
+});
+
+describe("Pitch period banners", () => {
+  const period = (f: Partial<Frame>) => {
+    render(<Pitch frame={frame({ score: [1, 0], p: 0.3, ...f })} home={home} away={away} revealed />);
+    return screen.queryByTestId("period-banner")?.textContent;
+  };
+  it("half-time with the score", () => expect(period({ type: "half_time" })).toBe("HALF-TIME · HOM 1–0 AWY"));
+  it("second half", () => expect(period({ type: "second_half" })).toBe("SECOND HALF"));
+  it("end of normal time with the score", () => expect(period({ type: "end_of_normal_time", score: [1, 1] })).toBe("FULL-TIME · 1–1 · EXTRA TIME"));
+  it("extra time", () => expect(period({ type: "extra_time" })).toBe("EXTRA TIME"));
+  it("second period of extra time", () => expect(period({ type: "et_second_half" })).toBe("ET SECOND HALF"));
+  it("shootout start", () => expect(period({ type: "shootout_start" })).toBe("PENALTY SHOOTOUT"));
+  it("goes once the scene is over, and never shows confetti", () => {
+    expect(period({ type: "half_time", p: 1 })).toBeUndefined();
+    cleanup();
+    render(<Pitch frame={frame({ type: "half_time", p: 0.5 })} home={home} away={away} revealed />);
+    expect(document.querySelectorAll(".confetti")).toHaveLength(0);
+  });
+  it("nothing on a pass", () => expect(period({})).toBeUndefined());
 });

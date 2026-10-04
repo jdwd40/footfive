@@ -126,7 +126,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     case "et_second_half":
       return {
         ...base,
-        ms: d(1600),
+        ms: e.t === "kickoff" ? d(1600) : 3000, // period restarts carry a banner: give it a life
         ball: [prevBall, [50, 32], [50, 32]],
         actors: [
           { id: "a", side, label: short(e.p), path: [[50 + toward(side, -1.5), 33], [50, 32], [50 + toward(side, -4), 32]] },
@@ -341,6 +341,10 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     }
     case "shootout_end":
       return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
+    case "half_time":
+    case "end_of_normal_time":
+    case "shootout_start":
+      return { ...base, ms: 3000, ball: [prevBall], actors: [] }; // ball held where it was; the banner lives 3 s
     case "penalty_setup":
     case "shootout_setup":
       return setupScene(e, prevBall);

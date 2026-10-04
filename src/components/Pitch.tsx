@@ -39,6 +39,23 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           : frame?.type === "shootout_setup" && kick?.sd && kick.no === 6
             ? { text: "SUDDEN DEATH", cls: "bg-magenta text-white text-xl sm:text-3xl" } // first SD kick has no stakes flag; the reply kick always does
             : null;
+  // Full-pitch banner: GOOOAL (team glow + confetti) or a period marker (amber, for the scene's 3 s life).
+  const sc = frame?.score ?? [0, 0];
+  const PERIOD: Record<string, string> = {
+    half_time: `HALF-TIME · ${home.abbreviation} ${sc[0]}–${sc[1]} ${away.abbreviation}`,
+    second_half: "SECOND HALF",
+    end_of_normal_time: `FULL-TIME · ${sc[0]}–${sc[1]} · EXTRA TIME`,
+    extra_time: "EXTRA TIME",
+    et_second_half: "ET SECOND HALF",
+    shootout_start: "PENALTY SHOOTOUT",
+  };
+  const period = frame && frame.p < 1 ? PERIOD[frame.type] : undefined;
+  const glow = goal ? (goal.side === "away" ? ac : hc) : null;
+  const banner = goal
+    ? { id: "goal-banner", title: "GOOOAL!", sub: goal.score ? `${home.abbreviation} ${goal.score[0]}–${goal.score[1]} ${away.abbreviation}` : "", who: goal.who, cls: "goal-pop text-white", big: true }
+    : period
+      ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber", big: false }
+      : null;
 
   return (
     <>
@@ -103,23 +120,21 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
         {flash === "goal" ? <circle cx={ball[0]} cy={32} r={9} fill="url(#glow)" opacity={0.7} /> : null}
       </svg>
 
-      {goal ? (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30" data-testid="goal-banner">
-          <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
-            {Array.from({ length: 24 }, (_, i) => (
-              <i key={i} style={{ left: `${(i * 4.3 + 2) % 100}%`, background: i % 3 ? (goal.side === "away" ? ac : hc) : "#fff", animationDelay: `${(i % 6) * 0.15}s` }} />
-            ))}
-          </div>
-          <div className="goal-pop text-center">
-            <div className="font-display text-5xl font-black text-white sm:text-6xl" style={{ textShadow: `0 0 18px ${goal.side === "away" ? ac : hc}, 0 0 40px ${goal.side === "away" ? ac : hc}` }}>
-              GOOOAL!
+      {banner ? (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30" data-testid={banner.id}>
+          {glow ? (
+            <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
+              {Array.from({ length: 24 }, (_, i) => (
+                <i key={i} style={{ left: `${(i * 4.3 + 2) % 100}%`, background: i % 3 ? glow : "#fff", animationDelay: `${(i % 6) * 0.15}s` }} />
+              ))}
             </div>
-            {goal.score ? (
-              <div className="mt-1 font-display text-2xl font-black text-white tabular sm:text-3xl">
-                {home.abbreviation} {goal.score[0]}–{goal.score[1]} {away.abbreviation}
-              </div>
-            ) : null}
-            <div className="mt-1 text-sm font-bold text-white sm:text-base">{goal.who}</div>
+          ) : null}
+          <div className={`text-center ${banner.cls}`}>
+            <div className={`font-display font-black ${banner.big ? "text-5xl sm:text-6xl" : "text-3xl sm:text-5xl"}`} style={glow ? { textShadow: `0 0 18px ${glow}, 0 0 40px ${glow}` } : undefined}>
+              {banner.title}
+            </div>
+            {banner.sub ? <div className="mt-1 font-display text-2xl font-black tabular sm:text-3xl">{banner.sub}</div> : null}
+            {banner.who ? <div className="mt-1 text-sm font-bold sm:text-base">{banner.who}</div> : null}
           </div>
         </div>
       ) : frame && flash ? (
