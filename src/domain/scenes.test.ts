@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sample, sceneFor, type Pt, type Scene } from "./scenes";
+import { sample, sampleN, sceneFor, type Pt, type Scene } from "./scenes";
 import type { MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -63,7 +63,7 @@ describe("highlight scenes agree with the simulation", () => {
       for (let t = 0; t <= 1.0001; t += 0.02) {
         const [x, y] = sample(s.ball, t);
         const behind = atk === "home" ? x > 100.5 : x < -0.5;
-        if (behind) expect(inMouth(y) && !s.ballHeight).toBe(false);
+        if (behind) expect(inMouth(y) && sampleN(s.ballHeight, t) < 0.3).toBe(false);
       }
     }
     expect(n).toBeGreaterThan(50);
@@ -78,7 +78,7 @@ describe("highlight scenes agree with the simulation", () => {
       const [x, y] = end(s);
       expect(s.ball[0][0]).toBe(89); // spot at the x=100 end for both teams
       if (outcome === "goal") expect(x > 100 && inMouth(y)).toBe(true);
-      else expect(x > 100 && inMouth(y) && !s.ballHeight).toBe(false);
+      else expect(x > 100 && inMouth(y) && sampleN(s.ballHeight, 1) < 0.3).toBe(false);
     }
   });
 
