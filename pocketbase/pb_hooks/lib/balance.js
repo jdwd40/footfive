@@ -3,9 +3,9 @@
  * Team treasury ≠ personal betting credits.
  */
 var BALANCE = {
-  // Official default: 1 in-game minute = 15 real seconds (~22m30s for 90')
-  matchMinuteRealMs: 15000,
-  matchMinuteRealSeconds: 15,
+  // Official default: 1 in-game minute = 8 real seconds (12m for 90')
+  matchMinuteRealMs: 8000,
+  matchMinuteRealSeconds: 8,
   halfTimeBreakMs: 30000,
   etHalfTimeBreakMs: 15000,
   shootoutKickSpacingMs: 10000,
@@ -86,6 +86,8 @@ var BALANCE = {
     shootoutKickMs: 12000,
     shootoutRevealMs: 6500,
     endMs: 6000,
+    resultHoldMs: 1200, // min real gap after a shot result / card so the client can show it before the next event
+    kickoffHoldMs: 4000, // kick-off / restart-of-period announcement + teams walking on before the first play
   },
 
   baseAttackChance: 0.22,

@@ -83,6 +83,8 @@ function buildTiming(minuteMs, scale) {
     "shootoutKickMs",
     "shootoutRevealMs",
     "endMs",
+    "resultHoldMs",
+    "kickoffHoldMs",
   ];
   for (var i = 0; i < keys.length; i++) t[keys[i]] = Math.max(20, Math.round(M[keys[i]] / k));
   return t;
@@ -417,28 +419,41 @@ function playMinute(st, out) {
   if (rnd(st) < M.foulRate * foulMul) foulEvent(st, out, ctx, OTHER[side]);
 
   var c = chanceModel(st, side);
-  if (rnd(st) < c.pSeq) {
-    attack(st, out, ctx, side, c);
-  } else if (rnd(st) < 0.35) {
-    var p = attacker(st, side);
-    var from = st.ball;
-    st.ball = pos(side, 30 + rnd(st) * 25, 12 + rnd(st) * 40);
-    emit(st, out, ctx.at(0.5), "possession", {
-      side: side,
-      p: p.name,
-      from: from,
-      ball: st.ball,
-      text: pick(st, [
-        tname(st, side) + " keep the ball in midfield",
-        p.name + " recycles possession for " + abbr(st, side),
-        tname(st, side) + " probe patiently",
-      ]),
-      clk: ctx.clk(0.5),
-    });
-  }
+  if (rnd(st) < c.pSeq) attack(st, out, ctx, side, c);
+  else midfield(st, out, ctx, side);
 
   st.nextAt = ctx.t0 + ctx.dur + ctx.pause;
   if (PERIOD_END[st.phase] === ctx.m) periodEnd(st, out);
+}
+
+/** Off-ball minute: 2–3 passes, maybe lost to a tackle. Keeps the pitch alive between attacks. */
+function midfield(st, out, ctx, side) {
+  var f = 0.1 + rnd(st) * 0.1;
+  var last = attacker(st, side);
+  var n = 2 + (rnd(st) < 0.5 ? 1 : 0);
+  for (var i = 0; i < n; i++) {
+    var recv = attacker(st, side, last);
+    var from = st.ball;
+    st.ball = pos(side, 25 + rnd(st) * 30, 8 + rnd(st) * 48);
+    emit(st, out, ctx.at(f), "pass", {
+      side: side,
+      p: last.name,
+      p2: recv.name,
+      from: from,
+      ball: st.ball,
+      text: pick(st, [last.name + " to " + recv.name, last.name + " knocks it to " + recv.name, recv.name + " takes it off " + last.name]),
+      clk: ctx.clk(f),
+    });
+    last = recv;
+    f += 0.22;
+  }
+  if (rnd(st) < 0.4) {
+    var d = defender(st, OTHER[side]);
+    var from2 = st.ball;
+    st.ball = pos(OTHER[side], 30 + rnd(st) * 20, clamp(st.ball[1] + (rnd(st) - 0.5) * 16, 6, 58));
+    emit(st, out, ctx.at(f), "tackle", { side: OTHER[side], p: d.name, p2: last.name, from: from2, ball: st.ball, text: d.name + " wins it back for " + abbr(st, OTHER[side]), clk: ctx.clk(f) });
+    st.counter = OTHER[side];
+  }
 }
 
 function foulEvent(st, out, ctx, side) {
@@ -470,6 +485,7 @@ function foulEvent(st, out, ctx, side) {
       text: "Yellow card — " + offender.name + " (" + abbr(st, side) + ")",
       clk: ctx.clk(f + 0.05),
     });
+    ctx.pause += st.timing.resultHoldMs; // the card is shown before play moves on
     return;
   }
   offender.sentOff = true;
@@ -482,6 +498,7 @@ function foulEvent(st, out, ctx, side) {
     tick: vs(st) + " — Red card: " + offender.name + " (" + abbr(st, side) + "), " + ctx.m + "′.",
     clk: ctx.clk(f + 0.05),
   });
+  ctx.pause += st.timing.resultHoldMs;
 }
 
 /**
@@ -520,7 +537,7 @@ function attack(st, out, ctx, side, c) {
   });
 
   var last = passer;
-  var passes = 1 + Math.floor(rnd(st) * 2);
+  var passes = 2 + Math.floor(rnd(st) * 2);
   for (var i = 0; i < passes; i++) {
     f += STEP;
     var back = i > 0 && rnd(st) < 0.4 && passer.name !== last.name;
@@ -600,7 +617,6 @@ function attack(st, out, ctx, side, c) {
 
   f += STEP;
   st.stats[side].sh += 1;
-  if (outcome === "save" || outcome === "goal") st.stats[side].sot += 1;
   var gy = 28.5 + rnd(st) * 7; // goal mouth spans y 28..36
   emit(st, out, ctx.at(f), "shot", {
     side: side,
@@ -621,6 +637,7 @@ function attack(st, out, ctx, side, c) {
   }
   var res = { chain: chain, from: shotFrom, clk: ctx.clk(f) };
   if (outcome === "save") {
+    st.stats[side].sot += 1;
     st.stats[def].sv += 1;
     res.side = def;
     res.p = gk.name;
@@ -659,18 +676,27 @@ function attack(st, out, ctx, side, c) {
   }
   st.danger = false; // the outcome is public with this event, so markets reopen
   emit(st, out, ctx.at(f), outcome, res);
+  ctx.pause += st.timing.resultHoldMs; // the save/miss/block is shown before play moves on (shifts the rest of the minute)
   st.ball = res.ball;
-  if (outcome === "block" && rnd(st) < 0.4) {
-    st.stats[side].co += 1;
-    st.ball = pos(side, 100, rnd(st) < 0.5 ? 0 : 64);
-    emit(st, out, ctx.at(f + 0.07), "corner", {
-      side: side,
-      chain: chain,
-      ball: st.ball,
-      text: "Corner to " + tname(st, side),
-      clk: ctx.clk(f + 0.07),
-    });
-  }
+  // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues. A miss always leaves the pitch.
+  if (outcome === "miss" || (outcome === "block" && rnd(st) < 0.45)) bounce(st, out, ctx, f + 0.06, def, chain);
+}
+
+/** Ball hits a board and comes back into play; `side` is the team that picks it up. */
+function bounce(st, out, ctx, f, side, chain) {
+  var wall = rnd(st) < 0.5 ? "side" : "end";
+  var hit = wall === "side" ? [clamp(st.ball[0] + Math.round((rnd(st) - 0.5) * 20), 2, 98), rnd(st) < 0.5 ? 0 : 64] : [px(OTHER[side], 100), clamp(st.ball[1] + Math.round((rnd(st) - 0.5) * 24), 4, 60)];
+  var p = defender(st, side);
+  st.ball = pos(side, 20 + rnd(st) * 20, 10 + rnd(st) * 44);
+  emit(st, out, ctx.at(f), "bounce", {
+    side: side,
+    chain: chain,
+    p: p.name,
+    from: hit,
+    ball: st.ball,
+    text: pick(st, ["Off the boards! " + p.name + " collects for " + abbr(st, side), "The ball rattles the " + wall + " board and " + p.name + " brings it back in"]),
+    clk: ctx.clk(f),
+  });
 }
 
 /** Goal at fraction f of the minute. The clock freezes during the celebration. */
@@ -678,6 +704,7 @@ function goal(st, out, ctx, f, side, scorer, gk, chain, target, pen) {
   var T = st.timing;
   if (side === "home") st.score[0] += 1;
   else st.score[1] += 1;
+  st.stats[side].sot += 1; // on-target is counted with the result, so the shot's snapshot can't leak it
   var s = ctx.s(f);
   var t = ctx.at(f);
   st.danger = true;
@@ -784,7 +811,7 @@ function penalty(st, out, ctx, side, fouled, f, chain) {
   var tKick = tSetup + T.penSetupMs;
   var plan = { col: shot.col, height: shot.height, dive: shot.dive, post: shot.post, run: shot.run, outcome: shot.outcome };
   st.stats[side].sh += 1;
-  if (shot.outcome === "goal" || shot.outcome === "save") st.stats[side].sot += 1;
+  if (shot.outcome === "save") st.stats[side].sot += 1; // goal() counts its own
   if (shot.outcome === "goal") {
     // Re-anchor the minute so the goal lands at the kick time.
     ctx.pause += tKick - ctx.at(f);
@@ -869,6 +896,7 @@ function periodEnd(st, out) {
 function resume(st, out, type, phase, s, text) {
   st.phase = phase;
   emit(st, out, st.nextAt, type, { text: text, clk: { s: s, run: 1 } });
+  st.nextAt += st.timing.kickoffHoldMs; // announcement + walk-on before the first play
 }
 
 function finish(st, out, t, by) {
@@ -1014,6 +1042,7 @@ function step(st, out) {
         text: "Kick-off! " + tname(st, "home") + " v " + tname(st, "away"),
         clk: { s: 0, run: 1 },
       });
+      st.nextAt += st.timing.kickoffHoldMs;
       return;
     case "half_time":
       return resume(st, out, "second_half", "second_half", 2700, "Second half under way");

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-04 — Full live simulation
+
+- Engine narrates every minute (passes, tackles, shots); `bounce` off the boards replaces corners; 8 s match minutes.
+- Match page is a server-timeline player: full 5-v-5 on the pitch, commentary in sync with the frame; Quick highlights pref removed.
+- Big GOOOAL banner (goal + celebration), shootout banners (sudden death, score to go through, must score, winner through).
+- Other-match ticker on the match page; 20 s auto-return to the round after full time with a countdown (tap to stay).
+
+---
+
 ## 2026-07-26 — GitHub Actions deploy on main
 
 - `.github/workflows/deploy.yml` — test, production build, SSH deploy to VPS on push to `main`.

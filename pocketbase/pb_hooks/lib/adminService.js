@@ -119,21 +119,21 @@ function overview($app) {
     fixturesWindowMinutes: world ? world.get("fixtures_window_minutes") || 5 : 5,
     roundIntervalMs: world ? world.get("round_interval_ms") : null,
     matchMinuteRealSeconds: world
-      ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
-      : 15,
+      ? parseInt(world.get("match_minute_real_seconds"), 10) || BALANCE.matchMinuteRealSeconds
+      : BALANCE.matchMinuteRealSeconds,
     matchMinuteRealMs: world
-      ? parseInt(world.get("match_minute_real_ms"), 10) || 15000
-      : 15000,
+      ? parseInt(world.get("match_minute_real_ms"), 10) || BALANCE.matchMinuteRealMs
+      : BALANCE.matchMinuteRealMs,
     estimatedNormalMatchMinutes: (function () {
       var sec = world
-        ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
-        : 15;
+        ? parseInt(world.get("match_minute_real_seconds"), 10) || BALANCE.matchMinuteRealSeconds
+        : BALANCE.matchMinuteRealSeconds;
       return Math.round((90 * sec) / 60);
     })(),
     estimatedEtMinutes: (function () {
       var sec = world
-        ? parseInt(world.get("match_minute_real_seconds"), 10) || 15
-        : 15;
+        ? parseInt(world.get("match_minute_real_seconds"), 10) || BALANCE.matchMinuteRealSeconds
+        : BALANCE.matchMinuteRealSeconds;
       return Math.round((30 * sec) / 60);
     })(),
     speedAppliesTo: "unstarted_matches",

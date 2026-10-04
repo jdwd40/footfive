@@ -112,7 +112,7 @@ function intIn(v, lo, hi, dflt) {
 /** All wall-clock timing for the world, from admin settings. */
 function timing(world) {
   var k = timeScale();
-  var minuteSec = intIn(world.get("match_minute_real_seconds"), 1, 60, BALANCE.matchMinuteRealSeconds || 15);
+  var minuteSec = intIn(world.get("match_minute_real_seconds"), 1, 60, BALANCE.matchMinuteRealSeconds);
   var between = intIn(world.get("between_round_minutes"), 1, 1440, 1);
   var gap = intIn(world.get("championship_gap_minutes"), 1, 1440, 10);
   var win = Math.min(intIn(world.get("fixtures_window_minutes"), 1, 1440, 5), gap);
@@ -164,8 +164,8 @@ function ensureWorld($app) {
   rec.set("round_interval_ms", 60000);
   rec.set("championship_gap_minutes", 10);
   rec.set("fixtures_window_minutes", 5);
-  rec.set("match_minute_real_seconds", BALANCE.matchMinuteRealSeconds || 15);
-  rec.set("match_minute_real_ms", (BALANCE.matchMinuteRealSeconds || 15) * 1000);
+  rec.set("match_minute_real_seconds", BALANCE.matchMinuteRealSeconds);
+  rec.set("match_minute_real_ms", BALANCE.matchMinuteRealSeconds * 1000);
   rec.set("processing_status", "idle");
   rec.set("retention_days", 30);
   rec.set("progression_paused", false);

@@ -3,10 +3,12 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import Pitch from "../components/Pitch";
 import MarketsPanel from "../components/MarketsPanel";
+import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
-import { enqueue, sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { countdown, noteServerTime, phaseInfo, useLive, useNow } from "../lib/live";
+import { sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
+import { countdown, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
 
@@ -14,19 +16,20 @@ const STAT_ROWS: Array<[string, number]> = [
   ["Shots", 0],
   ["On target", 1],
   ["Saves", 2],
-  ["Corners", 3],
   ["Fouls", 4],
   ["Yellow cards", 5],
   ["Red cards", 6],
 ];
 
 const PREF_KEY = "ff_highlights";
-type Pref = "full" | "quick" | "off";
+type Pref = "full" | "off";
+const LAG_MS = 1500; // ponytail: fixed latency buffer; make adaptive if poll jitter shows
+const RETURN_MS = 20000;
 
-/** Highlights speed preference: presentation only, never changes the match. */
+/** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
   const sysReduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) as Pref) || (sysReduced ? "off" : "full"));
+  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) === "off" ? "off" : "full"));
   return [
     p,
     (v) => {
@@ -37,42 +40,61 @@ function usePref(): [Pref, (p: Pref) => void, boolean] {
   ];
 }
 
+/** Period markers, coaching, ...: ball held where it was, caption only. */
+function idleScene(e: MatchEvent, ball: Pt): Scene {
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
+}
+
+/** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
+type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */ };
+
+/** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
+function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
+  if (!ph) return null;
+  return revealed || !ph.prev ? ph.cur.st : ph.prev.st;
+}
+
 export default function MatchPage() {
   const { fixtureId = "" } = useParams();
   const navigate = useNavigate();
   const { live } = useLive();
-  const now = useNow(250);
   const [view, setView] = useState<MatchView | null>(null);
   const [events, setEvents] = useState<MatchEvent[]>([]);
   const [error, setError] = useState("");
   const [lastOk, setLastOk] = useState(0);
   const [pref, setPref, sysReduced] = usePref();
-  const [queue, setQueue] = useState<Scene[]>([]);
-  const [scene, setScene] = useState<Scene | null>(null);
-  const [replay, setReplay] = useState(false);
+  const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
+  const [stay, setStay] = useState(false);
   const lastSeq = useRef(0);
-  const lastBall = useRef<Pt>([50, 32]);
-  const joined = useRef(false);
-  const lastActive = useRef(Date.now());
+  const inflight = useRef(false);
+  const fxRef = useRef(fixtureId);
+  useEffect(() => {
+    fxRef.current = fixtureId; // after commit, not during render: a late response for the old fixture is still dropped
+  }, [fixtureId]);
+  // Everything time-driven lives in one state written by the animation loop; render only reads it.
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
 
   // Reset when switching fixtures.
   useEffect(() => {
     setView(null);
     setEvents([]);
-    setQueue([]);
-    setScene(null);
+    setReplay(null);
     setError("");
+    setStay(false);
     lastSeq.current = 0;
-    joined.current = false;
+    inflight.current = false;
+    setAnim((a) => ({ ...a, frame: null }));
   }, [fixtureId]);
+  useEffect(() => {
+    setAnim((a) => ({ ...a, frame: null })); // replay start/end jumps the timeline: no chase across it
+  }, [replay]);
 
-  const inflight = useRef(false);
   const poll = useCallback(async () => {
-    if (inflight.current) return; // one request at a time: duplicate events can't double-queue
+    if (inflight.current) return;
     inflight.current = true;
     try {
       const v = await footfiveApi.match(fixtureId, lastSeq.current);
-      if (v.fixture.id !== fixtureId) return;
+      if (v.fixture.id !== fxRef.current) return;
       noteServerTime(v.serverTimeMs);
       reportConnectionOk();
       setLastOk(Date.now());
@@ -85,28 +107,6 @@ export default function MatchPage() {
           const seen = new Set(old.map((e) => e.seq));
           return [...old, ...fresh.filter((e) => !seen.has(e.seq))].slice(-150);
         });
-        if (!joined.current) {
-          // Late join: show the current position, don't replay the backlog.
-          joined.current = true;
-          const lastWithBall = [...fresh].reverse().find((e) => e.ball);
-          if (lastWithBall?.ball) lastBall.current = lastWithBall.ball as Pt;
-          const latest = fresh[fresh.length - 1];
-          setScene({ key: "join", seq: latest.seq, type: "join", ms: 0, ball: [lastBall.current], actors: [], caption: latest.text, important: false });
-        } else {
-          let prev = lastBall.current;
-          const scenes: Scene[] = [];
-          for (const e of fresh) {
-            const s = sceneFor(e, prev, { fast: pref === "quick" });
-            if (s) {
-              scenes.push(s);
-              prev = s.ball[s.ball.length - 1];
-            }
-          }
-          lastBall.current = prev;
-          if (scenes.length) setQueue((q) => enqueue(q, scenes, pref === "quick" ? 2 : 4));
-        }
-      } else if (!joined.current) {
-        joined.current = true;
       }
     } catch (err) {
       reportConnectionFail(err);
@@ -114,7 +114,7 @@ export default function MatchPage() {
     } finally {
       inflight.current = false;
     }
-  }, [fixtureId, pref]);
+  }, [fixtureId]);
 
   useEffect(() => {
     void poll();
@@ -122,47 +122,93 @@ export default function MatchPage() {
     return () => clearInterval(id);
   }, [poll]);
 
-  // Pull the next scene off the bounded queue when the pitch is idle.
-  useEffect(() => {
-    if (pref === "off") {
-      if (queue.length) setQueue([]);
-      return;
+  // Scene per event, chained so the ball carries over between scenes, lengths scaled to the match pace.
+  const minuteMs = view?.fixture.minuteMs ?? 15000;
+  const scenes = useMemo(() => {
+    const m = new Map<number, Scene>();
+    let prev: Pt = [50, 32];
+    for (const e of events) {
+      const s = sceneFor(e, prev, minuteMs) ?? idleScene(e, prev);
+      prev = s.ball[s.ball.length - 1];
+      m.set(e.seq, s);
     }
-    if ((!scene || scene.ms === 0 || replay) && queue.length && !replay) {
-      setScene(queue[0]);
-      setQueue((q) => q.slice(1));
-    }
-  }, [queue, scene, pref, replay]);
+    return m;
+  }, [events, minuteMs]);
 
-  const onSceneDone = useCallback(() => {
-    if (replay) {
-      setReplay(false);
-      setScene(null);
-      return;
-    }
-    setScene((s) => (s ? { ...s, ms: 0, flash: null } : s));
-  }, [replay]);
-
-  // Return to the main screen 60 s after the final whistle if the user is idle.
+  const lineups = view?.lineups ?? null;
+  const serverSentOff = view?.sentOff;
+  // Animation loop: one rAF per frame computes the target frame and chases it; the committed `anim` is all render sees.
   useEffect(() => {
-    const mark = () => (lastActive.current = Date.now());
-    const evs = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
-    evs.forEach((e) => window.addEventListener(e, mark, { passive: true }));
-    return () => evs.forEach((e) => window.removeEventListener(e, mark));
-  }, []);
-  const st: PubState | null = view?.fixture.st || null;
-  const finished = st?.ph === "finished";
+    let id = 0;
+    let last = performance.now();
+    // Dismissals whose red_card event has rolled out of the events buffer: the server's list is the only record left, always applied.
+    const seeded = (serverSentOff ?? []).filter((s) => !events.some((e) => e.t === "red_card" && e.side === s.side && e.p === s.p)).map((s) => s.side + ":" + s.p);
+    const dismissed = (seq: number) => {
+      const out = sentOffAt(events, seq);
+      for (const k of seeded) out.add(k);
+      return out;
+    };
+    const step = () => {
+      id = requestAnimationFrame(step);
+      const t0 = performance.now();
+      const dt = Math.max(0, t0 - last); // smooth() clamps a stutter and snaps after a long gap
+      last = t0;
+      const now = serverNow();
+      if (replay && (t0 - replay.startedAt) / replay.scene.ms >= 1 + 900 / replay.scene.ms) return setReplay(null);
+      const ph = playhead(events, now - LAG_MS);
+      // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
+      // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
+      const liveScene = ph ? scenes.get(ph.cur.seq) : null;
+      const prevScene = ph?.prev && !replay ? scenes.get(ph.prev.seq) : undefined; // its result badge lingers into the new scene
+      const liveP = sysReduced ? 1 : ph && liveScene?.ms ? ph.elapsed / liveScene.ms : 1;
+      const scene = replay ? replay.scene : liveScene;
+      const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
+      setAnim((a) => {
+        if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() };
+        const same = a.frame?.seq === scene.seq;
+        // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
+        const jumped = !!a.frame && !same && Math.abs(scene.seq - a.frame.seq) > 1;
+        // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
+        const startBall = same ? a.startBall : jumped ? null : a.frame?.ball ?? null;
+        // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
+        const sentOff = dismissed(same && a.revealed ? scene.seq : scene.seq - 1);
+        const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined, prevScene);
+        // A result event that landed late (scene already over) has the drawn ball still travelling: settle puts it on the impact this tick.
+        const frame = settle(scene, p, sysReduced ? target : smooth(jumped ? null : a.frame, target, dt), same && a.reached);
+        // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
+        const gate = reveal(scene, p, frame.ball, same && a.reached);
+        // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
+        const liveRevealed = replay ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
+        // The line-ups follow the live playhead: a replay of something older than a red card must not un-strike the player.
+        const liveSentOff = replay && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
+        return { now, frame, startBall, sentOff, liveSentOff, ...gate, liveRevealed };
+      });
+    };
+    step();
+    return () => cancelAnimationFrame(id);
+  }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
+  const { now, frame, revealed, liveRevealed, liveSentOff } = anim;
+  const ph = playhead(events, now - LAG_MS);
+
+  // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
+  // Public state as the lagged pitch shows it: every event carries its own snapshot, held back until the result is revealed. Auto-return keys off the real state.
+  const st: PubState | null = shownState(ph, liveRevealed) ?? view?.fixture.st ?? null;
+  const finished = view?.fixture.st?.ph === "finished";
   const finishedAt = useMemo(() => (finished ? Date.now() : 0), [finished]);
   useEffect(() => {
     if (!finished) return;
-    const id = setInterval(() => {
-      const idle = Date.now() - lastActive.current;
-      const sinceEnd = Date.now() - finishedAt;
-      const slipOpen = !!document.querySelector('[data-testid="bet-slip"]');
-      if (sinceEnd >= 60000 && idle >= 60000 && !slipOpen) navigate("/live");
-    }, 2000);
-    return () => clearInterval(id);
-  }, [finished, finishedAt, navigate]);
+    const cancel = () => setStay(true);
+    const evs = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
+    evs.forEach((e) => window.addEventListener(e, cancel, { passive: true, once: true }));
+    return () => evs.forEach((e) => window.removeEventListener(e, cancel));
+  }, [finished]);
+  useEffect(() => {
+    if (!finished || stay) return;
+    const id = setTimeout(() => {
+      if (!document.querySelector('[data-testid="bet-slip"]')) navigate("/live");
+    }, RETURN_MS);
+    return () => clearTimeout(id);
+  }, [finished, stay, navigate]);
 
   const stale = !lastOk || Date.now() - lastOk > 8000;
 
@@ -185,9 +231,13 @@ export default function MatchPage() {
   }
 
   const fx = view.fixture;
+  const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
-  const current = events[events.length - 1];
-  const showingOld = scene && scene.ms > 0 && current && scene.seq < current.seq - 3;
+  const current = replay ? null : ph?.cur;
+  // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
+  const text = current && !liveRevealed && ph?.prev ? ph.prev.text : current?.text;
+  // Events as the playhead has shown them: nothing newer, and the current one only once its result is revealed.
+  const seen = ph ? events.filter((e) => e.seq < ph.cur.seq || (liveRevealed && e.seq === ph.cur.seq)) : events;
 
   return (
     <Layout wide>
@@ -203,8 +253,16 @@ export default function MatchPage() {
           </Link>
         ))}
       </div>
+      {live?.ticker?.length ? <Ticker items={live.ticker.filter((i) => i.fixtureId !== fx.id)} label="Other matches" /> : null}
 
-      <Scoreboard view={view} now={now} stale={stale} />
+      <Scoreboard view={shown} now={now} stale={stale} />
+      {finished && !stay ? (
+        <div className="mt-2 text-center">
+          <span className="chip chip-amber tabular" data-testid="auto-return">
+            Back to the round in {countdown(finishedAt + RETURN_MS - Date.now())} · tap to stay
+          </span>
+        </div>
+      ) : null}
 
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-3">
@@ -212,33 +270,34 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch scene={scene} home={fx.home} away={fx.away} reduced={sysReduced} onDone={onSceneDone} replay={replay || !!showingOld} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
-                {current ? current.text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
+                {replay ? replay.scene.caption : current ? text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
               </p>
               <div className="flex gap-1" role="group" aria-label="Highlights">
-                {(["full", "quick", "off"] as const).map((p) => (
+                {(["full", "off"] as const).map((p) => (
                   <button key={p} type="button" className={`chip ${pref === p ? "chip-lime" : "chip-muted"}`} onClick={() => setPref(p)} aria-pressed={pref === p}>
-                    {p === "full" ? "Full" : p === "quick" ? "Quick" : "Off"}
+                    {p === "full" ? "Full" : "Off"}
                   </button>
                 ))}
               </div>
             </div>
           </section>
 
-          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={view} events={events} /> : null}
+          {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={shown} events={seen} /> : null}
 
           <section className="panel p-3">
             <h2 className="panel-title mb-2">Match events</h2>
-            <EventFeed events={events} view={view} onReplay={(e) => {
-              const s = sceneFor(e, (e.from as Pt) || lastBall.current);
-              if (s && pref !== "off") {
-                setReplay(true);
-                setScene({ ...s, key: `replay-${e.seq}-${Date.now()}` });
-              }
-            }} />
+            <EventFeed
+              events={seen}
+              view={view}
+              onReplay={(e) => {
+                const s = scenes.get(e.seq);
+                if (s && s.ms > 0 && pref !== "off") setReplay({ scene: s, startedAt: performance.now() });
+              }}
+            />
           </section>
         </div>
 
@@ -254,12 +313,13 @@ export default function MatchPage() {
               <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} />
             </section>
           ) : null}
-          {view.lineups ? <Lineups view={view} /> : null}
+          {view.lineups ? <Lineups view={view} sentOff={liveSentOff} /> : null}
         </aside>
       </div>
     </Layout>
   );
 }
+
 
 function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale: boolean }) {
   const fx = view.fixture;
@@ -443,7 +503,6 @@ const FEED_TYPES = new Set([
   "shootout_end",
   "match_end",
   "coaching",
-  "corner",
 ]);
 const REPLAYABLE = new Set(["goal", "penalty_goal", "save", "woodwork", "miss", "block", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
 
@@ -537,9 +596,9 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
   );
 }
 
-function Lineups({ view }: { view: MatchView }) {
+/** `sentOff` is the live playhead's set (cards as the lagged pitch has shown them), so the strike-through never beats the pitch — and a replay of older play never lifts it. */
+function Lineups({ view, sentOff: off }: { view: MatchView; sentOff: Set<string> }) {
   const fx = view.fixture;
-  const off = new Set(view.sentOff.map((s) => s.side + ":" + s.p));
   return (
     <section className="panel p-3">
       <h2 className="panel-title mb-2">Line-ups</h2>

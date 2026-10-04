@@ -24,28 +24,22 @@ export type Scene = {
   ballHeight?: number[]; // optional lift per keyframe (0..1), for chips/crosses/headers
   actors: Actor[];
   caption: string;
-  important: boolean;
   flash?: "goal" | "save" | "miss" | "wood" | "card" | "pen" | null;
   focus?: Side | null; // celebrating side
+  side?: Side | null; // event side (banners)
+  who?: string; // event's main player
+  score?: [number, number]; // score after the event
+  kick?: MatchEvent["kick"];
+  pens?: [number, number]; // shootout score after the event
+  by?: MatchEvent["st"]["by"]; // how the match was won (match_end)
+  cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
+  flashAt?: number; // progress at which the result badge may show (default 0.62)
+  impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
 };
+export type Cam = [number, number, number, number];
+export const FULL_CAM: Cam = [-4, -3, 108, 77]; // bottom margin reaches the tunnel at y=70
 
 const GOAL_Y = 32;
-export const IMPORTANT = new Set([
-  "goal",
-  "penalty_goal",
-  "penalty_awarded",
-  "penalty_setup",
-  "penalty_saved",
-  "penalty_missed",
-  "penalty_woodwork",
-  "red_card",
-  "shootout_setup",
-  "shootout_kick",
-  "shootout_end",
-  "match_end",
-  "save",
-  "woodwork",
-]);
 
 /** Goal line the side attacks. */
 export function goalX(side: Side) {
@@ -68,7 +62,7 @@ function jit(seq: number, k: number, amp: number) {
 function other(side: Side): Side {
   return side === "home" ? "away" : "home";
 }
-function short(name?: string) {
+export function short(name?: string) {
   if (!name) return undefined;
   const parts = name.split(" ");
   return parts.length > 1 ? `${parts[0][0]}. ${parts.slice(1).join(" ")}` : name;
@@ -76,38 +70,77 @@ function short(name?: string) {
 function keeperSpot(defSide: Side): Pt {
   return [defSide === "home" ? 3 : 97, GOAL_Y];
 }
+/** Camera window `w` wide centred on (cx, cy) at the full-pitch aspect (so the SVG never reflows on a zoom), kept inside the full-pitch margins. */
+function camAt(cx: number, cy: number, w: number): Cam {
+  const [fx, fy, fw, fh] = FULL_CAM;
+  const h = (w * fh) / fw;
+  return [Math.max(fx, Math.min(fx + fw - w, cx - w / 2)), Math.max(fy, Math.min(fy + fh - h, cy - h / 2)), w, h];
+}
+/** Broadcast camera for a penalty: 56 wide (the box and the goal fit) centred 12 in from the attacked goal line. */
+function penCam(g: Side): Cam {
+  return camAt(goalX(g) + toward(g, -12), GOAL_Y, 56);
+}
+/** Celebration spots by the nearest corner flag of the attacked end: scorer, mate 1, mate 2. */
+function huddle(atk: Side, y: number): [Pt, Pt, Pt] {
+  const c: Pt = [goalX(atk) + toward(atk, -6), y >= GOAL_Y ? 58 : 6];
+  const inward = c[1] > GOAL_Y ? -1 : 1;
+  return [c, clampPt([c[0] - toward(atk, 4), c[1] + inward * 3]), clampPt([c[0] - toward(atk, 2), c[1] + inward * 4])];
+}
+
+/** Scene lengths were written for 15 s/min; scale to the match pace. Clock-pausing scenes keep a floor so they stay watchable. */
+function pace(minuteMs: number) {
+  const k = Math.max(0.15, Math.min(1, minuteMs / 15000));
+  return (base: number, floor = 0) => Math.max(floor, Math.round(base * k));
+}
+
+/** Fields every scene copies from its event. */
+function head(e: MatchEvent) {
+  const so = e.st?.so;
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick, pens: so ? ([so.h, so.a] as [number, number]) : undefined, by: e.st?.by };
+}
 
 /**
  * Build the scene for one event. `prevBall` is where the previous scene ended, so movement
  * connects across scene boundaries.
  */
-export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } = {}): Scene | null {
-  const k = opts.fast ? 0.6 : 1;
+export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
+  const s = build(e, prevBall, minuteMs);
+  // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.
+  if (s && (s.ball[0][0] !== prevBall[0] || s.ball[0][1] !== prevBall[1])) {
+    s.ball = [prevBall, ...s.ball];
+    if (s.ballHeight) s.ballHeight = [s.ballHeight[0], ...s.ballHeight];
+  }
+  return s;
+}
+
+function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
+  const d = pace(minuteMs);
   const side = (e.side || "home") as Side;
   const atk = side;
   const def = other(side);
   const ball = (e.ball as Pt) || prevBall;
   const from = ((e.from as Pt) || prevBall) as Pt;
-  const base = { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, important: IMPORTANT.has(e.t), flash: null as Scene["flash"] };
+  const base = head(e);
   const s = e.seq;
 
   switch (e.t) {
-    case "kickoff":
     case "restart":
+      // The restarting side walks the ball to the spot (centre after a goal, their own box after a failed penalty).
+      return { ...base, ms: d(1600), ball: [prevBall, ball, ball], actors: [{ id: "w", side, path: [prevBall, ball, clampPt([ball[0] - toward(side, 2), ball[1]])] }] };
+    case "kickoff":
     case "second_half":
     case "extra_time":
     case "et_second_half":
       return {
         ...base,
-        ms: 1600 * k,
-        ball: [[50, 32], [50, 32], clampPt([50 + toward(side, -10), 32 + jit(s, 1, 8)])],
+        ms: e.t === "kickoff" ? d(1600) : 3000, // period restarts carry a banner: give it a life
+        ball: [prevBall, [50, 32], [50, 32]],
         actors: [
           { id: "a", side, label: short(e.p), path: [[50 + toward(side, -1.5), 33], [50, 32], [50 + toward(side, -4), 32]] },
           { id: "b", side, path: [[50 + toward(side, -12), 32 + jit(s, 1, 8)], [50 + toward(side, -11), 32 + jit(s, 1, 8)], clampPt([50 + toward(side, -10), 33 + jit(s, 1, 8)])] },
           { id: "d", side: other(side), path: [[50 + toward(side, 10), 26], [50 + toward(side, 9), 28], [50 + toward(side, 6), 30]] },
         ],
       };
-    case "possession":
     case "build_up":
     case "pass":
     case "through_ball":
@@ -120,7 +153,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       const markerStart = clampPt([recv[0] + toward(atk, 6) + jit(s, 2, 3), recv[1] + jit(s, 3, 7)]);
       return {
         ...base,
-        ms: (run ? 2200 : e.t === "cross" ? 2000 : 1500) * k,
+        ms: d(run ? 2200 : e.t === "cross" ? 2000 : 1500),
         ball: [passer, lerp(passer, recv, 0.5), recv],
         ballHeight: lift,
         actors: [
@@ -138,7 +171,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       const end = ball;
       return {
         ...base,
-        ms: 1600 * k,
+        ms: d(1600),
         ball: [at, lerp(at, end, 0.3), end],
         actors: [
           { id: "lost", side: def, label: short(e.p2), path: [clampPt([at[0] - toward(def, 2), at[1]]), at, clampPt([at[0] - toward(def, 1), at[1] + 2])] },
@@ -148,11 +181,10 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
     }
     case "shot": {
       const shotFrom = ball;
-      const run = (e.from as Pt) || prevBall;
       return {
         ...base,
-        ms: 1300 * k,
-        ball: [run, shotFrom, shotFrom],
+        ms: d(1300),
+        ball: [prevBall, shotFrom, shotFrom],
         ballHeight: e.header ? [0.9, 0.6, 0.6] : [0, 0, 0],
         actors: [
           { id: "s", side: atk, label: short(e.p), path: [clampPt([shotFrom[0] - toward(atk, 3), shotFrom[1] + 1]), shotFrom, shotFrom] },
@@ -163,27 +195,49 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
     }
     case "goal":
     case "penalty_goal": {
-      if (e.t === "penalty_goal" && e.pen) return penaltyScene(e, "goal", opts);
+      if (e.t === "penalty_goal" && e.pen) return penaltyScene(e, prevBall, "goal", d);
       const target = (e.target as Pt) || [goalX(atk), GOAL_Y];
       const shotFrom = prevBall;
       const gk = keeperSpot(other(atk));
       const dive: Pt = [gk[0], GOAL_Y + (target[1] > GOAL_Y ? -2.5 : 2.5)];
       const net: Pt = [goalX(atk) + toward(atk, 2), target[1]];
+      const [corner, m1, m2] = huddle(atk, net[1]);
+      const t1: Pt = clampPt([shotFrom[0] - toward(atk, 12), shotFrom[1] + 10]);
+      const t2: Pt = clampPt([shotFrom[0] - toward(atk, 8), shotFrom[1] - 10]);
       return {
         ...base,
-        ms: 3800 * k,
+        ms: d(3800, 2400),
         ball: [shotFrom, target, net, net, net],
         actors: [
-          { id: "s", side: atk, label: short(e.p), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(atk, 4), shotFrom[1] - 6]), clampPt([shotFrom[0] + toward(atk, 2), 10]), clampPt([shotFrom[0], 8])] },
+          { id: "s", side: atk, label: short(e.p), path: [shotFrom, shotFrom, lerp(shotFrom, corner, 0.5), corner, corner] },
           { id: "gk", side: other(atk), keeper: true, label: short(e.p2), path: [gk, dive, dive, dive, gk] },
-          { id: "t", side: atk, path: [clampPt([shotFrom[0] - toward(atk, 12), shotFrom[1] + 10]), clampPt([shotFrom[0] - toward(atk, 10), shotFrom[1] + 8]), clampPt([shotFrom[0] + toward(atk, 1), 14]), clampPt([shotFrom[0] + toward(atk, 1), 11]), clampPt([shotFrom[0] + toward(atk, 1), 10])] },
+          { id: "t1", side: atk, path: [t1, t1, lerp(t1, m1, 0.5), m1, m1] },
+          { id: "t2", side: atk, path: [t2, t2, lerp(t2, m2, 0.5), m2, m2] },
         ],
         flash: "goal",
         focus: atk,
+        impact: net,
       };
     }
-    case "celebration":
-      return null; // folded into the goal scene
+    case "celebration": {
+      // Ball stays in the net, banner stays up; the scorer and two mates hold the huddle by the corner flag.
+      const [corner, m1, m2] = huddle(side, prevBall[1]);
+      const bob = (p: Pt): Pt => [p[0], p[1] + (corner[1] > GOAL_Y ? -1 : 1)];
+      return {
+        ...base,
+        ms: d(2000, 2600), // the GOOOAL banner lives here: never under 2.6 s
+        ball: [prevBall],
+        actors: [
+          { id: "s", side, label: short(e.p), path: [corner, bob(corner), corner] },
+          { id: "t1", side, path: [m1, lerp(m1, corner, 0.3), m1] },
+          { id: "t2", side, path: [m2, lerp(m2, corner, 0.3), m2] },
+        ],
+        flash: "goal",
+        focus: side,
+        flashAt: 0, // the goal is already in: banner and caption from the first frame
+        impact: prevBall,
+      };
+    }
     case "save": {
       // event side = defending team; shooter attacks the other way
       const shooterSide = other(side);
@@ -194,13 +248,14 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       const parry: Pt = clampPt([ball[0], ball[1] + (target[1] > GOAL_Y ? 6 : -6)]);
       return {
         ...base,
-        ms: 2600 * k,
+        ms: d(2600),
         ball: [shotFrom, lerp(shotFrom, catchPt, 0.85), catchPt, parry],
         actors: [
           { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, catchPt] },
           { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
         ],
         flash: "save",
+        impact: catchPt,
       };
     }
     case "block": {
@@ -210,7 +265,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       const rebound: Pt = ball;
       return {
         ...base,
-        ms: 1900 * k,
+        ms: d(1900),
         ball: [shotFrom, blockAt, rebound],
         actors: [
           { id: "b", side, label: short(e.p), path: [clampPt([blockAt[0] + toward(shooterSide, 3), blockAt[1] + 4]), blockAt, blockAt] },
@@ -218,6 +273,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
           { id: "gk", side, keeper: true, path: [keeperSpot(side), keeperSpot(side), keeperSpot(side)] },
         ],
         flash: "miss",
+        impact: blockAt,
       };
     }
     case "woodwork":
@@ -228,7 +284,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       const gk = keeperSpot(other(side));
       return {
         ...base,
-        ms: 2300 * k,
+        ms: d(2300),
         ball: [shotFrom, lerp(shotFrom, target, 0.6), target, out],
         ballHeight: e.t === "miss" && (e as MatchEvent & { high?: number }).high ? [0, 0.5, 1, 1] : undefined,
         actors: [
@@ -236,15 +292,12 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
           { id: "gk", side: other(side), keeper: true, path: [gk, [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.4], [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.5], gk] },
         ],
         flash: e.t === "woodwork" ? "wood" : "miss",
+        impact: target,
       };
     }
-    case "corner": {
-      return {
-        ...base,
-        ms: 1500 * k,
-        ball: [ball, ball],
-        actors: [{ id: "c", side, path: [clampPt([ball[0] - toward(side, 3), ball[1] < 32 ? 4 : 60]), ball] }],
-      };
+    case "bounce": {
+      const hit = from; // the wall
+      return { ...base, ms: d(1400), ball: [prevBall, hit, lerp(hit, ball, 0.5), ball], actors: [{ id: "c", side, label: short(e.p), path: [clampPt([ball[0] - toward(side, 6), ball[1]]), clampPt([ball[0] - toward(side, 4), ball[1]]), ball, ball] }] };
     }
     case "foul":
     case "yellow_card":
@@ -252,7 +305,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
       const at = ball || prevBall;
       return {
         ...base,
-        ms: (e.t === "foul" ? 1500 : 2200) * k,
+        ms: d(e.t === "foul" ? 1500 : 2200),
         ball: [at, at],
         actors: [
           { id: "o", side, label: short(e.p), path: [clampPt([at[0] + 3, at[1] + 2]), at] },
@@ -260,33 +313,62 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, opts: { fast?: boolean } =
           { id: "ref", side: "ref" as const, path: [clampPt([at[0] - 8, at[1] - 8]), clampPt([at[0] - 4, at[1] - 4])] },
         ],
         flash: e.t === "foul" ? null : "card",
+        impact: e.t === "foul" ? undefined : at,
       };
     }
     case "penalty_awarded": {
+      // Fills the engine's award wait (balance.js penAwardMs), whatever the pace: the fouled player is down (0–30 %), the ref
+      // runs in and points to the spot as the ball goes there (30–55 %), the fouled player gets up to the spot, the offender
+      // walks three away (55–80 %), two teammates close four on the spot and the keeper walks back to his line.
       const spot = (e.ball as Pt) || [goalX(side) + toward(side, -11), GOAL_Y];
+      const at = prevBall;
+      const seg = (t: number, a: number, b: number) => Math.max(0, Math.min(1, (t - a) / (b - a)));
+      const walk = (from: Pt, to: Pt, a: number, b: number) => keys((t) => lerp(from, to, seg(t, a, b)));
+      const closer = (p: Pt): Pt => lerp(p, spot, 4 / Math.max(4, Math.hypot(p[0] - spot[0], p[1] - spot[1])));
+      const offAt: Pt = clampPt([at[0] + toward(side, 2), at[1] + 2]);
+      const gk = keeperSpot(def);
+      const m1: Pt = clampPt([spot[0] - toward(side, 10), spot[1] - 9]);
+      const m2: Pt = clampPt([spot[0] - toward(side, 12), spot[1] + 8]);
       return {
         ...base,
-        ms: 2800 * k,
-        ball: [prevBall, spot, spot],
+        ms: 5000,
+        ball: walk(at, spot, 0.3, 0.55),
         actors: [
-          { id: "fouled", side, label: short(e.p), path: [prevBall, clampPt([spot[0] + toward(side, 3), spot[1] + 2]), clampPt([spot[0] + toward(side, 3), spot[1] + 2])] },
-          { id: "off", side: other(side), label: short(e.p2), path: [clampPt([spot[0] + toward(side, 6), spot[1] + 4]), clampPt([spot[0] + toward(side, 4), spot[1] + 3]), clampPt([spot[0] + toward(side, 4), spot[1] + 3])] },
-          { id: "ref", side: "ref", path: [clampPt([spot[0] - toward(side, 10), spot[1] - 12]), clampPt([spot[0] - toward(side, 2), spot[1] - 6]), clampPt([spot[0] - toward(side, 1), spot[1] - 5])] },
+          { id: "fouled", side, label: short(e.p), path: walk(clampPt([at[0], at[1] + 1.5]), clampPt([spot[0] - toward(side, 3), spot[1] + 2]), 0.3, 0.6) },
+          { id: "off", side: def, label: short(e.p2), path: walk(offAt, clampPt([offAt[0] + toward(side, 3), offAt[1] + 1]), 0.55, 0.8) },
+          { id: "ref", side: "ref", path: walk(clampPt([spot[0] - toward(side, 12), spot[1] - 12]), clampPt([spot[0] - toward(side, 2), spot[1] - 5]), 0.3, 0.55) },
+          { id: "t1", side, path: walk(m1, closer(m1), 0.2, 0.9) },
+          { id: "t2", side, path: walk(m2, closer(m2), 0.3, 1) },
+          { id: "gk", side: def, keeper: true, path: walk(clampPt([gk[0] - toward(side, 4), GOAL_Y + 4]), gk, 0.4, 0.9) },
         ],
         flash: "pen",
+        cam: penCam(side),
+        impact: spot,
       };
     }
+    case "shootout_end":
+      return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
+    case "half_time":
+    case "end_of_normal_time":
+    case "et_half_time":
+    case "shootout_start": {
+      // Ball held where it was; the banner lives the whole break — real ms, whatever the pace, like the setup scenes.
+      const BREAK: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000, shootout_start: 10000 }; // matches balance.js halfTimeMs / etBreakMs / etHalfTimeMs / shootoutIntroMs
+      return { ...base, ms: BREAK[e.t], ball: [prevBall], actors: [], cam: e.t === "shootout_start" ? penCam("home") : undefined }; // shootout intro: frameAt choreographs it and holds the full pitch for the first 70 %
+    }
+    case "match_end":
+      return { ...base, ms: 5000, ball: [prevBall], actors: [] }; // full-time banner; the last event, so it holds
     case "penalty_setup":
     case "shootout_setup":
-      return setupScene(e, opts);
+      return setupScene(e, prevBall);
     case "penalty_saved":
     case "penalty_missed":
     case "penalty_woodwork":
-      return e.pen ? penaltyScene(e, e.pen.outcome, opts) : null;
+      return e.pen ? penaltyScene(e, prevBall, e.pen.outcome, d) : null;
     case "shootout_kick":
-      return e.pen ? penaltyScene(e, e.pen.outcome, opts) : null;
+      return e.pen ? penaltyScene(e, prevBall, e.pen.outcome, d) : null;
     default:
-      return null; // period markers, coaching, shootout_start/end, match_end → caption only
+      return null; // coaching → caption only
   }
 }
 
@@ -295,32 +377,43 @@ function geomSide(e: MatchEvent, side: Side): Side {
   return e.t.startsWith("shootout") ? "home" : side;
 }
 
-/** Shooter waiting at the spot, keeper on the line. Same geometry in-match and in shootouts. */
-function setupScene(e: MatchEvent, opts: { fast?: boolean }): Scene {
+/** Keyframes sampled from a function of progress, evenly spaced as `sample` expects. */
+function keys(f: (t: number) => Pt, n = 20): Pt[] {
+  return Array.from({ length: n + 1 }, (_, i) => f(i / n));
+}
+
+/**
+ * Setup fills the engine's whole wait for the kick (regardless of pace, so nothing freezes): the taker brings the ball
+ * to the spot (0–20 %), walks six back (20–45 %) and settles with a breathing sway; the keeper bounces on his line;
+ * the referee jogs in from twelve away to six beside the spot. Same geometry in-match and in shootouts.
+ */
+function setupScene(e: MatchEvent, prevBall: Pt): Scene {
   const side = (e.side || "home") as Side;
   const def = other(side);
   const g = geomSide(e, side);
   const spot: Pt = [goalX(g) + toward(g, -11), GOAL_Y];
   const gk = keeperSpot(other(g));
-  const k = opts.fast ? 0.6 : 1;
+  const back: Pt = clampPt([spot[0] - toward(g, 6), spot[1] + 2]);
+  const refFrom: Pt = clampPt([spot[0] - toward(g, 4), spot[1] - 12]);
+  const refTo: Pt = clampPt([spot[0] - toward(g, 2), spot[1] - 6]);
+  const place = (from: Pt, t: number) => lerp(from, spot, Math.min(1, t / 0.2));
   return {
-    key: `${e.seq}`,
-    seq: e.seq,
-    type: e.t,
-    caption: e.text,
-    important: true,
-    ms: 2600 * k,
-    ball: [spot, spot],
+    ...head(e),
+    ms: e.t === "shootout_setup" ? 6000 : 5000, // matches balance.js shootoutRevealMs / penSetupMs: the kick event lands when this ends
+    ball: keys((t) => place(prevBall, t)),
     actors: [
-      { id: "taker", side, label: short(e.p), path: [clampPt([spot[0] - toward(g, 8), spot[1] + 6]), clampPt([spot[0] - toward(g, 4), spot[1] + 3])] },
-      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [[gk[0], GOAL_Y - 1.5], [gk[0], GOAL_Y + 1.5]] },
+      { id: "taker", side, label: short(e.p), path: keys((t) => (t < 0.2 ? place(clampPt(prevBall), t) : t < 0.45 ? lerp(spot, back, (t - 0.2) / 0.25) : [back[0], back[1] + 0.3 * Math.sin((2 * Math.PI * (t - 0.45)) / 0.2)])) },
+      { id: "gk", side: def, keeper: true, label: short(e.p2), path: keys((t) => [gk[0], GOAL_Y + 2 * Math.sin(2 * Math.PI * 4 * t)]) },
+      { id: "ref", side: "ref", path: keys((t) => lerp(refFrom, refTo, Math.min(1, t / 0.45))) },
     ],
     flash: "pen",
+    cam: penCam(g),
+    impact: spot,
   };
 }
 
 /** Run-up, strike, ball path and keeper dive from the engine's penalty plan. */
-function penaltyScene(e: MatchEvent, outcome: string, opts: { fast?: boolean }): Scene {
+function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnType<typeof pace>): Scene {
   const side = (e.side || "home") as Side;
   const def = other(side);
   const pen = e.pen!;
@@ -350,22 +443,20 @@ function penaltyScene(e: MatchEvent, outcome: string, opts: { fast?: boolean }):
     flash = "miss";
   }
   const strikeAt: Pt = outcome === "save" ? [gk[0], diveY] : outcome === "woodwork" ? [line, pen.post === "bar" ? y : pen.post === "left" ? 28 : 36] : target;
-  const k = opts.fast ? 0.6 : 1;
   return {
-    key: `${e.seq}`,
-    seq: e.seq,
-    type: e.t,
-    caption: e.text,
-    important: true,
-    ms: 3400 * k,
-    ball: [spot, spot, spot, strikeAt, end],
+    ...head(e),
+    ms: d(3400, 1800),
+    ball: [prevBall, spot, spot, strikeAt, end], // on the spot by 25 %, still there at 50 %: nothing gives the outcome away
     ballHeight: pen.height === 2 || pen.post === "bar" ? [0, 0, 0, 1, 1] : pen.height === 1 ? [0, 0, 0, 0.5, 0.3] : undefined,
     actors: [
-      { id: "taker", side, label: short(e.p), path: [runStart, lerp(runStart, spot, 0.5), clampPt([spot[0] - toward(g, 1), spot[1]]), spot, spot] },
-      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [gk, gk, gk, [gk[0], diveY], [gk[0], diveY]] },
+      { id: "taker", side, label: short(e.p), path: [runStart, lerp(runStart, spot, 0.4), spot, spot, spot] }, // accelerating run-up, strike at 50 %
+      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [gk, gk, gk, [gk[0], diveY], [gk[0], diveY]] }, // dives at the strike, not before
     ],
     flash,
+    flashAt: 0.75,
+    cam: penCam(g),
     focus: outcome === "goal" ? side : outcome === "save" ? def : null,
+    impact: strikeAt,
   };
 }
 
@@ -386,21 +477,4 @@ export function sampleN(vals: number[] | undefined, t: number) {
   const x = Math.min(0.9999, Math.max(0, t)) * seg;
   const i = Math.floor(x);
   return vals[i] + (vals[i + 1] - vals[i]) * (x - i);
-}
-
-/**
- * Bounded live queue: keeps at most `max` scenes, dropping routine ones first so the view
- * never drifts minutes behind; incidents are never dropped in favour of passing moves.
- */
-export function enqueue(queue: Scene[], incoming: Scene[], max = 4): Scene[] {
-  let q = [...queue, ...incoming];
-  // Routine moves queued before the newest incident are stale: keep only its lead-in.
-  const lastImp = q.map((s) => s.important).lastIndexOf(true);
-  if (lastImp > 1) q = q.filter((s, i) => s.important || i >= lastImp - 1);
-  while (q.length > max) {
-    const i = q.findIndex((s) => !s.important);
-    if (i >= 0) q.splice(i, 1);
-    else q = q.slice(q.length - max); // all important: keep the newest
-  }
-  return q;
 }

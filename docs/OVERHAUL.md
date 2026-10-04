@@ -24,12 +24,19 @@
 
 | Setting | Field | Default |
 |---|---|---|
-| Real seconds per match minute | `world.match_minute_real_seconds` | 15 |
+| Real seconds per match minute | `world.match_minute_real_seconds` | 8 |
 | Break between rounds | `world.between_round_minutes` | 1 |
 | Next championship after the final | `world.championship_gap_minutes` | 10 |
 | Fixtures shown before kick-off | `world.fixtures_window_minutes` | 5 |
 
 The gap must be ≥ the fixture window. `FOOTFIVE_TIME_SCALE` (env, tests only) divides every wall-clock duration.
+
+## Live sim
+
+- The match page is a timeline player: it draws the frame at `serverNow() − LAG_MS` (1.5 s) from the server's event `at` stamps, so commentary is always the event on the pitch.
+- All 10 players are on the pitch (`sim.ts` maps scene actors onto the lineup; the rest hold formation, drifting toward the ball).
+- No corners in 5-a-side: the ball `bounce`s off the boards and play goes on.
+- Pace: 8 s per match minute, every minute narrates play; goal/penalty pauses unchanged. Full time returns to the round after 20 s unless the user interacts.
 
 ## Verification
 
