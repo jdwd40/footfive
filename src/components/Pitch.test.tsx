@@ -49,6 +49,16 @@ describe("Pitch kits and numbers", () => {
     expect(kit(1).getAttribute("fill")).toBe("#c6ff00");
     expect(kit(1).getAttribute("stroke")).toBe("#00f0ff");
   });
+  it("draws the referee as a small yellow circle with a black stroke, only when the frame has one", () => {
+    const { rerender } = render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
+    const ref = screen.getByTestId("ref");
+    expect(ref.getAttribute("cx")).toBe("40");
+    expect(ref.getAttribute("cy")).toBe("20");
+    expect(ref.getAttribute("r")).toBe("1.4");
+    expect(ref.getAttribute("stroke")).toBe("#000");
+    rerender(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
+    expect(screen.queryByTestId("ref")).toBeNull();
+  });
   it("has a kit legend with both abbreviations", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
     expect(screen.getByTestId("kit-legend").textContent).toMatch(/HOM.*AWY/);

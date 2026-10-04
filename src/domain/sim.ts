@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; ref?: Pt /* referee, when the scene has one */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -68,7 +68,7 @@ function lingers(prev: Scene | undefined, scene: Scene, t: number) {
  * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 1.2 s.
  */
 export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene): Frame {
-  const { ball: b, players, unlabelled } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
+  const { ball: b, players, unlabelled, ref } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
   const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
   const bind = binding(scene, lineups, sentOff);
   for (const a of unlabelled) {
@@ -100,7 +100,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     }
   }
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
-  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, ref, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
@@ -137,13 +137,17 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
   }
   // Named actors ride their path: keepers bind to the GK, labels to short(name).
   const unlabelled: Actor[] = [];
+  let ref: Pt | undefined;
   for (const a of scene.actors) {
-    if (a.side === "ref") continue;
+    if (a.side === "ref") {
+      ref = sample(a.path, t);
+      continue;
+    }
     const p = a.keeper ? players.find((q) => q.side === a.side && q.gk) : a.label ? players.find((q) => q.side === a.side && !q.hot && short(q.name) === a.label) : null;
     if (p) place(p, a, t);
     else if (!a.keeper && !a.label) unlabelled.push(a);
   }
-  return { ball, players, unlabelled };
+  return { ball, players, unlabelled, ref };
 }
 
 /** Unlabelled actor → player key, decided once per scene (nearest free outfield teammate at t=0) so the binding never flips mid-scene. */
@@ -198,7 +202,8 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
   const kc = k(350);
   const cam = target.cam.map((v, i) => prev.cam[i] + (v - prev.cam[i]) * kc) as Cam;
-  return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, cam };
+  const ref: Pt | undefined = target.ref && prev.ref ? [prev.ref[0] + (target.ref[0] - prev.ref[0]) * kb, prev.ref[1] + (target.ref[1] - prev.ref[1]) * kb] : target.ref;
+  return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, ref, cam };
 }
 
 /**

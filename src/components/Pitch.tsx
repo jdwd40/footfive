@@ -116,6 +116,8 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           );
         })}
 
+        {frame?.ref ? <circle cx={frame.ref[0]} cy={frame.ref[1]} r={1.4} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-testid="ref" /> : null}
+
         {/* ball: shadow on the ground, ball lifted by height */}
         <ellipse cx={ball[0]} cy={ball[1] + 0.9} rx={0.9} ry={0.35} fill="rgba(0,0,0,0.45)" />
         <circle cx={ball[0]} cy={ball[1] - lift * 3} r={0.85 + lift * 0.35} fill="#fff" stroke="#111" strokeWidth="0.2" />

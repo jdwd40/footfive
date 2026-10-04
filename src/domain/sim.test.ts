@@ -260,6 +260,17 @@ describe("frameAt", () => {
     expect(frameAt(sv, 0, m.lineups, undefined, 0, undefined, { ...sv, flash: "wood" }).flash).toBe("save");
   });
 
+  it("the referee rides his actor path as Frame.ref; scenes without one have none", () => {
+    const m = ms[0];
+    const foul = m.events.find((e) => e.t === "foul")!;
+    const s = sceneFor(foul, [50, 32], 15000)!;
+    const refPath = s.actors.find((a) => a.side === "ref")!.path;
+    expect(frameAt(s, 0, m.lineups).ref).toEqual(sample(refPath, 0));
+    expect(frameAt(s, 1, m.lineups).ref).toEqual(sample(refPath, 1));
+    expect(frameAt(s, 0.5, m.lineups).players).toHaveLength(10); // never drawn as a player
+    expect(frameAt(sceneFor(m.events.find((e) => e.t === "pass")!, [50, 32], 15000)!, 0.5, m.lineups).ref).toBeUndefined();
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];
@@ -293,6 +304,13 @@ describe("smooth", () => {
     const s = smooth({ ...at(10), cam: [-4, -3, 108, 70] }, { ...at(10), cam: [63, 16, 50, 32] }, 100);
     expect(s.cam[0]).toBeGreaterThan(-4);
     expect(s.cam[0]).toBeLessThan(20);
+  });
+  it("the referee is smoothed like the ball, and appears/disappears with the scene", () => {
+    const s = smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [60, 10] }, 100);
+    expect(s.ref![0]).toBeGreaterThan(20);
+    expect(s.ref![0]).toBeLessThan(60);
+    expect(smooth(at(10), { ...at(10), ref: [60, 10] }, 100).ref).toEqual([60, 10]);
+    expect(smooth({ ...at(10), ref: [10, 10] }, at(10), 100).ref).toBeUndefined();
   });
   it("a tick after a long gap (suspended tab) snaps to the target instead of chasing from stale positions", () => {
     expect(smooth(at(10), at(60), 1500)).toEqual(at(60));
