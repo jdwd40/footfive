@@ -96,6 +96,25 @@ describe("highlight scenes agree with the simulation", () => {
     }
   });
 
+  it("a shot's snapshot never reveals its outcome: on-target counts only on the goal/save", () => {
+    let shots = 0;
+    for (const m of matches) {
+      let prev = [[0, 0], [0, 0]];
+      for (const e of m) {
+        const i = e.side === "home" ? 0 : 1;
+        const sot = [e.st.x[0][1], e.st.x[1][1]];
+        if (e.t === "shot") {
+          expect(sot, `shot #${e.seq}`).toEqual([prev[0][1], prev[1][1]]);
+          shots++;
+        } else if (e.t === "goal" || e.t === "penalty_goal" || e.t === "penalty_saved") expect(sot[i], `${e.t} #${e.seq}`).toBe(prev[i][1] + 1);
+        else if (e.t === "save") expect(sot[1 - i], `save #${e.seq}`).toBe(prev[1 - i][1] + 1); // save is credited to the defending side
+        else expect(sot, `${e.t} #${e.seq}`).toEqual([prev[0][1], prev[1][1]]);
+        prev = e.st.x.map((r) => [r[0], r[1]]);
+      }
+    }
+    expect(shots).toBeGreaterThan(100);
+  });
+
   it("never emits corners; bounces sit on a side board", () => {
     expect(all.filter((e) => e.t === "corner")).toHaveLength(0);
     const b = all.filter((e) => e.t === "bounce");

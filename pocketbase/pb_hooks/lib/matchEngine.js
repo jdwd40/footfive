@@ -613,7 +613,6 @@ function attack(st, out, ctx, side, c) {
 
   f += STEP;
   st.stats[side].sh += 1;
-  if (outcome === "save" || outcome === "goal") st.stats[side].sot += 1;
   var gy = 28.5 + rnd(st) * 7; // goal mouth spans y 28..36
   emit(st, out, ctx.at(f), "shot", {
     side: side,
@@ -634,6 +633,7 @@ function attack(st, out, ctx, side, c) {
   }
   var res = { chain: chain, from: shotFrom, clk: ctx.clk(f) };
   if (outcome === "save") {
+    st.stats[side].sot += 1;
     st.stats[def].sv += 1;
     res.side = def;
     res.p = gk.name;
@@ -699,6 +699,7 @@ function goal(st, out, ctx, f, side, scorer, gk, chain, target, pen) {
   var T = st.timing;
   if (side === "home") st.score[0] += 1;
   else st.score[1] += 1;
+  st.stats[side].sot += 1; // on-target is counted with the result, so the shot's snapshot can't leak it
   var s = ctx.s(f);
   var t = ctx.at(f);
   st.danger = true;
@@ -805,7 +806,7 @@ function penalty(st, out, ctx, side, fouled, f, chain) {
   var tKick = tSetup + T.penSetupMs;
   var plan = { col: shot.col, height: shot.height, dive: shot.dive, post: shot.post, run: shot.run, outcome: shot.outcome };
   st.stats[side].sh += 1;
-  if (shot.outcome === "goal" || shot.outcome === "save") st.stats[side].sot += 1;
+  if (shot.outcome === "save") st.stats[side].sot += 1; // goal() counts its own
   if (shot.outcome === "goal") {
     // Re-anchor the minute so the goal lands at the kick time.
     ctx.pause += tKick - ctx.at(f);
