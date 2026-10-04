@@ -51,6 +51,24 @@ describe("highlight scenes agree with the simulation", () => {
     expect(n).toBeGreaterThan(20);
   });
 
+  it("every scene starts where the previous one ended: no teleports between scenes", () => {
+    let n = 0;
+    for (const m of matches) {
+      let prev: Pt = [50, 32];
+      for (const e of m) {
+        const s = sceneFor(e, prev, 15000);
+        if (!s) continue; // idle scenes hold the ball where it was
+        expect(s.ball[0], `${e.t} #${e.seq}`).toEqual(prev);
+        prev = end(s);
+        n++;
+      }
+    }
+    expect(n).toBeGreaterThan(5000);
+    // Restart after a failed penalty clears to the engine's spot near the end, not the centre.
+    const penRestart = all.find((e, i) => e.t === "restart" && e.ball?.[0] !== 50 && all[i - 1]?.t !== "celebration")!;
+    expect(end(sceneFor(penRestart, [7, 24], 15000)!)).toEqual(penRestart.ball);
+  });
+
   it("saved, missed, blocked and woodwork shots never cross the goal line inside the mouth", () => {
     let n = 0;
     for (const e of all) {
@@ -76,7 +94,7 @@ describe("highlight scenes agree with the simulation", () => {
       const s = sceneFor(e, [50, 32], 15000)!;
       const outcome = e.pen!.outcome;
       const [x, y] = end(s);
-      expect(s.ball[0][0]).toBe(89); // spot at the x=100 end for both teams
+      expect(s.ball[1][0]).toBe(89); // spot at the x=100 end for both teams
       if (outcome === "goal") expect(x > 100 && inMouth(y)).toBe(true);
       else expect(x > 100 && inMouth(y) && sampleN(s.ballHeight, 1) < 0.3).toBe(false);
     }

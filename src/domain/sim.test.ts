@@ -125,7 +125,7 @@ describe("frameAt", () => {
           const c = centre.players.find((q) => q.side === p.side && q.no === p.no)!;
           expect([p.x, p.y]).toEqual([c.x, c.y]);
         }
-        // Celebration keeps the huddle; restart has no actors and the ball at the centre.
+        // Celebration keeps the huddle; the restarting side walks the ball from the net to the centre.
         const cel = sceneFor(evs[i + 1], prev, 15000)!;
         expect(cel.type).toBe("celebration");
         const huddle = frameAt(cel, 0.5, m.lineups).players.filter((p) => p.hot);
@@ -133,7 +133,8 @@ describe("frameAt", () => {
         expect(Math.max(...huddle.map((p) => Math.hypot(p.x - huddle[0].x, p.y - huddle[0].y)))).toBeLessThan(8);
         const rs = sceneFor(evs[i + 2], cel.ball[cel.ball.length - 1], 15000)!;
         expect(rs.type).toBe("restart");
-        expect(rs.actors).toEqual([]);
+        expect(rs.actors.map((a) => a.side)).toEqual([def]);
+        expect(rs.ball[0]).toEqual(cel.ball[cel.ball.length - 1]);
         expect(rs.ball[rs.ball.length - 1]).toEqual([50, 32]);
       }
     }

@@ -96,6 +96,16 @@ function head(e: MatchEvent) {
  * connects across scene boundaries.
  */
 export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
+  const s = build(e, prevBall, minuteMs);
+  // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.
+  if (s && (s.ball[0][0] !== prevBall[0] || s.ball[0][1] !== prevBall[1])) {
+    s.ball = [prevBall, ...s.ball];
+    if (s.ballHeight) s.ballHeight = [s.ballHeight[0], ...s.ballHeight];
+  }
+  return s;
+}
+
+function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
   const d = pace(minuteMs);
   const side = (e.side || "home") as Side;
   const atk = side;
@@ -107,7 +117,8 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
 
   switch (e.t) {
     case "restart":
-      return { ...base, ms: d(1600), ball: [[50, 32], [50, 32]], actors: [] }; // everyone walks back to the kick-off anchors
+      // The restarting side walks the ball to the spot (centre after a goal, their own box after a failed penalty).
+      return { ...base, ms: d(1600), ball: [prevBall, ball, ball], actors: [{ id: "w", side, path: [prevBall, ball, clampPt([ball[0] - toward(side, 2), ball[1]])] }] };
     case "kickoff":
     case "second_half":
     case "extra_time":
@@ -115,7 +126,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
       return {
         ...base,
         ms: d(1600),
-        ball: [[50, 32], [50, 32], clampPt([50 + toward(side, -10), 32 + jit(s, 1, 8)])],
+        ball: [prevBall, [50, 32], [50, 32]],
         actors: [
           { id: "a", side, label: short(e.p), path: [[50 + toward(side, -1.5), 33], [50, 32], [50 + toward(side, -4), 32]] },
           { id: "b", side, path: [[50 + toward(side, -12), 32 + jit(s, 1, 8)], [50 + toward(side, -11), 32 + jit(s, 1, 8)], clampPt([50 + toward(side, -10), 33 + jit(s, 1, 8)])] },
@@ -162,11 +173,10 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
     }
     case "shot": {
       const shotFrom = ball;
-      const run = (e.from as Pt) || prevBall;
       return {
         ...base,
         ms: d(1300),
-        ball: [run, shotFrom, shotFrom],
+        ball: [prevBall, shotFrom, shotFrom],
         ballHeight: e.header ? [0.9, 0.6, 0.6] : [0, 0, 0],
         actors: [
           { id: "s", side: atk, label: short(e.p), path: [clampPt([shotFrom[0] - toward(atk, 3), shotFrom[1] + 1]), shotFrom, shotFrom] },
@@ -177,7 +187,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
     }
     case "goal":
     case "penalty_goal": {
-      if (e.t === "penalty_goal" && e.pen) return penaltyScene(e, "goal", d);
+      if (e.t === "penalty_goal" && e.pen) return penaltyScene(e, prevBall, "goal", d);
       const target = (e.target as Pt) || [goalX(atk), GOAL_Y];
       const shotFrom = prevBall;
       const gk = keeperSpot(other(atk));
@@ -310,13 +320,13 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
       return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
     case "penalty_setup":
     case "shootout_setup":
-      return setupScene(e, d);
+      return setupScene(e, prevBall, d);
     case "penalty_saved":
     case "penalty_missed":
     case "penalty_woodwork":
-      return e.pen ? penaltyScene(e, e.pen.outcome, d) : null;
+      return e.pen ? penaltyScene(e, prevBall, e.pen.outcome, d) : null;
     case "shootout_kick":
-      return e.pen ? penaltyScene(e, e.pen.outcome, d) : null;
+      return e.pen ? penaltyScene(e, prevBall, e.pen.outcome, d) : null;
     default:
       return null; // period markers, coaching, shootout_start/end, match_end → caption only
   }
@@ -327,21 +337,20 @@ function geomSide(e: MatchEvent, side: Side): Side {
   return e.t.startsWith("shootout") ? "home" : side;
 }
 
-/** Shooter waiting at the spot, keeper on the line. Same geometry in-match and in shootouts. */
-function setupScene(e: MatchEvent, d: ReturnType<typeof pace>): Scene {
+/** Shooter walks the ball from wherever it was to the spot, keeper on the line. Same geometry in-match and in shootouts. */
+function setupScene(e: MatchEvent, prevBall: Pt, d: ReturnType<typeof pace>): Scene {
   const side = (e.side || "home") as Side;
   const def = other(side);
   const g = geomSide(e, side);
   const spot: Pt = [goalX(g) + toward(g, -11), GOAL_Y];
   const gk = keeperSpot(other(g));
-  const carry: Pt = clampPt([spot[0] - toward(g, 8), spot[1] + 3]);
   const back: Pt = clampPt([spot[0] - toward(g, 5), spot[1] + 2]);
   return {
     ...head(e),
     ms: d(2600, 1800),
-    ball: [carry, spot, spot, spot], // taker carries the ball to the spot, places it, steps back
+    ball: [prevBall, spot, spot, spot], // taker brings the ball to the spot, places it, steps back
     actors: [
-      { id: "taker", side, label: short(e.p), path: [carry, spot, spot, back] },
+      { id: "taker", side, label: short(e.p), path: [clampPt(prevBall), spot, spot, back] },
       { id: "gk", side: def, keeper: true, label: short(e.p2), path: [[gk[0], GOAL_Y - 1.5], [gk[0], GOAL_Y + 1.5], [gk[0], GOAL_Y - 1.5]] },
     ],
     flash: "pen",
@@ -350,7 +359,7 @@ function setupScene(e: MatchEvent, d: ReturnType<typeof pace>): Scene {
 }
 
 /** Run-up, strike, ball path and keeper dive from the engine's penalty plan. */
-function penaltyScene(e: MatchEvent, outcome: string, d: ReturnType<typeof pace>): Scene {
+function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnType<typeof pace>): Scene {
   const side = (e.side || "home") as Side;
   const def = other(side);
   const pen = e.pen!;
@@ -383,7 +392,7 @@ function penaltyScene(e: MatchEvent, outcome: string, d: ReturnType<typeof pace>
   return {
     ...head(e),
     ms: d(3400, 1800),
-    ball: [spot, spot, spot, strikeAt, end],
+    ball: [prevBall, spot, spot, strikeAt, end], // on the spot by 25 %, still there at 50 %: nothing gives the outcome away
     ballHeight: pen.height === 2 || pen.post === "bar" ? [0, 0, 0, 1, 1] : pen.height === 1 ? [0, 0, 0, 0.5, 0.3] : undefined,
     actors: [
       { id: "taker", side, label: short(e.p), path: [runStart, lerp(runStart, spot, 0.4), spot, spot, spot] }, // accelerating run-up, strike at 50 %
