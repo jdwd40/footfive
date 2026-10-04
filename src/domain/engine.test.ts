@@ -109,6 +109,121 @@ describe("incremental, server-authoritative engine", () => {
   });
 });
 
+describe("legacy persisted-state compatibility", () => {
+  type St = {
+    fx: string;
+    phase: string;
+    minute: number;
+    seq: number;
+    rc: number;
+    score: [number, number];
+    nextAt: number;
+    lastAt: number;
+    timing: Record<string, number>;
+    winner?: string | null;
+  };
+  /** Advance a fresh match until it sits at the extra-time half-time break. */
+  const toEtHalfTime = (st: St): boolean => {
+    let now = 0;
+    while (st.phase !== "et_half_time" && st.phase !== "finished") {
+      now += st.timing.minuteMs + st.timing.goalPauseMs + st.timing.resultHoldMs + 1000;
+      eng.advanceTo(st, now);
+    }
+    return st.phase === "et_half_time";
+  };
+  const etMatch = (timingOverride?: Record<string, number>): St => {
+    for (let s = 1; s < 400; s++) {
+      const st = eng.createMatch({ fixtureId: "f" + s, seed: s, kickoffAt: 0, home: team(s % 16), away: team((s * 3 + 7) % 16), timing: timingOverride || timing });
+      if (toEtHalfTime(st)) return st;
+    }
+    throw new Error("no seed reached extra time");
+  };
+  const stripNewFields = (st: St) => {
+    st.timing = { ...st.timing }; // clone: the match() helper shares one timing object
+    delete st.timing.resultHoldMs;
+    delete st.timing.kickoffHoldMs;
+  };
+
+  it("repairs the null cursor at the extra_time_2 minute-105 resume and finishes with exactly one match_end", () => {
+    const st = etMatch(); // et_half_time break at minute 105, exactly where production persisted null
+    stripNewFields(st);
+    st.nextAt = NaN; // the deployed engine persisted null here instead
+    const seq = st.seq;
+    const seed = Number(st.fx.slice(1));
+    expect(st.minute).toBe(105);
+    const persisted = JSON.parse(JSON.stringify(st)); // exact legacy combination: both fields absent + null cursor, before any engine call
+    expect(persisted.nextAt).toBe(null);
+    expect(persisted.timing.resultHoldMs).toBeUndefined();
+    expect(persisted.timing.kickoffHoldMs).toBeUndefined();
+    const ev = eng.advanceTo(persisted, Number.MAX_SAFE_INTEGER) as Ev[];
+    expect(ev.length).toBeGreaterThan(0);
+    expect(ev.every((e) => Number.isFinite(e.at))).toBe(true);
+    ev.forEach((e, i) => {
+      expect(e.seq).toBe(seq + i + 1);
+      if (i) expect(e.at).toBeGreaterThanOrEqual(ev[i - 1].at);
+    });
+    expect(ev[ev.length - 1].t).toBe("match_end");
+    expect(ev.filter((e) => e.t === "match_end")).toHaveLength(1);
+    // the hydrated match follows the identical deterministic path as an unpoisoned twin
+    const twin = etMatch(); // same first seed: identical teams and trajectory
+    expect(Number(twin.fx.slice(1))).toBe(seed);
+    const twinEv = [...(eng.advanceTo(twin, twin.nextAt) as Ev[]), ...(eng.advanceTo(twin, Number.MAX_SAFE_INTEGER) as Ev[])]; // resume + remainder, matching ev's span
+    const minOf = (e: Ev) => (e as Ev & { min?: number }).min;
+    const twinRest = twinEv.filter((e) => e.seq > seq).map((e) => [e.t, e.seq, minOf(e), e.st.sc]);
+    expect(ev.map((e) => [e.t, e.seq, minOf(e), e.st.sc])).toEqual(twinRest);
+    const reloaded = JSON.parse(JSON.stringify(persisted));
+    const after = eng.advanceTo(reloaded, Number.MAX_SAFE_INTEGER);
+    expect(after.filter((e: Ev) => e.t === "match_end")).toHaveLength(0); // no duplicate after reload
+  });
+
+  it("derives the missing timings at the saved time scale", () => {
+    const scaled = eng.buildTiming(15000, 3); // halfTimeMs 10000 -> k = 3
+    const st = etMatch(scaled);
+    stripNewFields(st);
+    eng.advanceTo(st, st.nextAt + 1);
+    const persisted = JSON.parse(JSON.stringify(st));
+    eng.advanceTo(persisted, st.lastAt + 10 * scaled.minuteMs);
+    expect(persisted.timing.kickoffHoldMs).toBe(Math.max(20, Math.round(4000 / 3)));
+    expect(persisted.timing.resultHoldMs).toBe(Math.max(20, Math.round(1200 / 3)));
+  });
+
+  it("repairs a null cursor poisoned inside a live minute", () => {
+    const st = match(8);
+    eng.advanceTo(st, 5 * timing.minuteMs);
+    stripNewFields(st);
+    st.nextAt = null; // poisoned cursor mid live phase
+    const seq = st.seq;
+    const ev = eng.advanceTo(st, 1e12) as Ev[];
+    expect(ev[ev.length - 1].t).toBe("match_end");
+    expect(ev.filter((e) => e.t === "match_end")).toHaveLength(1);
+    expect(ev.every((e) => Number.isFinite(e.at))).toBe(true);
+    expect(ev[0].seq).toBe(seq + 1);
+  });
+
+  it("leaves a finished match with serialized nextAt null untouched", () => {
+    const st = match(11);
+    eng.advanceTo(st, 1e12);
+    expect(st.phase).toBe("finished");
+    const winner = st.winner;
+    const persisted = JSON.parse(JSON.stringify(st));
+    expect(persisted.nextAt).toBe(null);
+    const ev = eng.advanceTo(persisted, 1e12);
+    expect(ev).toEqual([]);
+    expect(persisted.nextAt).toBe(null);
+    expect(persisted.winner).toBe(winner);
+  });
+
+  it("preserves explicit valid timing fields, including zero", () => {
+    const st = match(12);
+    eng.advanceTo(st, 2 * timing.minuteMs);
+    st.timing.kickoffHoldMs = 777;
+    st.timing.resultHoldMs = 0;
+    eng.advanceTo(st, 1e12);
+    expect(st.timing.kickoffHoldMs).toBe(777);
+    expect(st.timing.resultHoldMs).toBe(0);
+  });
+});
+
 describe("odds", () => {
   it("prices are valid and favour the stronger team", () => {
     const st = match(1, 0, 15); // A++ v C-

@@ -1058,8 +1058,36 @@ function step(st, out) {
   }
 }
 
+/**
+ * Backward compatibility for states persisted before resultHoldMs/kickoffHoldMs
+ * existed. Derive the missing fields at the saved time scale (every saved timing
+ * field was divided by the same scale k), and re-anchor a null/NaN scheduling
+ * cursor from the last published event plus the restart hold — exactly what a
+ * non-poisoned resume/kick-off would have produced. Finished matches (nextAt
+ * serialized as null from Infinity) and explicit valid fields are left alone.
+ */
+function hydrateLegacy(st) {
+  var T = st.timing;
+  if (T) {
+    var k = 1;
+    if (typeof T.halfTimeMs === "number" && isFinite(T.halfTimeMs) && T.halfTimeMs > 0) {
+      k = M.halfTimeMs / T.halfTimeMs;
+      if (!(k > 0) || !isFinite(k)) k = 1;
+    }
+    if (typeof T.resultHoldMs !== "number" || !isFinite(T.resultHoldMs))
+      T.resultHoldMs = Math.max(20, Math.round(M.resultHoldMs / k));
+    if (typeof T.kickoffHoldMs !== "number" || !isFinite(T.kickoffHoldMs))
+      T.kickoffHoldMs = Math.max(20, Math.round(M.kickoffHoldMs / k));
+  }
+  if (st.phase === "finished") return;
+  if ((typeof st.nextAt !== "number" || !isFinite(st.nextAt)) && typeof st.lastAt === "number" && isFinite(st.lastAt)) {
+    st.nextAt = st.lastAt + (T && typeof T.kickoffHoldMs === "number" ? T.kickoffHoldMs : 0);
+  }
+}
+
 /** Simulate every step whose start time is <= now. Returns the new events in order. */
 function advanceTo(st, now) {
+  hydrateLegacy(st);
   var out = [];
   var guard = 0;
   while (st.phase !== "finished" && st.nextAt <= now && guard++ < 5000) step(st, out);
