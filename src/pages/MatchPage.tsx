@@ -8,7 +8,7 @@ import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { frameAt, playhead, smooth, type Frame } from "../domain/sim";
-import { countdown, noteServerTime, phaseInfo, useLive, useNow } from "../lib/live";
+import { countdown, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
 
@@ -45,11 +45,13 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
   return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
+/** What the animation loop committed last: server time it ran at and the frame it drew. */
+type Anim = { now: number; frame: Frame | null };
+
 export default function MatchPage() {
   const { fixtureId = "" } = useParams();
   const navigate = useNavigate();
   const { live } = useLive();
-  const now = useNow(50);
   const [view, setView] = useState<MatchView | null>(null);
   const [events, setEvents] = useState<MatchEvent[]>([]);
   const [error, setError] = useState("");
@@ -61,9 +63,8 @@ export default function MatchPage() {
   const inflight = useRef(false);
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
-  // Rendered frame chases the target frame (item 1): reset whenever the timeline jumps.
-  const shownFrame = useRef<Frame | null>(null);
-  const tick = useRef(0);
+  // Everything time-driven lives in one state written by the animation loop; render only reads it.
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -74,10 +75,10 @@ export default function MatchPage() {
     setStay(false);
     lastSeq.current = 0;
     inflight.current = false;
-    shownFrame.current = null;
+    setAnim((a) => ({ ...a, frame: null }));
   }, [fixtureId]);
   useEffect(() => {
-    shownFrame.current = null;
+    setAnim((a) => ({ ...a, frame: null })); // replay start/end jumps the timeline: no chase across it
   }, [replay]);
 
   const poll = useCallback(async () => {
@@ -126,21 +127,32 @@ export default function MatchPage() {
     return m;
   }, [events, minuteMs]);
 
-  const ph = playhead(events, now - LAG_MS);
   const sentOff = useMemo(() => new Set((view?.sentOff ?? []).map((s) => s.side + ":" + s.p)), [view?.sentOff]);
-  const replayP = replay ? (performance.now() - replay.startedAt) / replay.scene.ms : 0;
+  const lineups = view?.lineups ?? null;
+  // Animation loop: one rAF per frame computes the target frame and chases it; the committed `anim` is all render sees.
   useEffect(() => {
-    if (replay && replayP >= 1 + 900 / replay.scene.ms) setReplay(null);
-  }, [replay, replayP]);
-  // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
-  // Live p runs past 1 so frameAt can keep routine play moving until the next event (item 3 dwell).
-  const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
-  const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
-  const target = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff, sysReduced ? 0 : now) : null;
-  const t0 = performance.now();
-  const dt = Math.min(100, Math.max(0, t0 - tick.current));
-  tick.current = t0;
-  const frame = target ? (shownFrame.current = smooth(shownFrame.current, target, dt)) : (shownFrame.current = null);
+    let id = 0;
+    let last = performance.now();
+    const step = () => {
+      id = requestAnimationFrame(step);
+      const t0 = performance.now();
+      const dt = Math.min(100, Math.max(0, t0 - last));
+      last = t0;
+      const now = serverNow();
+      if (replay && (t0 - replay.startedAt) / replay.scene.ms >= 1 + 900 / replay.scene.ms) return setReplay(null);
+      const ph = playhead(events, now - LAG_MS);
+      // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
+      // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
+      const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
+      const p = sysReduced ? 1 : replay ? Math.min(1, (t0 - replay.startedAt) / replay.scene.ms) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
+      const target = scene ? frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now) : null;
+      setAnim((a) => ({ now, frame: target && !sysReduced ? smooth(a.frame, target, dt) : target }));
+    };
+    step();
+    return () => cancelAnimationFrame(id);
+  }, [events, scenes, lineups, sentOff, replay, sysReduced]);
+  const { now, frame } = anim;
+  const ph = playhead(events, now - LAG_MS);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
   // Public state as the lagged pitch shows it: every event carries its own snapshot. Auto-return keys off the real state.

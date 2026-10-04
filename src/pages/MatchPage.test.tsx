@@ -37,8 +37,9 @@ async function mount(v: MatchView) {
   const { footfiveApi } = await import("../lib/pocketbase");
   vi.mocked(footfiveApi.match).mockResolvedValue(v);
   const { default: MatchPage } = await import("./MatchPage");
+  let out!: ReturnType<typeof render>;
   await act(async () => {
-    render(
+    out = render(
       <MemoryRouter initialEntries={["/match/fx1"]}>
         <Routes>
           <Route path="/match/:fixtureId" element={<MatchPage />} />
@@ -47,6 +48,7 @@ async function mount(v: MatchView) {
       </MemoryRouter>,
     );
   });
+  return out;
 }
 
 describe("MatchPage timeline player", () => {
@@ -128,6 +130,22 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("ticker")).toBeTruthy();
     expect(screen.getByTestId("ticker-current").textContent).toContain("Goal elsewhere");
     h.live = null;
+  });
+});
+
+describe("MatchPage animation loop", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("draws a frame on mount and advances it on the next animation frame", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const { container } = await mount(view([ev(1, now - 2000, "Pass")], { home: names("Home"), away: names("Away") }, now));
+    const ball = () => container.querySelector('svg circle[stroke="#111"]')!.getAttribute("cx");
+    const first = ball();
+    expect(first).toBeTruthy();
+    expect(screen.getAllByTestId("player")).toHaveLength(10);
+    await act(async () => void vi.advanceTimersToNextFrame());
+    expect(ball()).not.toBe(first);
   });
 });
 
