@@ -103,7 +103,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
         {frame?.players.map((p) => {
           const c = p.side === "home" ? hc : ac;
           const isAway = p.side === "away";
-          const r = p.hot ? 2.2 : 1.7;
+          const r = 1.7; // one size for everyone: the ring (hot) and lime fill (keeper) are the only marks
           return (
             <g key={`${p.side}-${p.name}`} transform={`translate(${p.x} ${p.y})`} data-testid="player">
               <ellipse cx={0} cy={r} rx={r} ry={0.6} fill="rgba(0,0,0,0.35)" />

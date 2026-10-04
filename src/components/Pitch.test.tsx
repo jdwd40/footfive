@@ -40,6 +40,10 @@ describe("Pitch kits and numbers", () => {
     expect(nodes[0].querySelector("[data-ring]")).toBeTruthy();
     expect(nodes[2].querySelector("[data-ring]")).toBeNull();
   });
+  it("every player is the same size (r 1.7) — hot player and keeper included; only the ring and the lime fill mark them out", () => {
+    render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
+    for (const n of screen.getAllByTestId("player")) expect(n.querySelector("[data-kit]")!.getAttribute("r")).toBe("1.7");
+  });
   it("home is filled in the team colour, away is white with a team-colour ring, keeper keeps lime plus the ring", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
     const kit = (i: number) => screen.getAllByTestId("player")[i].querySelector("[data-kit]")!;
