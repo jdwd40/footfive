@@ -118,9 +118,9 @@ describe("Pitch period banners", () => {
     period({ type: "half_time", ms: 30000, p: 5000 / 30000 });
     expect(screen.getByTestId("period-banner").style.opacity).toBe("0.85");
   });
-  it("second half", () => expect(period({ type: "second_half" })).toBe("SECOND HALF"));
+  it("second half", () => expect(period({ type: "second_half" })).toBe("SECOND HALF — KICK-OFF"));
   it("end of normal time with the score", () => expect(period({ type: "end_of_normal_time", score: [1, 1] })).toBe("FULL-TIME · 1–1 · EXTRA TIME"));
-  it("extra time", () => expect(period({ type: "extra_time" })).toBe("EXTRA TIME"));
+  it("extra time", () => expect(period({ type: "extra_time" })).toBe("EXTRA TIME — KICK-OFF"));
   it("second period of extra time", () => expect(period({ type: "et_second_half" })).toBe("ET SECOND HALF"));
   it("shootout start", () => expect(period({ type: "shootout_start" })).toBe("PENALTY SHOOTOUT"));
   it("goes once the scene is over, and never shows confetti", () => {

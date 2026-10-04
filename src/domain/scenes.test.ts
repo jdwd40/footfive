@@ -278,6 +278,18 @@ describe("highlight scenes agree with the simulation", () => {
     expect(sceneFor(all.find((e) => e.t === "half_time")!, [20, 30], 15000)!.actors).toEqual([]);
   });
 
+  it("period restarts are kickoff scenes (3 s banner life): ball to the centre spot, the taker on it, both sides lined up", () => {
+    for (const t of ["second_half", "extra_time", "et_second_half"]) {
+      const e = all.find((e) => e.t === t);
+      if (!e) continue;
+      const s = sceneFor(e, [20, 30], 1000)!;
+      expect(s.ms, t).toBe(3000);
+      expect(end(s), t).toEqual([50, 32]);
+      expect(s.actors.length, t).toBeGreaterThanOrEqual(3);
+      expect(Math.hypot(...(sample(s.actors[0].path, 0.5).map((v, i) => v - [50, 32][i]) as [number, number])), t).toBeLessThan(1);
+    }
+  });
+
   it("match_end is a 5 s scene carrying the winner (side) and how (by), for the full-time banner", () => {
     const e = all.find((e) => e.t === "match_end")!;
     const s = sceneFor(e, [20, 30], 1000)!;

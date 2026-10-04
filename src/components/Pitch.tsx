@@ -43,9 +43,9 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
   const sc = frame?.score ?? [0, 0];
   const PERIOD: Record<string, string> = {
     half_time: `HALF-TIME · ${home.abbreviation} ${sc[0]}–${sc[1]} ${away.abbreviation}`,
-    second_half: "SECOND HALF",
+    second_half: "SECOND HALF — KICK-OFF",
     end_of_normal_time: `FULL-TIME · ${sc[0]}–${sc[1]} · EXTRA TIME`,
-    extra_time: "EXTRA TIME",
+    extra_time: "EXTRA TIME — KICK-OFF",
     et_half_time: `ET HALF-TIME · ${home.abbreviation} ${sc[0]}–${sc[1]} ${away.abbreviation}`,
     et_second_half: "ET SECOND HALF",
     shootout_start: "PENALTY SHOOTOUT",
