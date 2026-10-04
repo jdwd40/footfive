@@ -80,6 +80,22 @@ describe("frameAt", () => {
     expect(n).toBeGreaterThan(5);
   });
 
+  it("an unlabelled actor stays bound to the same player for the scene's whole life", () => {
+    const m = ms[0];
+    // Tackle whose unlabelled winner sweeps from the home left-back's spot to the right-forward's: nearest-at-t would swap players.
+    const s: Scene = { key: "bind-1", seq: 9001, type: "tackle", ms: 1600, ball: [[20, 20], [42, 40]], actors: [{ id: "win", side: "home", path: [[20, 20], [30, 30], [42, 40]] }], caption: "" };
+    const who = (t: number) => {
+      const hot = frameAt(s, t, m.lineups).players.filter((p) => p.hot);
+      expect(hot).toHaveLength(1);
+      return hot[0].side + ":" + hot[0].no;
+    };
+    const k0 = who(0);
+    expect(who(0.5)).toBe(k0);
+    expect(who(1)).toBe(k0);
+    // Same path, fresh key: nearest at t=0 is the player formation-nearest to [20,20] (the left-back).
+    expect(frameAt({ ...s, key: "bind-2" }, 1, m.lineups).players.find((p) => p.hot)!.no).toBe(frameAt({ ...s, key: "bind-3" }, 0, m.lineups).players.find((p) => p.hot)!.no);
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];

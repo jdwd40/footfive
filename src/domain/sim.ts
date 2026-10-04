@@ -26,6 +26,21 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
 }
 
 export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>): Frame {
+  const { ball, players, unlabelled } = layout(scene, t, lineups, sentOff);
+  let bind = binding(scene, lineups, sentOff);
+  if (unlabelled.some((a) => bind[a.id] && !players.some((p) => p.side + ":" + p.no === bind[a.id]))) {
+    bindings.delete(scene.key); // same seq, different fixture/lineup: rebind
+    bind = binding(scene, lineups, sentOff);
+  }
+  for (const a of unlabelled) {
+    const q = players.find((p) => p.side + ":" + p.no === bind[a.id] && !p.hot);
+    if (q) place(q, a, t);
+  }
+  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick };
+}
+
+/** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
+function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>) {
   const ball = sample(scene.ball, t);
   const players: Player[] = [];
   for (const side of ["home", "away"] as Side[]) {
@@ -39,7 +54,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       players.push({ side, name: p.name, no: p.no, gk, x, y, hot: false });
     });
   }
-  // Named actors ride their path: keepers bind to the GK, labels to short(name), the rest to the nearest free teammate.
+  // Named actors ride their path: keepers bind to the GK, labels to short(name).
   const unlabelled: Actor[] = [];
   for (const a of scene.actors) {
     if (a.side === "ref") continue;
@@ -47,13 +62,30 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     if (p) place(p, a, t);
     else if (!a.keeper && !a.label) unlabelled.push(a);
   }
+  return { ball, players, unlabelled };
+}
+
+/** Unlabelled actor → player key, decided once per scene (nearest free outfield teammate at t=0) so the binding never flips mid-scene. */
+const bindings = new Map<string, Record<string, string>>();
+function binding(scene: Scene, lineups: Lineups | null, sentOff?: Set<string>) {
+  const hit = bindings.get(scene.key);
+  if (hit) return hit;
+  const { players, unlabelled } = layout(scene, 0, lineups, sentOff);
+  const out: Record<string, string> = {};
   for (const a of unlabelled) {
-    const [x, y] = sample(a.path, t);
+    const [x, y] = a.path[0];
     let best: Player | undefined;
     for (const q of players) if (q.side === a.side && !q.hot && !q.gk && (!best || Math.hypot(q.x - x, q.y - y) < Math.hypot(best.x - x, best.y - y))) best = q;
-    if (best) place(best, a, t);
+    if (best) {
+      best.hot = true;
+      out[a.id] = best.side + ":" + best.no;
+    }
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick };
+  if (players.length) {
+    bindings.set(scene.key, out); // lineups absent → nothing to bind yet, try again next frame
+    if (bindings.size > 64) bindings.delete(bindings.keys().next().value!);
+  }
+  return out;
 }
 
 function place(p: Player, a: Actor, t: number) {
