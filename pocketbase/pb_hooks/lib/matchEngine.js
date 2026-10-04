@@ -84,6 +84,7 @@ function buildTiming(minuteMs, scale) {
     "shootoutRevealMs",
     "endMs",
     "resultHoldMs",
+    "kickoffHoldMs",
   ];
   for (var i = 0; i < keys.length; i++) t[keys[i]] = Math.max(20, Math.round(M[keys[i]] / k));
   return t;
@@ -895,6 +896,7 @@ function periodEnd(st, out) {
 function resume(st, out, type, phase, s, text) {
   st.phase = phase;
   emit(st, out, st.nextAt, type, { text: text, clk: { s: s, run: 1 } });
+  st.nextAt += st.timing.kickoffHoldMs; // announcement + walk-on before the first play
 }
 
 function finish(st, out, t, by) {
@@ -1040,6 +1042,7 @@ function step(st, out) {
         text: "Kick-off! " + tname(st, "home") + " v " + tname(st, "away"),
         clk: { s: 0, run: 1 },
       });
+      st.nextAt += st.timing.kickoffHoldMs;
       return;
     case "half_time":
       return resume(st, out, "second_half", "second_half", 2700, "Second half under way");

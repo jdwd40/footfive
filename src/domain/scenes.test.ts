@@ -177,6 +177,20 @@ describe("highlight scenes agree with the simulation", () => {
     expect(n).toBeGreaterThan(50);
   });
 
+  it("the first play after a kick-off / period restart waits kickoffHoldMs (announcement + walk-on)", () => {
+    const hold = eng.buildTiming(1000, 1).kickoffHoldMs as number;
+    expect(hold).toBe(4000);
+    const starts = new Set(["kickoff", "second_half", "extra_time", "et_second_half"]);
+    let n = 0;
+    for (const m of matches)
+      for (let i = 0; i + 1 < m.length; i++)
+        if (starts.has(m[i].t)) {
+          n++;
+          expect(m[i + 1].at - m[i].at, `${m[i].t} → ${m[i + 1].t}`).toBeGreaterThanOrEqual(hold);
+        }
+    expect(n).toBeGreaterThanOrEqual(matches.length * 2);
+  });
+
   it("never emits corners; bounces sit on a side board; every miss bounces back in", () => {
     expect(all.filter((e) => e.t === "corner")).toHaveLength(0);
     const b = all.filter((e) => e.t === "bounce");

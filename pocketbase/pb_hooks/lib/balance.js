@@ -87,6 +87,7 @@ var BALANCE = {
     shootoutRevealMs: 6500,
     endMs: 6000,
     resultHoldMs: 1200, // min real gap after a shot result / card so the client can show it before the next event
+    kickoffHoldMs: 4000, // kick-off / restart-of-period announcement + teams walking on before the first play
   },
 
   baseAttackChance: 0.22,
