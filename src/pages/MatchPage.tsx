@@ -113,17 +113,18 @@ export default function MatchPage() {
     return () => clearInterval(id);
   }, [poll]);
 
-  // Scene per event, chained so the ball carries over between scenes. The player ignores `ms`.
+  // Scene per event, chained so the ball carries over between scenes, lengths scaled to the match pace.
+  const minuteMs = view?.fixture.minuteMs ?? 15000;
   const scenes = useMemo(() => {
     const m = new Map<number, Scene>();
     let prev: Pt = [50, 32];
     for (const e of events) {
-      const s = sceneFor(e, prev) ?? idleScene(e, prev);
+      const s = sceneFor(e, prev, minuteMs) ?? idleScene(e, prev);
       prev = s.ball[s.ball.length - 1];
       m.set(e.seq, s);
     }
     return m;
-  }, [events]);
+  }, [events, minuteMs]);
 
   const ph = playhead(events, now - LAG_MS);
   const sentOff = useMemo(() => new Set((view?.sentOff ?? []).map((s) => s.side + ":" + s.p)), [view?.sentOff]);

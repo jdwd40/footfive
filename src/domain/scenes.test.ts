@@ -37,7 +37,7 @@ describe("highlight scenes agree with the simulation", () => {
     let n = 0;
     for (const m of matches) {
       for (const e of m) {
-        const s = sceneFor(e, prev);
+        const s = sceneFor(e, prev, 15000);
         if (s) prev = end(s);
         if (!s || (e.t !== "goal" && e.t !== "penalty_goal")) continue;
         n++;
@@ -55,7 +55,7 @@ describe("highlight scenes agree with the simulation", () => {
     let n = 0;
     for (const e of all) {
       if (!["save", "miss", "block", "woodwork", "penalty_saved", "penalty_missed", "penalty_woodwork"].includes(e.t)) continue;
-      const s = sceneFor(e, [70, 32])!;
+      const s = sceneFor(e, [70, 32], 15000)!;
       expect(s).toBeTruthy();
       n++;
       // attacking side for shot results: save/block events are credited to the defending side
@@ -73,7 +73,7 @@ describe("highlight scenes agree with the simulation", () => {
     const kicks = all.filter((e) => e.t === "shootout_kick");
     expect(kicks.length).toBeGreaterThan(5);
     for (const e of kicks) {
-      const s = sceneFor(e, [50, 32])!;
+      const s = sceneFor(e, [50, 32], 15000)!;
       const outcome = e.pen!.outcome;
       const [x, y] = end(s);
       expect(s.ball[0][0]).toBe(89); // spot at the x=100 end for both teams
@@ -132,6 +132,15 @@ describe("highlight scenes agree with the simulation", () => {
       });
     }
     expect(misses).toBeGreaterThan(20);
+  });
+
+  it("scene length follows the match pace; goals stay watchable", () => {
+    const pass = all.find((e) => e.t === "pass")!;
+    const goal = all.find((e) => e.t === "goal")!;
+    expect(sceneFor(pass, [50, 32], 15000)!.ms).toBe(1500);
+    expect(sceneFor(pass, [50, 32], 8000)!.ms).toBeLessThanOrEqual(900);
+    expect(sceneFor(goal, [50, 32], 8000)!.ms).toBeGreaterThanOrEqual(1800);
+    expect(sceneFor(goal, [50, 32], 1000)!.ms).toBe(1800); // k floors at 0.15 and goals at 1800
   });
 
   it("every live minute carries at least two on-pitch events", () => {

@@ -42,7 +42,7 @@ describe("frameAt", () => {
     for (const m of ms) {
       let prev: Pt = [50, 32];
       for (const e of m.events) {
-        const s = sceneFor(e, prev) ?? idle(e, prev);
+        const s = sceneFor(e, prev, 15000) ?? idle(e, prev);
         prev = s.ball[s.ball.length - 1];
         for (const t of TS) {
           const f = frameAt(s, t, m.lineups);
@@ -62,7 +62,7 @@ describe("frameAt", () => {
     for (const m of ms) {
       let prev: Pt = [50, 32];
       for (const e of m.events) {
-        const s = sceneFor(e, prev) ?? idle(e, prev);
+        const s = sceneFor(e, prev, 15000) ?? idle(e, prev);
         prev = s.ball[s.ball.length - 1];
         if (e.t !== "goal") continue;
         const scorer = s.actors.find((a) => a.id === "s")!;
@@ -83,7 +83,7 @@ describe("frameAt", () => {
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];
-    const s = sceneFor(e, [50, 32]) ?? idle(e, [50, 32]);
+    const s = sceneFor(e, [50, 32], 15000) ?? idle(e, [50, 32]);
     const off = m.lineups.home.filter((p) => p.starter && p.role !== "gk")[0];
     const f = frameAt(s, 0.5, m.lineups, new Set(["home:" + off.name]));
     expect(f.players).toHaveLength(9);
