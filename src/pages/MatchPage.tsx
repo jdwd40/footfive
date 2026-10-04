@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import Pitch from "../components/Pitch";
 import MarketsPanel from "../components/MarketsPanel";
+import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
@@ -182,6 +183,7 @@ export default function MatchPage() {
           </Link>
         ))}
       </div>
+      {live?.ticker?.length ? <Ticker items={live.ticker.filter((i) => i.fixtureId !== fx.id)} label="Other matches" /> : null}
 
       <Scoreboard view={view} now={now} stale={stale} />
 

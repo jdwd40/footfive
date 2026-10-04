@@ -4,6 +4,7 @@ import { apiLogin, loginViaUi, PB, twoContexts, expectNoHorizontalOverflow } fro
 type Live = {
   mode: string;
   fixtures: Array<{ id: string; home: { id: string }; away: { id: string } }>;
+  ticker?: Array<{ fixtureId: string }>;
 };
 
 async function live(request: import("@playwright/test").APIRequestContext, token: string): Promise<Live> {
@@ -50,6 +51,7 @@ test.describe("shared multiplayer + live", () => {
     await page.goto(`/match/${first.id}`);
     await expect(page.getByTestId("match-scoreboard")).toBeVisible({ timeout: 20000 });
     await expect(page.getByTestId("commentary")).toBeVisible();
+    if (l.mode === "live" && l.ticker?.some((i) => i.fixtureId !== first.id)) await expect(page.getByTestId("ticker")).toBeVisible({ timeout: 15000 });
     if (second) {
       await page.goto(`/match/${second.id}`);
       await expect(page.getByTestId("match-scoreboard")).toBeVisible({ timeout: 15000 });

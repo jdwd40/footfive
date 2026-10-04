@@ -21,7 +21,8 @@ function view(events: MatchEvent[], lineups: MatchView["lineups"], serverTimeMs:
   };
 }
 
-vi.mock("../lib/live", async (orig) => ({ ...(await orig<typeof import("../lib/live")>()), useLive: () => ({ live: null }), useNow: () => Date.now() }));
+const h = vi.hoisted(() => ({ live: null as unknown }));
+vi.mock("../lib/live", async (orig) => ({ ...(await orig<typeof import("../lib/live")>()), useLive: () => ({ live: h.live }), useNow: () => Date.now() }));
 // jsdom's opaque origin has no localStorage.
 const mem = new Map<string, string>();
 vi.stubGlobal("localStorage", { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) });
@@ -62,5 +63,15 @@ describe("MatchPage timeline player", () => {
     await mount(view([ev(1, now - 3000, "Pass")], null, now));
     expect(screen.getByTestId("pitch")).toBeTruthy();
     expect(screen.queryAllByTestId("player")).toHaveLength(0);
+  });
+
+  it("shows the other-match ticker without this match's events", async () => {
+    const now = Date.now();
+    const item = (id: string, fixtureId: string, text: string) => ({ id, fixtureId, seq: 1, at: now, t: "goal", side: "home", text, min: 3 });
+    h.live = { fixtures: [], ticker: [item("t1", "fx1", "Our goal"), item("t2", "fx2", "Goal elsewhere")] };
+    await mount(view([ev(1, now - 3000, "Pass")], null, now));
+    expect(screen.getByTestId("ticker")).toBeTruthy();
+    expect(screen.getByTestId("ticker-current").textContent).toContain("Goal elsewhere");
+    h.live = null;
   });
 });
