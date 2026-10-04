@@ -68,7 +68,9 @@ export default function MatchPage() {
   const lastSeq = useRef(0);
   const inflight = useRef(false);
   const fxRef = useRef(fixtureId);
-  fxRef.current = fixtureId;
+  useEffect(() => {
+    fxRef.current = fixtureId; // after commit, not during render: a late response for the old fixture is still dropped
+  }, [fixtureId]);
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
   const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
 
