@@ -9,8 +9,10 @@ const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "
 const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ...f });
 
 describe("Pitch goal banner", () => {
-  it("shows GOOOAL with scorer and score for the whole goal scene", () => {
-    render(<Pitch frame={frame({ type: "goal", flash: "goal", side: "away", who: "Jo Striker", score: [1, 2] })} home={home} away={away} />);
+  it("shows GOOOAL with scorer and score once the ball is in", () => {
+    const { rerender } = render(<Pitch frame={frame({ type: "goal", flash: "goal", side: "away", who: "Jo Striker", score: [1, 2], p: 0.3 })} home={home} away={away} />);
+    expect(screen.queryByTestId("goal-banner")).toBeNull(); // shot still travelling
+    rerender(<Pitch frame={frame({ type: "goal", flash: "goal", side: "away", who: "Jo Striker", score: [1, 2], p: 0.7 })} home={home} away={away} />);
     const b = screen.getByTestId("goal-banner");
     expect(b.textContent).toContain("GOOOAL!");
     expect(b.textContent).toContain("Jo Striker");
