@@ -68,7 +68,7 @@ function jit(seq: number, k: number, amp: number) {
 function other(side: Side): Side {
   return side === "home" ? "away" : "home";
 }
-function short(name?: string) {
+export function short(name?: string) {
   if (!name) return undefined;
   const parts = name.split(" ");
   return parts.length > 1 ? `${parts[0][0]}. ${parts.slice(1).join(" ")}` : name;
