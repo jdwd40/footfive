@@ -124,6 +124,24 @@ describe("MatchPage timeline player", () => {
     vi.useRealTimers();
   });
 
+  it("replaying an old goal never rolls the live scoreboard or feed back", async () => {
+    const now = Date.now();
+    const one = { ...st!, sc: [1, 0] as [number, number] } as typeof st;
+    const two = { ...st!, sc: [2, 0] as [number, number] } as typeof st;
+    const goal1 = { ...ev(1, now - 60000, "GOAL ONE"), t: "goal", target: [100, 32] as [number, number], st: one! };
+    const pass = { ...ev(2, now - 30000, "Pass"), st: one! };
+    const goal2 = { ...ev(3, now - 1500 - 0.9 * 3800, "GOAL TWO"), t: "goal", target: [100, 32] as [number, number], st: two! };
+    await mount(view([goal1, pass, goal2], null, now));
+    expect(screen.getByTestId("match-score").textContent).toBe("2–0");
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Replay: GOAL ONE"));
+    });
+    // Replay at p ≈ 0: its own result is hidden on the pitch, but the live score and feed stand.
+    expect(screen.getByText("Replay")).toBeTruthy();
+    expect(screen.getByTestId("match-score").textContent).toBe("2–0");
+    expect(screen.getByTestId("event-feed").textContent).toContain("GOAL TWO");
+  });
+
   it("ignores a late poll response for the previous fixture after switching", async () => {
     const now = Date.now();
     const { footfiveApi } = await import("../lib/pocketbase");

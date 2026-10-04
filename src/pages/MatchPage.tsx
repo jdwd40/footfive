@@ -45,8 +45,8 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
   return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
-/** What the animation loop committed last: server time it ran at, the frame it drew, whether the result may show, and where the drawn ball was when the current scene began. */
-type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; startBall: Pt | null };
+/** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
+type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveRevealed: boolean; startBall: Pt | null };
 
 /** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
 function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
@@ -70,7 +70,7 @@ export default function MatchPage() {
   const fxRef = useRef(fixtureId);
   fxRef.current = fixtureId;
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, startBall: null }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -151,10 +151,12 @@ export default function MatchPage() {
       const ph = playhead(events, now - LAG_MS);
       // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
       // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
-      const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
-      const p = sysReduced ? 1 : replay ? Math.min(1, (t0 - replay.startedAt) / replay.scene.ms) : ph && scene?.ms ? ph.elapsed / scene.ms : 1;
+      const liveScene = ph ? scenes.get(ph.cur.seq) : null;
+      const liveP = sysReduced ? 1 : ph && liveScene?.ms ? ph.elapsed / liveScene.ms : 1;
+      const scene = replay ? replay.scene : liveScene;
+      const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
       setAnim((a) => {
-        if (!scene) return { now, frame: null, reached: false, revealed: true, startBall: null };
+        if (!scene) return { now, frame: null, reached: false, revealed: true, liveRevealed: true, startBall: null };
         const same = a.frame?.seq === scene.seq;
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
         const startBall = same ? a.startBall : a.frame?.ball ?? null;
@@ -164,18 +166,21 @@ export default function MatchPage() {
         const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined);
         const frame = sysReduced ? target : smooth(a.frame, target, dt);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
-        return { now, frame, startBall, ...reveal(scene, p, frame.ball, same && a.reached) };
+        const gate = reveal(scene, p, frame.ball, same && a.reached);
+        // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
+        const liveRevealed = replay ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
+        return { now, frame, startBall, ...gate, liveRevealed };
       });
     };
     step();
     return () => cancelAnimationFrame(id);
   }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
-  const { now, frame, revealed } = anim;
+  const { now, frame, revealed, liveRevealed } = anim;
   const ph = playhead(events, now - LAG_MS);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
   // Public state as the lagged pitch shows it: every event carries its own snapshot, held back until the result is revealed. Auto-return keys off the real state.
-  const st: PubState | null = shownState(ph, revealed) ?? view?.fixture.st ?? null;
+  const st: PubState | null = shownState(ph, liveRevealed) ?? view?.fixture.st ?? null;
   const finished = view?.fixture.st?.ph === "finished";
   const finishedAt = useMemo(() => (finished ? Date.now() : 0), [finished]);
   useEffect(() => {
@@ -218,9 +223,9 @@ export default function MatchPage() {
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
   // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
-  const text = current && !revealed && ph?.prev ? ph.prev.text : current?.text;
+  const text = current && !liveRevealed && ph?.prev ? ph.prev.text : current?.text;
   // Events as the playhead has shown them: nothing newer, and the current one only once its result is revealed.
-  const seen = ph ? events.filter((e) => e.seq < ph.cur.seq || (revealed && e.seq === ph.cur.seq)) : events;
+  const seen = ph ? events.filter((e) => e.seq < ph.cur.seq || (liveRevealed && e.seq === ph.cur.seq)) : events;
 
   return (
     <Layout wide>
