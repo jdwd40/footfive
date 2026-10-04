@@ -153,6 +153,23 @@ describe("frameAt", () => {
     expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 70]);
   });
 
+  it("breathes once the scene is over: players and ball drift a little with time, never when mid-scene", () => {
+    const m = ms[0];
+    const s = sceneFor(m.events[5], [50, 32], 15000) ?? idle(m.events[5], [50, 32]);
+    const a = frameAt(s, 1, m.lineups, undefined, 0);
+    const b = frameAt(s, 1, m.lineups, undefined, 628); // sin(π/2)
+    const moved = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y);
+    expect(moved({ x: a.ball[0], y: a.ball[1] }, { x: b.ball[0], y: b.ball[1] })).toBeGreaterThan(0.2);
+    a.players.forEach((p, i) => {
+      const d = moved(p, b.players[i]);
+      expect(d).toBeGreaterThan(0);
+      expect(d).toBeLessThanOrEqual(0.6);
+    });
+    const c = frameAt(s, 0.5, m.lineups, undefined, 0);
+    const e = frameAt(s, 0.5, m.lineups, undefined, 628);
+    expect(e.players.map((p) => [p.x, p.y])).toEqual(c.players.map((p) => [p.x, p.y]));
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];

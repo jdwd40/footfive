@@ -135,7 +135,7 @@ export default function MatchPage() {
   // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
   const scene = replay ? replay.scene : ph ? scenes.get(ph.cur.seq) : null;
   const p = sysReduced ? 1 : replay ? Math.min(1, replayP) : ph && scene?.ms ? Math.min(1, ph.elapsed / scene.ms) : 1;
-  const target = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff) : null;
+  const target = scene ? frameAt(scene, p, view?.lineups ?? null, sentOff, sysReduced ? 0 : now) : null;
   const t0 = performance.now();
   const dt = Math.min(100, Math.max(0, t0 - tick.current));
   tick.current = t0;

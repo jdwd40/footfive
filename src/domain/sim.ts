@@ -27,12 +27,23 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
 }
 
-export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>): Frame {
-  const { ball, players, unlabelled } = layout(scene, t, lineups, sentOff);
+export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0): Frame {
+  const { ball: b, players, unlabelled } = layout(scene, t, lineups, sentOff);
+  const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
   const bind = binding(scene, lineups, sentOff);
   for (const a of unlabelled) {
     const q = players.find((p) => p.side + ":" + p.no === bind[a.id] && !p.hot);
     if (q) place(q, a, t);
+  }
+  // Idle breathing: scene over, nothing newer yet — everyone sways a touch so the frame never looks frozen.
+  if (t >= 1 && nowMs) {
+    ball[0] += Math.sin(nowMs / 400) * 0.4;
+    for (const p of players) {
+      const amp = p.hot ? 0.4 : 0.25;
+      const ph = p.hot ? 0 : p.no * 1.7;
+      p.x += Math.sin(nowMs / 400 + ph) * amp;
+      p.y += Math.cos(nowMs / 400 + ph) * amp * 0.5;
+    }
   }
   return { ball, lift: sampleN(scene.ballHeight, t), players, caption: scene.caption, flash: scene.flash ?? null, type: scene.type, seq: scene.seq, p: t, cam: scene.cam ?? FULL_CAM, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt };
 }
