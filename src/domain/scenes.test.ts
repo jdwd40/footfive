@@ -230,6 +230,20 @@ describe("highlight scenes agree with the simulation", () => {
     expect(s.impact).toEqual([89, 32]);
   });
 
+  it("penalty_awarded fills the engine's 5 s award wait: fouled player down, ref runs in to point, offender walks off, taker moves", () => {
+    const e = all.find((e) => e.t === "penalty_awarded")!;
+    const s = sceneFor(e, [50, 32], 15000)!;
+    expect(s.ms).toBeGreaterThanOrEqual(5000);
+    expect(sceneFor(e, [50, 32], 1000)!.ms).toBe(s.ms); // pace-independent, like the setup
+    const at = (id: string, t: number) => sample(s.actors.find((a) => a.id === id)!.path, t);
+    expect(s.actors.some((a) => a.side === "ref")).toBe(true);
+    expect(at("ref", 0.3)).not.toEqual(at("ref", 0.55)); // runs in to point
+    expect(at("fouled", 0.2)).not.toEqual(at("fouled", 0.7)); // down, then up and on the spot
+    expect(Math.hypot(...(at("off", 0.85).map((v, i) => v - at("off", 0.5)[i]) as [number, number]))).toBeGreaterThan(2); // walks away
+    expect(s.actors.some((a) => a.keeper)).toBe(true);
+    expect(Math.hypot(...(sample(s.ball, 1).map((v, i) => v - s.impact![i]) as [number, number]))).toBeLessThan(1e-9);
+  });
+
   it("every live minute carries at least two on-pitch events", () => {
     for (const m of matches) {
       const byMin = new Map<number, number>();

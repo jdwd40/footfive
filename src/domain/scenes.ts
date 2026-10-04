@@ -310,15 +310,29 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       };
     }
     case "penalty_awarded": {
+      // Fills the engine's award wait (balance.js penAwardMs), whatever the pace: the fouled player is down (0–30 %), the ref
+      // runs in and points to the spot as the ball goes there (30–55 %), the fouled player gets up to the spot, the offender
+      // walks three away (55–80 %), two teammates close four on the spot and the keeper walks back to his line.
       const spot = (e.ball as Pt) || [goalX(side) + toward(side, -11), GOAL_Y];
+      const at = prevBall;
+      const seg = (t: number, a: number, b: number) => Math.max(0, Math.min(1, (t - a) / (b - a)));
+      const walk = (from: Pt, to: Pt, a: number, b: number) => keys((t) => lerp(from, to, seg(t, a, b)));
+      const closer = (p: Pt): Pt => lerp(p, spot, 4 / Math.max(4, Math.hypot(p[0] - spot[0], p[1] - spot[1])));
+      const offAt: Pt = clampPt([at[0] + toward(side, 2), at[1] + 2]);
+      const gk = keeperSpot(def);
+      const m1: Pt = clampPt([spot[0] - toward(side, 10), spot[1] - 9]);
+      const m2: Pt = clampPt([spot[0] - toward(side, 12), spot[1] + 8]);
       return {
         ...base,
-        ms: d(2800, 1800),
-        ball: [prevBall, spot, spot],
+        ms: 5000,
+        ball: walk(at, spot, 0.3, 0.55),
         actors: [
-          { id: "fouled", side, label: short(e.p), path: [prevBall, clampPt([spot[0] + toward(side, 3), spot[1] + 2]), clampPt([spot[0] + toward(side, 3), spot[1] + 2])] },
-          { id: "off", side: other(side), label: short(e.p2), path: [clampPt([spot[0] + toward(side, 6), spot[1] + 4]), clampPt([spot[0] + toward(side, 4), spot[1] + 3]), clampPt([spot[0] + toward(side, 4), spot[1] + 3])] },
-          { id: "ref", side: "ref", path: [clampPt([spot[0] - toward(side, 10), spot[1] - 12]), clampPt([spot[0] - toward(side, 2), spot[1] - 6]), clampPt([spot[0] - toward(side, 1), spot[1] - 5])] },
+          { id: "fouled", side, label: short(e.p), path: walk(clampPt([at[0], at[1] + 1.5]), clampPt([spot[0] - toward(side, 3), spot[1] + 2]), 0.3, 0.6) },
+          { id: "off", side: def, label: short(e.p2), path: walk(offAt, clampPt([offAt[0] + toward(side, 3), offAt[1] + 1]), 0.55, 0.8) },
+          { id: "ref", side: "ref", path: walk(clampPt([spot[0] - toward(side, 12), spot[1] - 12]), clampPt([spot[0] - toward(side, 2), spot[1] - 5]), 0.3, 0.55) },
+          { id: "t1", side, path: walk(m1, closer(m1), 0.2, 0.9) },
+          { id: "t2", side, path: walk(m2, closer(m2), 0.3, 1) },
+          { id: "gk", side: def, keeper: true, path: walk(clampPt([gk[0] - toward(side, 4), GOAL_Y + 4]), gk, 0.4, 0.9) },
         ],
         flash: "pen",
         cam: penCam(side),
