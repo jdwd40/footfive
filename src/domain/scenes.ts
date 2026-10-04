@@ -63,6 +63,12 @@ export function short(name?: string) {
 function keeperSpot(defSide: Side): Pt {
   return [defSide === "home" ? 3 : 97, GOAL_Y];
 }
+/** Celebration spots by the nearest corner flag of the attacked end: scorer, mate 1, mate 2. */
+function huddle(atk: Side, y: number): [Pt, Pt, Pt] {
+  const c: Pt = [goalX(atk) + toward(atk, -6), y >= GOAL_Y ? 58 : 6];
+  const inward = c[1] > GOAL_Y ? -1 : 1;
+  return [c, clampPt([c[0] - toward(atk, 4), c[1] + inward * 3]), clampPt([c[0] - toward(atk, 2), c[1] + inward * 4])];
+}
 
 /** Scene lengths were written for 15 s/min; scale to the match pace. Clock-pausing scenes keep a floor so they stay watchable. */
 function pace(minuteMs: number) {
@@ -90,8 +96,9 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
   const s = e.seq;
 
   switch (e.t) {
-    case "kickoff":
     case "restart":
+      return { ...base, ms: d(1600), ball: [[50, 32], [50, 32]], actors: [] }; // everyone walks back to the kick-off anchors
+    case "kickoff":
     case "second_half":
     case "extra_time":
     case "et_second_half":
@@ -166,21 +173,40 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
       const gk = keeperSpot(other(atk));
       const dive: Pt = [gk[0], GOAL_Y + (target[1] > GOAL_Y ? -2.5 : 2.5)];
       const net: Pt = [goalX(atk) + toward(atk, 2), target[1]];
+      const [corner, m1, m2] = huddle(atk, net[1]);
+      const t1: Pt = clampPt([shotFrom[0] - toward(atk, 12), shotFrom[1] + 10]);
+      const t2: Pt = clampPt([shotFrom[0] - toward(atk, 8), shotFrom[1] - 10]);
       return {
         ...base,
         ms: d(3800, 1800),
         ball: [shotFrom, target, net, net, net],
         actors: [
-          { id: "s", side: atk, label: short(e.p), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(atk, 4), shotFrom[1] - 6]), clampPt([shotFrom[0] + toward(atk, 2), 10]), clampPt([shotFrom[0], 8])] },
+          { id: "s", side: atk, label: short(e.p), path: [shotFrom, shotFrom, lerp(shotFrom, corner, 0.5), corner, corner] },
           { id: "gk", side: other(atk), keeper: true, label: short(e.p2), path: [gk, dive, dive, dive, gk] },
-          { id: "t", side: atk, path: [clampPt([shotFrom[0] - toward(atk, 12), shotFrom[1] + 10]), clampPt([shotFrom[0] - toward(atk, 10), shotFrom[1] + 8]), clampPt([shotFrom[0] + toward(atk, 1), 14]), clampPt([shotFrom[0] + toward(atk, 1), 11]), clampPt([shotFrom[0] + toward(atk, 1), 10])] },
+          { id: "t1", side: atk, path: [t1, t1, lerp(t1, m1, 0.5), m1, m1] },
+          { id: "t2", side: atk, path: [t2, t2, lerp(t2, m2, 0.5), m2, m2] },
         ],
         flash: "goal",
         focus: atk,
       };
     }
-    case "celebration":
-      return { ...base, ms: d(2000, 1500), ball: [prevBall], actors: [], flash: "goal", focus: side }; // ball stays in the net, banner stays up
+    case "celebration": {
+      // Ball stays in the net, banner stays up; the scorer and two mates hold the huddle by the corner flag.
+      const [corner, m1, m2] = huddle(side, prevBall[1]);
+      const bob = (p: Pt): Pt => [p[0], p[1] + (corner[1] > GOAL_Y ? -1 : 1)];
+      return {
+        ...base,
+        ms: d(2000, 1500),
+        ball: [prevBall],
+        actors: [
+          { id: "s", side, label: short(e.p), path: [corner, bob(corner), corner] },
+          { id: "t1", side, path: [m1, lerp(m1, corner, 0.3), m1] },
+          { id: "t2", side, path: [m2, lerp(m2, corner, 0.3), m2] },
+        ],
+        flash: "goal",
+        focus: side,
+      };
+    }
     case "save": {
       // event side = defending team; shooter attacks the other way
       const shooterSide = other(side);

@@ -94,6 +94,50 @@ describe("frameAt", () => {
     expect(who(1)).toBe(k0);
     // Same path, fresh key: nearest at t=0 is the player formation-nearest to [20,20] (the left-back).
     expect(frameAt({ ...s, key: "bind-2" }, 1, m.lineups).players.find((p) => p.hot)!.no).toBe(frameAt({ ...s, key: "bind-3" }, 0, m.lineups).players.find((p) => p.hot)!.no);
+    // A different scene with the same key (same seq, other fixture) binds on its own.
+    const other: Scene = { ...s, actors: [{ id: "x", side: "away", path: [[80, 44]] }] };
+    expect(frameAt(other, 0.5, m.lineups).players.filter((p) => p.hot).map((p) => p.side)).toEqual(["away"]);
+  });
+
+  it("goal: scorer ends at the corner with two teammates, defenders back off to the centre; restart resets everyone", () => {
+    let n = 0;
+    for (const m of ms) {
+      let prev: Pt = [50, 32];
+      const evs = m.events;
+      for (let i = 0; i < evs.length; i++) {
+        const e = evs[i];
+        const s = sceneFor(e, prev, 15000) ?? idle(e, prev);
+        prev = s.ball[s.ball.length - 1];
+        if (e.t !== "goal") continue;
+        n++;
+        const f = frameAt(s, 1, m.lineups);
+        const def = e.side === "home" ? "away" : "home";
+        const cornerX = e.side === "home" ? 100 : 0;
+        const hot = f.players.filter((p) => p.hot && p.side === e.side);
+        expect(hot, `${e.text}`).toHaveLength(3);
+        for (const p of hot) {
+          expect(Math.abs(p.x - cornerX)).toBeLessThan(14);
+          expect(Math.min(Math.abs(p.y - 5), Math.abs(p.y - 59))).toBeLessThan(6);
+        }
+        // Defenders stand where they would with the ball on the centre spot (the restart layout).
+        const centre = frameAt(idle({ ...e, t: "restart" }, [50, 32]), 1, m.lineups);
+        for (const p of f.players.filter((q) => q.side === def && !q.hot)) {
+          const c = centre.players.find((q) => q.side === p.side && q.no === p.no)!;
+          expect([p.x, p.y]).toEqual([c.x, c.y]);
+        }
+        // Celebration keeps the huddle; restart has no actors and the ball at the centre.
+        const cel = sceneFor(evs[i + 1], prev, 15000)!;
+        expect(cel.type).toBe("celebration");
+        const huddle = frameAt(cel, 0.5, m.lineups).players.filter((p) => p.hot);
+        expect(huddle).toHaveLength(3);
+        expect(Math.max(...huddle.map((p) => Math.hypot(p.x - huddle[0].x, p.y - huddle[0].y)))).toBeLessThan(8);
+        const rs = sceneFor(evs[i + 2], cel.ball[cel.ball.length - 1], 15000)!;
+        expect(rs.type).toBe("restart");
+        expect(rs.actors).toEqual([]);
+        expect(rs.ball[rs.ball.length - 1]).toEqual([50, 32]);
+      }
+    }
+    expect(n).toBeGreaterThan(5);
   });
 
   it("skips sent-off players and survives missing lineups", () => {

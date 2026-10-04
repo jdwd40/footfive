@@ -101,15 +101,22 @@ export default function Pitch({ frame, home, away, replay }: Props) {
       </svg>
 
       {goal ? (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/30" data-testid="goal-banner">
+        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30" data-testid="goal-banner">
+          <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
+            {Array.from({ length: 24 }, (_, i) => (
+              <i key={i} style={{ left: `${(i * 4.3 + 2) % 100}%`, background: i % 3 ? (goal.side === "away" ? ac : hc) : "#fff", animationDelay: `${(i % 6) * 0.15}s` }} />
+            ))}
+          </div>
           <div className="goal-pop text-center">
             <div className="font-display text-5xl font-black text-white sm:text-6xl" style={{ textShadow: `0 0 18px ${goal.side === "away" ? ac : hc}, 0 0 40px ${goal.side === "away" ? ac : hc}` }}>
               GOOOAL!
             </div>
-            <div className="mt-1 text-sm font-bold text-white sm:text-base">
-              {goal.who}
-              {goal.score ? ` · ${goal.score[0]}–${goal.score[1]}` : ""}
-            </div>
+            {goal.score ? (
+              <div className="mt-1 font-display text-2xl font-black text-white tabular sm:text-3xl">
+                {home.abbreviation} {goal.score[0]}–{goal.score[1]} {away.abbreviation}
+              </div>
+            ) : null}
+            <div className="mt-1 text-sm font-bold text-white sm:text-base">{goal.who}</div>
           </div>
         </div>
       ) : frame && flash ? (

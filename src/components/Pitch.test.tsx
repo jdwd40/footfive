@@ -45,7 +45,8 @@ describe("Pitch goal banner", () => {
     const b = screen.getByTestId("goal-banner");
     expect(b.textContent).toContain("GOOOAL!");
     expect(b.textContent).toContain("Jo Striker");
-    expect(b.textContent).toContain("1–2");
+    expect(b.textContent).toContain("HOM 1–2 AWY");
+    expect(b.querySelectorAll(".confetti > i")).toHaveLength(24);
   });
 
   it("stays up through the celebration", () => {

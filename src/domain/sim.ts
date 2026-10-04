@@ -18,6 +18,7 @@ const ANCHORS: Pt[] = [
   [42, 40],
 ];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
 
 function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   const live = list.filter((p) => p.starter && !sentOff?.has(side + ":" + p.name));
@@ -27,11 +28,7 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
 
 export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>): Frame {
   const { ball, players, unlabelled } = layout(scene, t, lineups, sentOff);
-  let bind = binding(scene, lineups, sentOff);
-  if (unlabelled.some((a) => bind[a.id] && !players.some((p) => p.side + ":" + p.no === bind[a.id]))) {
-    bindings.delete(scene.key); // same seq, different fixture/lineup: rebind
-    bind = binding(scene, lineups, sentOff);
-  }
+  const bind = binding(scene, lineups, sentOff);
   for (const a of unlabelled) {
     const q = players.find((p) => p.side + ":" + p.no === bind[a.id] && !p.hot);
     if (q) place(q, a, t);
@@ -42,15 +39,18 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
 function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>) {
   const ball = sample(scene.ball, t);
+  // After a goal the defending side backs off to the centre for the restart while the scorer celebrates.
+  const backOff = scene.flash === "goal" && (scene.type === "celebration" || t > 0.5) ? other(scene.side) : null;
   const players: Player[] = [];
   for (const side of ["home", "away"] as Side[]) {
     const mirror = side === "away";
+    const b: Pt = side === backOff ? [50, 32] : ball;
     starters(lineups?.[side] ?? [], side, sentOff).forEach((p, i) => {
       const gk = i === 0;
       const ax = mirror ? 100 - ANCHORS[i][0] : ANCHORS[i][0];
       const ay = ANCHORS[i][1];
-      const x = gk ? ax : clamp(ax + (ball[0] - ax) * 0.3, 1, 99);
-      const y = clamp(ay + (ball[1] - ay) * (gk ? 0.4 : 0.3), 2, 62);
+      const x = gk ? ax : clamp(ax + (b[0] - ax) * 0.3, 1, 99);
+      const y = clamp(ay + (b[1] - ay) * (gk ? 0.4 : 0.3), 2, 62);
       players.push({ side, name: p.name, no: p.no, gk, x, y, hot: false });
     });
   }
@@ -66,9 +66,9 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
 }
 
 /** Unlabelled actor → player key, decided once per scene (nearest free outfield teammate at t=0) so the binding never flips mid-scene. */
-const bindings = new Map<string, Record<string, string>>();
+const bindings = new WeakMap<Scene, Record<string, string>>(); // ponytail: keyed by scene object — seq repeats across fixtures, and scenes are memoised per event list
 function binding(scene: Scene, lineups: Lineups | null, sentOff?: Set<string>) {
-  const hit = bindings.get(scene.key);
+  const hit = bindings.get(scene);
   if (hit) return hit;
   const { players, unlabelled } = layout(scene, 0, lineups, sentOff);
   const out: Record<string, string> = {};
@@ -81,10 +81,7 @@ function binding(scene: Scene, lineups: Lineups | null, sentOff?: Set<string>) {
       out[a.id] = best.side + ":" + best.no;
     }
   }
-  if (players.length) {
-    bindings.set(scene.key, out); // lineups absent → nothing to bind yet, try again next frame
-    if (bindings.size > 64) bindings.delete(bindings.keys().next().value!);
-  }
+  if (players.length) bindings.set(scene, out); // lineups absent → nothing to bind yet, try again next frame
   return out;
 }
 
