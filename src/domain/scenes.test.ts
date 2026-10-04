@@ -210,6 +210,26 @@ describe("highlight scenes agree with the simulation", () => {
     expect(sceneFor(all.find((e) => e.t === "pass")!, [50, 32], 15000)!.cam).toBeUndefined();
   });
 
+  it("setup scenes fill the engine's wait for the kick: taker places, walks back and settles; keeper bounces; the ref jogs in", () => {
+    const setup = all.find((e) => e.t === "shootout_setup")!;
+    const penSetup = all.find((e) => e.t === "penalty_setup")!;
+    expect(sceneFor(setup, [50, 32], 15000)!.ms).toBe(6000); // balance.js shootoutRevealMs, whatever the pace
+    expect(sceneFor(setup, [50, 32], 1000)!.ms).toBe(6000);
+    expect(sceneFor(penSetup, [50, 32], 15000)!.ms).toBe(5000); // balance.js penSetupMs
+    const s = sceneFor(setup, [50, 32], 15000)!;
+    const at = (id: string, t: number) => sample(s.actors.find((a) => a.id === id)!.path, t);
+    expect(sample(s.ball, 0.2)).toEqual([89, 32]); // ball placed by 20 % and left there
+    expect(sample(s.ball, 0.9)).toEqual([89, 32]);
+    expect(at("taker", 0.3)).not.toEqual(at("taker", 0.6)); // walking back
+    expect(Math.hypot(...(at("taker", 0.6).map((v, i) => v - at("taker", 0.95)[i]) as [number, number]))).toBeLessThan(0.7); // settled, breathing only
+    expect(Math.abs(at("taker", 0.6)[0] - 89)).toBeGreaterThan(4); // six back from the spot
+    const gkY = [0.1, 0.3, 0.5, 0.7, 0.9].map((t) => at("gk", t)[1]);
+    expect(Math.max(...gkY) - Math.min(...gkY)).toBeGreaterThan(1.5); // bouncing on the line
+    expect(s.actors.some((a) => a.side === "ref")).toBe(true);
+    expect(at("ref", 0)).not.toEqual(at("ref", 0.5));
+    expect(s.impact).toEqual([89, 32]);
+  });
+
   it("every live minute carries at least two on-pitch events", () => {
     for (const m of matches) {
       const byMin = new Map<number, number>();

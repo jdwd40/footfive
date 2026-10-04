@@ -329,7 +329,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
     case "penalty_setup":
     case "shootout_setup":
-      return setupScene(e, prevBall, d);
+      return setupScene(e, prevBall);
     case "penalty_saved":
     case "penalty_missed":
     case "penalty_woodwork":
@@ -346,21 +346,34 @@ function geomSide(e: MatchEvent, side: Side): Side {
   return e.t.startsWith("shootout") ? "home" : side;
 }
 
-/** Shooter walks the ball from wherever it was to the spot, keeper on the line. Same geometry in-match and in shootouts. */
-function setupScene(e: MatchEvent, prevBall: Pt, d: ReturnType<typeof pace>): Scene {
+/** Keyframes sampled from a function of progress, evenly spaced as `sample` expects. */
+function keys(f: (t: number) => Pt, n = 20): Pt[] {
+  return Array.from({ length: n + 1 }, (_, i) => f(i / n));
+}
+
+/**
+ * Setup fills the engine's whole wait for the kick (regardless of pace, so nothing freezes): the taker brings the ball
+ * to the spot (0–20 %), walks six back (20–45 %) and settles with a breathing sway; the keeper bounces on his line;
+ * the referee jogs in from twelve away to six beside the spot. Same geometry in-match and in shootouts.
+ */
+function setupScene(e: MatchEvent, prevBall: Pt): Scene {
   const side = (e.side || "home") as Side;
   const def = other(side);
   const g = geomSide(e, side);
   const spot: Pt = [goalX(g) + toward(g, -11), GOAL_Y];
   const gk = keeperSpot(other(g));
-  const back: Pt = clampPt([spot[0] - toward(g, 5), spot[1] + 2]);
+  const back: Pt = clampPt([spot[0] - toward(g, 6), spot[1] + 2]);
+  const refFrom: Pt = clampPt([spot[0] - toward(g, 4), spot[1] - 12]);
+  const refTo: Pt = clampPt([spot[0] - toward(g, 2), spot[1] - 6]);
+  const place = (from: Pt, t: number) => lerp(from, spot, Math.min(1, t / 0.2));
   return {
     ...head(e),
-    ms: d(2600, 1800),
-    ball: [prevBall, spot, spot, spot], // taker brings the ball to the spot, places it, steps back
+    ms: e.t === "shootout_setup" ? 6000 : 5000, // matches balance.js shootoutRevealMs / penSetupMs: the kick event lands when this ends
+    ball: keys((t) => place(prevBall, t)),
     actors: [
-      { id: "taker", side, label: short(e.p), path: [clampPt(prevBall), spot, spot, back] },
-      { id: "gk", side: def, keeper: true, label: short(e.p2), path: [[gk[0], GOAL_Y - 1.5], [gk[0], GOAL_Y + 1.5], [gk[0], GOAL_Y - 1.5]] },
+      { id: "taker", side, label: short(e.p), path: keys((t) => (t < 0.2 ? place(clampPt(prevBall), t) : t < 0.45 ? lerp(spot, back, (t - 0.2) / 0.25) : [back[0], back[1] + 0.3 * Math.sin((2 * Math.PI * (t - 0.45)) / 0.2)])) },
+      { id: "gk", side: def, keeper: true, label: short(e.p2), path: keys((t) => [gk[0], GOAL_Y + 2 * Math.sin(2 * Math.PI * 4 * t)]) },
+      { id: "ref", side: "ref", path: keys((t) => lerp(refFrom, refTo, Math.min(1, t / 0.45))) },
     ],
     flash: "pen",
     cam: penCam(g),
