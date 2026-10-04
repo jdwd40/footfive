@@ -105,6 +105,14 @@ describe("highlight scenes agree with the simulation", () => {
       expect(hit[1] === 0 || hit[1] === 64 || hit[0] === 0 || hit[0] === 100).toBe(true);
     }
   });
+
+  it("every live minute carries at least two on-pitch events", () => {
+    for (const m of matches) {
+      const byMin = new Map<number, number>();
+      for (const e of m) if (e.ball && ["first_half", "second_half"].includes(e.st.ph)) byMin.set(e.min, (byMin.get(e.min) || 0) + 1);
+      for (let min = 2; min <= 44; min++) expect(byMin.get(min) || 0, `minute ${min}`).toBeGreaterThanOrEqual(2);
+    }
+  });
 });
 
 describe("bounded live queue", () => {

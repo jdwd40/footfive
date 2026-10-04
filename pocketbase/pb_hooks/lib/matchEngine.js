@@ -417,28 +417,41 @@ function playMinute(st, out) {
   if (rnd(st) < M.foulRate * foulMul) foulEvent(st, out, ctx, OTHER[side]);
 
   var c = chanceModel(st, side);
-  if (rnd(st) < c.pSeq) {
-    attack(st, out, ctx, side, c);
-  } else if (rnd(st) < 0.35) {
-    var p = attacker(st, side);
-    var from = st.ball;
-    st.ball = pos(side, 30 + rnd(st) * 25, 12 + rnd(st) * 40);
-    emit(st, out, ctx.at(0.5), "possession", {
-      side: side,
-      p: p.name,
-      from: from,
-      ball: st.ball,
-      text: pick(st, [
-        tname(st, side) + " keep the ball in midfield",
-        p.name + " recycles possession for " + abbr(st, side),
-        tname(st, side) + " probe patiently",
-      ]),
-      clk: ctx.clk(0.5),
-    });
-  }
+  if (rnd(st) < c.pSeq) attack(st, out, ctx, side, c);
+  else midfield(st, out, ctx, side);
 
   st.nextAt = ctx.t0 + ctx.dur + ctx.pause;
   if (PERIOD_END[st.phase] === ctx.m) periodEnd(st, out);
+}
+
+/** Off-ball minute: 2–3 passes, maybe lost to a tackle. Keeps the pitch alive between attacks. */
+function midfield(st, out, ctx, side) {
+  var f = 0.1 + rnd(st) * 0.1;
+  var last = attacker(st, side);
+  var n = 2 + (rnd(st) < 0.5 ? 1 : 0);
+  for (var i = 0; i < n; i++) {
+    var recv = attacker(st, side, last);
+    var from = st.ball;
+    st.ball = pos(side, 25 + rnd(st) * 30, 8 + rnd(st) * 48);
+    emit(st, out, ctx.at(f), "pass", {
+      side: side,
+      p: last.name,
+      p2: recv.name,
+      from: from,
+      ball: st.ball,
+      text: pick(st, [last.name + " to " + recv.name, last.name + " knocks it to " + recv.name, recv.name + " takes it off " + last.name]),
+      clk: ctx.clk(f),
+    });
+    last = recv;
+    f += 0.22;
+  }
+  if (rnd(st) < 0.4) {
+    var d = defender(st, OTHER[side]);
+    var from2 = st.ball;
+    st.ball = pos(OTHER[side], 30 + rnd(st) * 20, clamp(st.ball[1] + (rnd(st) - 0.5) * 16, 6, 58));
+    emit(st, out, ctx.at(f), "tackle", { side: OTHER[side], p: d.name, p2: last.name, from: from2, ball: st.ball, text: d.name + " wins it back for " + abbr(st, OTHER[side]), clk: ctx.clk(f) });
+    st.counter = OTHER[side];
+  }
 }
 
 function foulEvent(st, out, ctx, side) {
@@ -520,7 +533,7 @@ function attack(st, out, ctx, side, c) {
   });
 
   var last = passer;
-  var passes = 1 + Math.floor(rnd(st) * 2);
+  var passes = 2 + Math.floor(rnd(st) * 2);
   for (var i = 0; i < passes; i++) {
     f += STEP;
     var back = i > 0 && rnd(st) < 0.4 && passer.name !== last.name;
