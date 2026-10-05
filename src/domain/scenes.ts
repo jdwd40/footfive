@@ -154,12 +154,14 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const recv = ball;
       const run = e.t === "dribble";
       const markerStart = clampPt([recv[0] + toward(atk, 6) + jit(s, 2, 3), recv[1] + jit(s, 3, 7)]);
-      // The engine says this side took the ball off the other team (`turn`), and the ball was left deep in their half:
-      // nobody in this shirt is there to pass from. The opponent on it (the keeper inside his box) launches it clear, the
-      // named passer collects it in midfield and moves it on. Same engine positions, no teleport, no attacker in the keeper's hands.
+      // The ball was left deep in a box and nobody in the passer's shirt is on it: the engine leaves it with the keeper (or
+      // blocker) after a failed attack. Either the other team took it there (`turn`, the opponent on it launches it clear) or
+      // the passer's own keeper is holding it (same side regains, `from` inside his own box) and distributes. The named passer
+      // collects it in midfield and moves it on. Same engine positions, no teleport, no attacker in the keeper's hands.
       const backward = !!e.turn && toward(atk, recv[0] - passer[0]) < -12;
-      if (backward) {
-        const inBox = toward(atk, passer[0] - goalX(atk)) >= -15;
+      const ownBox = !e.turn && toward(atk, passer[0] - goalX(def)) <= 15;
+      if (backward || ownBox) {
+        const inBox = ownBox || toward(atk, passer[0] - goalX(atk)) >= -15;
         const mid = lerp(passer, recv, 0.55);
         return {
           ...base,
@@ -167,7 +169,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           ball: [passer, lerp(passer, mid, 0.5), mid, recv],
           ballHeight: [0, 0.7, 0, 0],
           actors: [
-            { id: "clear", side: def, keeper: inBox, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
+            { id: "clear", side: ownBox ? atk : def, keeper: inBox, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
             { id: "p", side: atk, label: short(e.p), path: [clampPt([mid[0] - toward(atk, 3), mid[1] + 2]), clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
             { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] },
             { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },

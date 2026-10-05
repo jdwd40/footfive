@@ -388,6 +388,25 @@ describe("highlight scenes agree with the simulation", () => {
     expect(plain).toBeGreaterThan(50);
   });
 
+  it("the saving side's own distribution starts from the keeper's hands: his keeper launches it, never an outfielder standing on him", () => {
+    let n = 0;
+    for (const e of all) {
+      if ((e.t !== "build_up" && e.t !== "pass") || e.turn || !e.from) continue;
+      const own = e.side === "home" ? e.from[0] : 100 - e.from[0]; // distance of the ball from the passing side's own goal line
+      if (own > 15) continue;
+      n++;
+      const s = sceneFor(e, e.from as Pt, 15000)!;
+      const clear = s.actors.find((a) => a.id === "clear");
+      expect(clear, `${e.t} #${e.seq}`).toBeTruthy();
+      expect(clear!.side).toBe(e.side);
+      expect(!!clear!.keeper).toBe(true);
+      expect(clear!.path[0]).toEqual(e.from);
+      for (const a of s.actors) if (a !== clear && a.side === e.side) expect(Math.hypot(a.path[0][0] - e.from[0], a.path[0][1] - e.from[1]), `${e.t} #${e.seq} ${a.id}`).toBeGreaterThan(3);
+      expect(end(s)).toEqual(e.ball);
+    }
+    expect(n).toBeGreaterThan(50);
+  });
+
   it("dribbles stay short enough to carry; a long progression is a through ball to the build-up starter (no extra RNG, so other seeds are untouched)", () => {
     const runs = all.filter((e) => e.t === "dribble");
     expect(runs.length).toBeGreaterThan(20);
