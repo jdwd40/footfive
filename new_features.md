@@ -1,5 +1,12 @@
 # Features
 
+## Completed — 2026-10-05 live polish
+
+- [x] Concrete outcome badges (WIDE / OVER / BLOCKED / SAVED! / WOODWORK / PENALTY) tied to the engine result
+- [x] On-pitch HUD: score, clock, shootout PENS and kicking team, visible with the pitch on desktop, laptop and mobile
+- [x] Possession hand-offs rendered (keeper gathers, blocker collects, clearances after turnovers)
+- [x] Live-watch QA harness (`scripts/live-watch.mjs`) for real fixtures and labelled offline-engine replays
+
 ## Completed — Prompt 7 (RC)
 
 - [x] GitHub Actions CI (unit, API e2e, Playwright container)
