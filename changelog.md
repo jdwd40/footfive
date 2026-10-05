@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-05 — Pitch/ends follow-up (implemented; not shipped)
+
+- Modestly larger responsive pitch from 360px upwards; tiny compact pitch retained. Compact actual ticker/scoreboard and completed winner/auto-return chrome keep the pitch, critical HUD and commentary usable in tested scenes without shrinking the enlargement. Below 360px, only after the shown winner, the duplicate external score row is omitted; normal score, FT and PENS remain in the pitch HUD. Detailed shootout board may still require scrolling.
+- Deterministic display-only end changes from each event's phase snapshot: home attacks right in first half/ET1, left in second half/ET2; away attacks the opposite end. Breaks keep outgoing ends while the presentation ball eases to centre during the existing six-second walk-off, avoiding off-centre reflection jumps. Shootout intro/setup/alternating kicks/results stay at one left end; ball, players, referee and camera align, numbers are not mirrored. Canonical engine coordinates/events, outcomes and RNG unchanged.
+- Equal base radius 1.45/stroke 0.3 for outfielders, both keepers and referee (supersedes the earlier referee radius 1.15). At most one ring, only for the semantic carrier at smoothed rendered contact (distance ≤1.6, lift <0.05); grounded/airborne free-flight is unmarked, event participation alone never qualifies. Fast dribble/striker contact gaps can suppress the ring; continuous highlighting is not promised.
+- Latest independent wave2 QA PASS on code HEAD `2f0dfdc3016c945fde450723321b721dae13e10a`, superseding the initial and wave1 FAIL reports. All five matching gates exit 0: 19 files/195 unit tests; typecheck; lint 0 errors/6 existing warnings; build 70 modules; API 21 passed/0 failed, browser 64 scheduled/62 passed/2 skipped.
+- Bounded Chromium evidence: 15 fresh normal/setup/completed scenes across 320x568, 390x844, 768x1024, 1280x720 and 1440x900; completed pixels inspected at all five. Fresh ending sequence: 2,381 rendered samples; additional carrier/penalty spot: 330 numeric-only samples (pixels not inspected). Unchanged-motion evidence explicitly reused from wave1: nine targeted scenarios/1,606 samples and three continuity cases/741 samples, not fresh reruns. All 18 hook JS files byte-identical to base; verified 200-seed/78,776-event manifest reused, pinned outcomes/RNG regression rerun in the unit gate.
+- Human preview feel and final Grok4.6 Low code+docs review remain pending; no exhaustive feel, arbitrary text fit or cross-browser approval. Pre-existing clock rewind and period-banner edge clamping unchanged. Evidence: run `20261005-171152-a7bc06`, `qa-wave2-result.md` and `evidence/qa-wave2-gates/results.json` outside git.
+
+---
+
 ## 2026-10-05 — Live match polish
 
 - Failed attacks show what happened (WIDE / OVER / BLOCKED / SAVED! / WOODWORK badges) instead of a generic NO GOAL; badge and commentary read the same engine outcome.

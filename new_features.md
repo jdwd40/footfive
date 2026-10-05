@@ -1,5 +1,13 @@
 # Features
 
+## Implemented — 2026-10-05 pitch/ends follow-up (bounded independent QA PASS; not shipped)
+
+- [x] Modestly larger responsive pitch except tiny views; compact actual ticker/scoreboard/completed chrome keeps critical HUD and commentary usable at the five tested viewports; detailed shootout board may scroll
+- [x] Event-snapshot display-only half/ET end changes with centred break-ball continuity and one coherent shootout end; engine coordinates, events, outcomes and RNG unchanged
+- [x] Equal actor base radius 1.45/stroke 0.3, including both keepers and referee
+- [x] Carrier-only ring at actual smoothed rendered possession contact; free-flight unmarked, no participant-only rings; fast dribble/striker contact gaps may suppress the ring
+- [ ] Human preview feel approval and final Grok4.6 Low code+docs review (automated/bounded pixel QA does not replace these)
+
 ## Completed — 2026-10-05 live polish
 
 - [x] Concrete outcome badges (WIDE / OVER / BLOCKED / SAVED! / WOODWORK / PENALTY) tied to the engine result

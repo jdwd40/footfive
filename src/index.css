@@ -287,6 +287,39 @@ h3,
   display: none;
 }
 
+/* Reclaim insets only beyond very-small phones. Keep score/clock readable and
+   trade desktop scoreboard padding for pitch height, not a different camera aspect. */
+.match-page > [aria-label="Other matches"] { margin-bottom: 4px; }
+.match-page > [data-testid="ticker"] > div > .flex-1 { padding-block: 2px; }
+.match-page [data-testid="match-scoreboard"] > :first-child { padding-block: 2px; }
+.match-score-row { padding-block: 4px; }
+/* Put clock and penalties beside the score, rather than adding two chrome rows. */
+.match-score-row > .text-center { display: grid; grid-template-columns: auto auto; align-items: center; column-gap: 8px; }
+.match-score-row [data-testid="match-score"] { grid-row: 1 / span 2; }
+.match-score-row > .text-center > :not([data-testid="match-score"]) { margin-top: 0; }
+.match-score-row > .text-center > :nth-child(2) { display: flex; align-items: center; }
+.match-score-row > .text-center > :nth-child(2) > span { line-height: 1.2; }
+.match-page > .grid { margin-top: 8px; }
+/* Final chrome must fit without taking height from the pitch. */
+.match-page [data-testid="final-result"] { padding-block: 2px; }
+.match-page > div:has(> [data-testid="auto-return"]) { margin-top: 0; line-height: 1; }
+@media (max-width: 359px) {
+  /* The pitch HUD already carries the final score, clock and penalties. */
+  .match-page [data-testid="match-scoreboard"]:has([data-testid="final-result"]) .match-score-row { display: none; }
+  .match-page:has([data-testid="final-result"]) [aria-label="Highlights"] { position: absolute; top: 8px; right: 8px; }
+}
+@media (min-width: 360px) {
+  .match-page { margin-inline: -4px; --pitch-chrome: 328px; }
+  .match-pitch-panel { padding: 4px; }
+}
+@media (min-width: 640px) {
+  .match-pitch-panel { padding: 8px; }
+}
+@media (min-width: 1024px) {
+  .match-score-row { padding-block: 2px; }
+  .match-score-row [data-testid="match-score"] { font-size: 40px; }
+}
+
 main {
   overflow-x: clip;
 }

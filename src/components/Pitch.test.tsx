@@ -15,7 +15,7 @@ describe("Pitch penalty camera and shootout reveal", () => {
     expect(svg.getAttribute("viewBox")).toBe("63 16 50 32");
     const box = screen.getByTestId("pitch") as HTMLElement;
     expect(box.style.aspectRatio.replace(/\s/g, "")).toBe("108/77"); // the box carries the ratio (and a viewport height cap); the svg fills it
-    expect(box.style.maxWidth).toContain("100vh - 360px");
+    expect(box.style.maxWidth).toContain("100vh - var(--pitch-chrome, 360px)");
     expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
     expect(svg.className.baseVal).toContain("h-full");
   });
@@ -38,17 +38,19 @@ describe("Pitch kits and numbers", () => {
     { side: "home", name: "Gus Glove", no: 1, gk: true, x: 4, y: 32, hot: false },
     { side: "away", name: "Bo Bell", no: 9, gk: false, x: 70, y: 30, hot: false },
   ];
-  it("shows shirt numbers, never names; hot players get the ring", () => {
-    const { container } = render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
+  it("shows shirt numbers, never names; only the actual carrier gets the ring", () => {
+    const { container } = render(<Pitch frame={frame({ players, ball: [30, 30], carrier: "home:7" })} home={home} away={away} revealed />);
     const nodes = screen.getAllByTestId("player");
     expect(nodes.map((n) => n.textContent)).toEqual(["7", "1", "9"]);
     expect(container.textContent).not.toContain("Ann");
     expect(nodes[0].querySelector("[data-ring]")).toBeTruthy();
     expect(nodes[2].querySelector("[data-ring]")).toBeNull();
   });
-  it("every player is the same size (r 1.45) — hot player and keeper included; only the ring and the lime fill mark them out", () => {
+  it("every actor has the same radius and stroke — carrier, both keepers, away players and referee included", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
-    for (const n of screen.getAllByTestId("player")) expect(n.querySelector("[data-kit]")!.getAttribute("r")).toBe("1.45");
+    const actors = [...screen.getAllByTestId("player").map(n => n.querySelector("[data-kit]")!), screen.getByTestId("ref")];
+    expect(actors.map(n => n.getAttribute("r"))).toEqual(actors.map(() => "1.45"));
+    expect(actors.map(n => n.getAttribute("stroke-width"))).toEqual(actors.map(() => "0.3"));
   });
   it("home is filled in the team colour, away is white with a team-colour ring, keeper keeps lime plus the ring", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
@@ -59,12 +61,12 @@ describe("Pitch kits and numbers", () => {
     expect(kit(1).getAttribute("fill")).toBe("#c6ff00");
     expect(kit(1).getAttribute("stroke")).toBe("#00f0ff");
   });
-  it("always draws the referee as a small yellow circle with a black stroke", () => {
+  it("always draws the referee as an equal-sized yellow circle with a black stroke", () => {
     render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
     const ref = screen.getByTestId("ref");
     expect(ref.getAttribute("cx")).toBe("40");
     expect(ref.getAttribute("cy")).toBe("20");
-    expect(ref.getAttribute("r")).toBe("1.15");
+    expect(ref.getAttribute("r")).toBe("1.45");
     expect(ref.getAttribute("stroke")).toBe("#000");
   });
   it("has a kit legend with both abbreviations", () => {

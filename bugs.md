@@ -2,7 +2,14 @@
 
 ## Open
 
-None release-blocking.
+No blocker in the latest bounded pitch/ends QA; final review and human preview feel remain pending.
+
+## Fixed — 2026-10-05 pitch/ends follow-up (independent QA PASS; not shipped)
+
+- Actual ticker/shootout chrome clipped the pitch/commentary; completed winner/auto-return added a further clipping case — compacted that chrome without shrinking the enlarged pitch. Normal, setup and completed scenes pass at 320x568, 390x844, 768x1024, 1280x720 and 1440x900 for the tested actual-engine inputs, not every arbitrary text/browser combination.
+- Teams kept canonical ends on screen — event-snapshot display projection now swaps halves and ET halves, with one coherent shootout end. Off-centre ET switches initially teleported the ball — presentation ball now eases to centre during the existing break walk-off before reflection; engine coordinates/events/RNG unchanged.
+- Referee smaller than players, keeper/away strokes heavier — every actor now has base radius 1.45/stroke 0.3.
+- Named event participants received rings without possession — only the semantic carrier at rendered grounded contact gets a ring; free-flight and uncollected receivers remain unmarked.
 
 ## Fixed — 2026-10-05 live polish
 
@@ -32,7 +39,9 @@ None release-blocking.
 
 - Optional Firefox E2E (`E2E_FIREFOX=1`) not in default CI.
 - Pre-existing (2026-10-04 engine): displayed clock can rewind a few seconds after a bounce / save / block / card / goal because the result hold is not folded into the next event's `clk.s` (`matchEngine.js` `Ctx.prototype.s`). Parked, not touched by the live polish branch.
-- Mobile (390 px) HUD covers ~40% of the pitch width top-left; text readable, ball/goal/ref not obscured. Feel item for JD.
+- Carrier/contact limitation: fast dribble or striker smoothing can leave the ball ahead of the actor and correctly suppress the ring; no continuous-highlight guarantee.
+- Detailed shootout board and expanded ticker may require scrolling; compact critical HUD remains visible in the tested scenes. Laptop/desktop completed commentary has only ~6px spare margin; broader text/browser coverage is not certified.
+- Human preview feel remains pending (including HUD footprint and existing period-banner edge clamping); automated/bounded pixel QA is not exhaustive feel approval.
 - Production world may still use `pace=dev` from first install — operator can set `normal` via admin when desired (does not alter live scores).
 
 ## Fixed in Phase 10
