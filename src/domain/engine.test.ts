@@ -297,16 +297,17 @@ describe("market rules", () => {
 describe("authoritative outcomes are pinned to the pre-polish engine (base 33dc1b8)", () => {
   // The live polish only adds possession bookkeeping (`bs`/`turn`) and period ball resets; it must not change
   // who shoots, what the RNG draws, or who wins. Same probe as the reviewer's rng-probe: 200 seeds (1000..1199),
-  // event tuples (seq/at/type/actors/score/shootout) plus final state and RNG draw count, SHA-256 of the JSON manifest.
+  // event tuples (seq/at/type/actors/score/shootout) plus final state (`score`, `winner`, `by`, `so`) and RNG draw
+  // count (`rc`), SHA-256 of the JSON manifest.
   // The pin was generated from the base engine compiled straight from `git show 33dc1b8:pocketbase/pb_hooks/lib/matchEngine.js`
   // (78,776 events) — pinned as a constant so the test runs on shallow clones and source archives with no git history.
-  const BASE_SHA256 = "e3110e7c6f54b0fd59dde26eabf6ee9939912a3be0d6359fa3bb15599b19ddee";
+  const BASE_SHA256 = "cf385510aa429a37077f5dc8e0b8f1fd4c79657f8ce35184e9c2dab9d94333f1";
   const liveTiming = eng.buildTiming(8000, 1);
-  type Final = { sc: [number, number]; win: string | null; by: string | null; so: unknown; rc: number };
+  type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
   const run = (seed: number) => {
     const st = eng.createMatch({ fixtureId: "f" + seed, seed, kickoffAt: 0, home: team(seed % 16), away: team((seed * 7 + 3) % 16), timing: liveTiming });
     const events = eng.advanceTo(st, 1e13) as Array<Ev & { p?: string; p2?: string }>;
-    const final: Final = { sc: st.sc, win: st.win, by: st.by, so: st.so, rc: st.rc };
+    const final: Final = { score: st.score, winner: st.winner, by: st.by, so: st.so, rc: st.rc };
     return { tuples: events.map((x) => [x.seq, x.at, x.t, x.p, x.p2, x.st.sc, x.st.so]), final };
   };
 
