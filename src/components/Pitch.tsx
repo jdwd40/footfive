@@ -25,7 +25,13 @@ const BADGE: Record<string, string> = { goal: "GOAL!", save: "SAVED!", wood: "WO
 export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
-  const ball = frame?.ball ?? ([50, 32] as [number, number]);
+  // Project only at the drawing boundary. Smoothing, startBall and impact/reveal all stay canonical.
+  // Breaks retain the outgoing end; ET starts right, ET2 left; every shootout kick stays at the left end.
+  const flip = !!frame?.phase && ["second_half", "et_break", "extra_time_2", "shootout", "finished"].includes(frame.phase);
+  const x = (v: number) => flip ? W - v : v;
+  const cam = frame?.cam ?? FULL_CAM;
+  const viewBox = [flip ? W - cam[0] - cam[2] : cam[0], ...cam.slice(1)];
+  const ball = [x(frame?.ball[0] ?? 50), frame?.ball[1] ?? 32];
   const lift = frame?.lift ?? 0;
   const flash = frame && revealed ? frame.flash : null;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
@@ -77,9 +83,9 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           <i className="inline-block h-2.5 w-2.5 rounded-full bg-[#f4f7ff]" style={{ boxShadow: `0 0 0 2px ${ac}` }} /> {away.abbreviation}
         </span>
       </div>
-      {/* Sized by the full-pitch aspect but never taller than the viewport minus the chrome above it (~360 px: nav, switcher, ticker, scoreboard), so the pitch, its HUD and the commentary line share the screen on a laptop; never under 260 px wide. */}
-      <div className="relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: `max(260px, calc((100vh - 360px) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))` }} data-testid="pitch">
-        <svg viewBox={(frame?.cam ?? FULL_CAM).join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
+      {/* Keep the camera aspect stable. Responsive chrome/insets live in CSS; tiny screens retain the old cap. */}
+      <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: `max(260px, calc((100vh - var(--pitch-chrome, 360px)) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))` }} data-testid="pitch">
+        <svg viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
             <rect width="6.25" height={H} fill="#0f3a22" />
@@ -113,10 +119,10 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           const isAway = p.side === "away";
           const r = R;
           return (
-            <g key={`${p.side}-${p.name}`} transform={`translate(${p.x} ${p.y})`} data-testid="player">
+            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x)} ${p.y})`} data-testid="player">
               <ellipse cx={0} cy={r} rx={r} ry={0.6} fill="rgba(0,0,0,0.35)" />
-              {p.hot ? <circle r={r + 0.7} fill="none" stroke="#fff" strokeWidth={0.5} data-ring /> : null}
-              <circle r={r} fill={p.gk ? "#c6ff00" : isAway ? "#f4f7ff" : c} stroke={p.gk || isAway ? c : "rgba(255,255,255,0.7)"} strokeWidth={isAway || p.gk ? 0.9 : 0.3} data-kit />
+              {frame.carrier === p.side + ":" + p.no && lift < 0.05 && Math.hypot(p.x - frame.ball[0], p.y - frame.ball[1]) <= 1.6 ? <circle r={r + 0.7} fill="none" stroke="#fff" strokeWidth={0.5} data-ring /> : null}
+              <circle r={r} fill={p.gk ? "#c6ff00" : isAway ? "#f4f7ff" : c} stroke={p.gk || isAway ? c : "rgba(255,255,255,0.7)"} strokeWidth={0.3} data-kit />
               <text y={r * 0.42} textAnchor="middle" fontWeight={700} fill={p.gk || isAway ? "#0b1404" : "#fff"} fontSize={r * 1.1}>
                 {p.no}
               </text>
@@ -124,7 +130,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           );
         })}
 
-        {frame ? <circle cx={frame.ref[0]} cy={frame.ref[1]} r={1.15} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-testid="ref" /> : null}
+        {frame ? <circle cx={x(frame.ref[0])} cy={frame.ref[1]} r={R} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-testid="ref" /> : null}
 
         {/* ball: shadow on the ground, ball lifted by height */}
         <ellipse cx={ball[0]} cy={ball[1] + 0.9} rx={0.9} ry={0.35} fill="rgba(0,0,0,0.45)" />

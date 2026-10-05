@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -75,6 +75,27 @@ const DWELL_CYCLE = 3000; // ms between lay-offs
 const DWELL_PASS = 450; // ms the lay-off takes
 const DWELL_LANE = 6; // lateral gap between the two lanes
 
+/** Possession choreography, separate from hot (actor binding). Ground passes are free flight too.
+ * These windows only nominate an actor; Pitch checks the smoothed ball is actually at that player.
+ */
+function carrierActor(scene: Scene, t: number): string | null {
+  switch (scene.type) {
+    case "build_up": case "pass": case "through_ball": case "cross": case "dribble":
+      if (scene.actors.some(a => a.id === "clear")) return t <= 0.02 ? "clear" : t >= 0.97 ? "r" : t >= 0.64 && t <= 0.7 ? "p" : null;
+      return scene.type === "dribble" ? "p" : t <= 0.08 ? "p" : t >= 0.97 ? "r" : null;
+    case "tackle": case "interception": return t >= 0.5 ? "win" : t <= 0.08 ? "lost" : null;
+    case "save": return t >= 2 / 3 ? "gk" : null;
+    case "block": return t >= 0.5 ? "b" : null;
+    case "woodwork": return t >= 0.97 ? "gk" : null;
+    case "bounce": return t >= 0.8 ? "c" : null;
+    case "shot": return t >= 0.5 ? "s" : null;
+    case "restart": return "w";
+    case "penalty_setup": case "shootout_setup": return t < 0.2 ? "taker" : null;
+    case "penalty_goal": case "penalty_saved": case "penalty_missed": case "penalty_woodwork": case "shootout_kick": return t >= 0.43 && t <= 0.5 ? "taker" : null;
+    default: return null;
+  }
+}
+
 /**
  * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
  * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 2.5 s.
@@ -87,6 +108,9 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     const q = players.find((p) => p.side + ":" + p.no === bind[a.id] && !p.hot);
     if (q) place(q, a, t);
   }
+  const actor = scene.actors.find(a => a.id === carrierActor(scene, t));
+  const owner = actor && players.find(p => p.side === actor.side && (actor.keeper ? p.gk : actor.label ? short(p.name) === actor.label : p.side + ":" + p.no === bind[actor.id]));
+  let carrier = owner ? owner.side + ":" + owner.no : null;
   const over = Math.max(0, t - 1) * scene.ms;
   if (over > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
     // Dwell: two lanes advance at DWELL_SPEED until the next event, turning 12 short of either goal line (never retreating
@@ -109,6 +133,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     const weaveY = clamp(b[1] + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
     if (a) Object.assign(a, { x: clamp(onA ? ball[0] - mdir * 0.8 : x - mdir * 2.5, 0, 100), y: onA ? ball[1] : weaveY, hot: onA });
     if (m) Object.assign(m, { x: clamp(onA ? x + mdir * 2 : ball[0] - mdir * 0.8, 0, 100), y: onA ? laneY : ball[1], hot: !onA });
+    const holder = onA ? a : m;
+    carrier = cyc < DWELL_CYCLE - DWELL_PASS && holder ? holder.side + ":" + holder.no : null;
     const marker = players.filter((p) => p.side !== scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - ball[0], p.y - ball[1]) - Math.hypot(q.x - ball[0], q.y - ball[1]))[0];
     if (marker) {
       const k = Math.min(1, over / 1500); // closes down over the first 1.5 s, then tracks four in front of the ball
@@ -155,7 +181,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPt = [86, 19]; // beside the box, where setupScene / penaltyScene keep him (penRefSpot("home"))
     if (t < 0.7) cam = FULL_CAM;
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */

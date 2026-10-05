@@ -19,6 +19,7 @@ export type Scene = {
   key: string;
   seq: number;
   type: string;
+  phase?: string; // this event's snapshot, never the latest fixture or wall clock
   ms: number;
   ball: Pt[]; // keyframes over the scene (evenly spaced)
   ballHeight?: number[]; // optional lift per keyframe (0..1), for chips/crosses/headers
@@ -100,7 +101,7 @@ function pace(minuteMs: number) {
 /** Fields every scene copies from its event. */
 function head(e: MatchEvent) {
   const so = e.st?.so;
-  return { key: `${e.seq}`, seq: e.seq, type: e.t, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick, pens: so ? ([so.h, so.a] as [number, number]) : undefined, by: e.st?.by };
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, phase: e.st?.ph, caption: e.text, flash: null as Scene["flash"], side: e.side ?? null, who: e.p, score: e.st?.sc, kick: e.kick, pens: so ? ([so.h, so.a] as [number, number]) : undefined, by: e.st?.by };
 }
 
 /**

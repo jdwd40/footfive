@@ -42,7 +42,7 @@ function usePref(): [Pref, (p: Pref) => void, boolean] {
 
 /** Period markers, coaching, ...: ball held where it was, caption only. */
 function idleScene(e: MatchEvent, ball: Pt): Scene {
-  return { key: `${e.seq}`, seq: e.seq, type: e.t, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
+  return { key: `${e.seq}`, seq: e.seq, type: e.t, phase: e.st?.ph, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
@@ -241,6 +241,7 @@ export default function MatchPage() {
 
   return (
     <Layout wide>
+      <div className="match-page">
       <div className="mb-2 flex items-center gap-2 overflow-x-auto no-scrollbar" aria-label="Other matches">
         <Link to="/live" className="btn-ghost !min-h-9 shrink-0 !px-3 !py-1 text-xs">
           ← Round
@@ -266,7 +267,7 @@ export default function MatchPage() {
 
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-3">
-          <section className="panel p-2 sm:p-3">
+          <section className="match-pitch-panel panel p-2 sm:p-3">
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
@@ -316,6 +317,7 @@ export default function MatchPage() {
           {view.lineups ? <Lineups view={view} sentOff={liveSentOff} /> : null}
         </aside>
       </div>
+      </div>
     </Layout>
   );
 }
@@ -360,7 +362,7 @@ function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale:
           <PhaseChip fx={fx} now={now} />
         </div>
       </div>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 sm:gap-4 sm:px-5">
+      <div className="match-score-row grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 sm:gap-4 sm:px-5">
         <TeamLabel team={fx.home} compact className={`text-base sm:text-xl ${winner === "away" ? "opacity-50" : ""}`} align="right" />
         <div className="text-center">
           {st ? (
