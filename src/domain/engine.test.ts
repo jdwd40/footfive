@@ -1,8 +1,10 @@
 /**
  * Engine v2, odds and market rules — run against the real PocketBase hook modules.
  */
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -290,6 +292,36 @@ describe("market rules", () => {
     expect(mkt.fixtureState(fx, { ph: "second_half", d: 1 }, 1).closed).toBeTruthy();
     expect(mkt.fixtureState(fx, { ph: "second_half", d: 0 }, 1).closed).toBe(null);
     expect(mkt.fixtureState(fx, { ph: "shootout", d: 1 }, 1).closed).toBeTruthy();
+  });
+});
+
+describe("authoritative outcomes are pinned to the pre-polish engine (base 33dc1b8)", () => {
+  // The live polish only adds possession bookkeeping (`bs`/`turn`) and period ball resets; it must not change
+  // who shoots, what the RNG draws, or who wins. Same probe as the reviewer's rng-probe: 200 seeds against the
+  // base engine compiled straight from git, comparing the event tuples and the final state/RNG draw count.
+  const baseSrc = execFileSync("git", ["show", "33dc1b8:pocketbase/pb_hooks/lib/matchEngine.js"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" });
+  const base = (() => {
+    const ctx = { require: createRequire(path.resolve(__dirname, "../../pocketbase/pb_hooks/lib/matchEngine.js")), module: { exports: {} as Record<string, unknown> } };
+    vm.runInNewContext(baseSrc, ctx);
+    return ctx.module.exports as typeof eng;
+  })();
+  const liveTiming = eng.buildTiming(8000, 1);
+  type Final = { sc: [number, number]; win: string | null; by: string | null; so: unknown; rc: number };
+  const run = (e: typeof eng, seed: number) => {
+    const st = e.createMatch({ fixtureId: "f" + seed, seed, kickoffAt: 0, home: team(seed % 16), away: team((seed * 7 + 3) % 16), timing: liveTiming });
+    const events = e.advanceTo(st, 1e13) as Array<Ev & { p?: string; p2?: string }>;
+    const final: Final = { sc: st.sc, win: st.win, by: st.by, so: st.so, rc: st.rc };
+    return { tuples: events.map((x) => [x.seq, x.at, x.t, x.p, x.p2, x.st.sc, x.st.so]), final };
+  };
+
+  it("200 seeds: identical event tuples, final state and RNG draw count", () => {
+    const diff: number[] = [];
+    for (let seed = 1000; seed < 1200; seed++) {
+      const a = run(base, seed);
+      const b = run(eng, seed);
+      if (JSON.stringify(a) !== JSON.stringify(b)) diff.push(seed);
+    }
+    expect(diff, "seeds whose authoritative outcome differs from base 33dc1b8").toEqual([]);
   });
 });
 

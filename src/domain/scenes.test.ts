@@ -407,12 +407,21 @@ describe("highlight scenes agree with the simulation", () => {
     expect(n).toBeGreaterThan(50);
   });
 
-  it("dribbles stay short enough to carry; a long progression is a through ball to the build-up starter (no extra RNG, so other seeds are untouched)", () => {
+  it("long dribbles are carried as authored by the engine (no client or engine re-routing): the carrier runs the whole progression with the ball", () => {
+    // The engine's progression distances are base behaviour (pinned seed-for-seed in engine.test.ts); pace is a client
+    // concern, so a long carry must still be the same player taking the ball from `from` to `ball`, not a through ball.
     const runs = all.filter((e) => e.t === "dribble");
     expect(runs.length).toBeGreaterThan(20);
-    for (const e of runs) expect(Math.hypot(e.ball![0] - e.from![0], e.ball![1] - e.from![1]), `dribble #${e.seq}`).toBeLessThanOrEqual(24);
-    const long = all.filter((e) => e.t === "through_ball" && Math.hypot(e.ball![0] - e.from![0], e.ball![1] - e.from![1]) > 24);
-    expect(long.length).toBeGreaterThan(20);
+    const long = runs.filter((e) => Math.hypot(e.ball![0] - e.from![0], e.ball![1] - e.from![1]) > 24);
+    expect(long.length, "base engine produces carries over 24 units; this must not be converted away").toBeGreaterThan(0);
+    for (const e of long) {
+      expect(e.p2, `dribble #${e.seq}`).toBe(e.p);
+      const s = sceneFor(e, e.from as Pt, 15000)!;
+      const carrier = s.actors.find((a) => a.id === "p")!;
+      expect(carrier.path[0]).toEqual(e.from);
+      expect(carrier.path[carrier.path.length - 1]).toEqual(e.ball);
+      expect(end(s)).toEqual(e.ball);
+    }
   });
 
   it("a period restart kicks off from the centre: the first move of the half starts there, not where the last one died", () => {

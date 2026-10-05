@@ -552,7 +552,6 @@ function attack(st, out, ctx, side, c) {
   });
 
   var last = passer;
-  var before = passer; // who had it before `last` (the through-ball passer when a long carry is turned into a release)
   var passes = 2 + Math.floor(rnd(st) * 2);
   for (var i = 0; i < passes; i++) {
     f += STEP;
@@ -574,7 +573,6 @@ function attack(st, out, ctx, side, c) {
         : pick(st, [last.name + " finds " + recv.name, last.name + " slides it to " + recv.name, last.name + " plays it into " + recv.name]),
       clk: ctx.clk(f),
     });
-    before = last;
     last = recv;
   }
 
@@ -610,11 +608,6 @@ function attack(st, out, ctx, side, c) {
   x = outcome === "penalty" ? 86 + rnd(st) * 4 : 74 + rnd(st) * 10;
   y = kind === "cross" ? (y < 32 ? 5 + rnd(st) * 6 : 53 + rnd(st) * 6) : clamp(20 + rnd(st) * 24, 14, 50);
   ball = pos(side, x, y);
-  if (kind === "dribble" && Math.hypot(ball[0] - from3[0], ball[1] - from3[1]) > 24) {
-    // Too far to carry at a believable pace: the carrier releases a teammate instead (same positions, no extra RNG).
-    kind = "through_ball";
-    runner = before.name !== last.name ? before : passer;
-  }
   st.danger = true;
   emit(st, out, ctx.at(f), kind, {
     side: side,
