@@ -146,6 +146,7 @@ function createMatch(o) {
     stats: { home: emptyStats(), away: emptyStats() },
     possMin: [0, 0],
     ball: [50, 32],
+    bs: null, // side in possession of `ball` after the last event (null: nobody / a restart)
     counter: null,
     pending: {},
     danger: false,
@@ -431,6 +432,7 @@ function midfield(st, out, ctx, side) {
   var f = 0.1 + rnd(st) * 0.1;
   var last = attacker(st, side);
   var n = 2 + (rnd(st) < 0.5 ? 1 : 0);
+  var turn = takeBall(st, side);
   for (var i = 0; i < n; i++) {
     var recv = attacker(st, side, last);
     var from = st.ball;
@@ -441,6 +443,7 @@ function midfield(st, out, ctx, side) {
       p2: recv.name,
       from: from,
       ball: st.ball,
+      turn: i === 0 && turn ? 1 : undefined,
       text: pick(st, [last.name + " to " + recv.name, last.name + " knocks it to " + recv.name, recv.name + " takes it off " + last.name]),
       clk: ctx.clk(f),
     });
@@ -453,7 +456,15 @@ function midfield(st, out, ctx, side) {
     st.ball = pos(OTHER[side], 30 + rnd(st) * 20, clamp(st.ball[1] + (rnd(st) - 0.5) * 16, 6, 58));
     emit(st, out, ctx.at(f), "tackle", { side: OTHER[side], p: d.name, p2: last.name, from: from2, ball: st.ball, text: d.name + " wins it back for " + abbr(st, OTHER[side]), clk: ctx.clk(f) });
     st.counter = OTHER[side];
+    st.bs = OTHER[side];
   }
+}
+
+/** `side` starts a move: 1 when the other team had the ball (the first touch is a turnover the client can show), else 0. */
+function takeBall(st, side) {
+  var turn = st.bs && st.bs !== side ? 1 : 0;
+  st.bs = side;
+  return turn;
 }
 
 function foulEvent(st, out, ctx, side) {
@@ -523,16 +534,20 @@ function attack(st, out, ctx, side, c) {
   var x = st.counter === side ? 48 : 20 + rnd(st) * 18;
   var y = 12 + rnd(st) * 40;
   var ball = pos(side, x, y);
+  var turn = takeBall(st, side);
   emit(st, out, ctx.at(f), "build_up", {
     side: side,
     chain: chain,
     p: passer.name,
     from: st.ball,
     ball: ball,
+    turn: turn || undefined,
     text:
       st.counter === side
         ? tname(st, side) + " break quickly through " + passer.name
-        : pick(st, [tname(st, side) + " build from the back", passer.name + " collects for " + abbr(st, side), tname(st, side) + " work it forward"]),
+        : turn
+          ? pick(st, [tname(st, side) + " win it back through " + passer.name, passer.name + " collects for " + abbr(st, side), tname(st, side) + " come away with it"])
+          : pick(st, [tname(st, side) + " build from the back", passer.name + " collects for " + abbr(st, side), tname(st, side) + " work it forward"]),
     clk: ctx.clk(f),
   });
 
@@ -581,6 +596,7 @@ function attack(st, out, ctx, side, c) {
     });
     st.ball = ball;
     st.counter = def;
+    st.bs = def;
     return;
   }
 
@@ -678,6 +694,7 @@ function attack(st, out, ctx, side, c) {
   emit(st, out, ctx.at(f), outcome, res);
   ctx.pause += st.timing.resultHoldMs; // the save/miss/block is shown before play moves on (shifts the rest of the minute)
   st.ball = res.ball;
+  st.bs = def; // keeper / blocker / defender on the loose ball
   // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues. A miss always leaves the pitch.
   if (outcome === "miss" || (outcome === "block" && rnd(st) < 0.45)) bounce(st, out, ctx, f + 0.06, def, chain);
 }
@@ -688,6 +705,7 @@ function bounce(st, out, ctx, f, side, chain) {
   var hit = wall === "side" ? [clamp(st.ball[0] + Math.round((rnd(st) - 0.5) * 20), 2, 98), rnd(st) < 0.5 ? 0 : 64] : [px(OTHER[side], 100), clamp(st.ball[1] + Math.round((rnd(st) - 0.5) * 24), 4, 60)];
   var p = defender(st, side);
   st.ball = pos(side, 20 + rnd(st) * 20, 10 + rnd(st) * 44);
+  st.bs = side;
   emit(st, out, ctx.at(f), "bounce", {
     side: side,
     chain: chain,
@@ -731,6 +749,7 @@ function goal(st, out, ctx, f, side, scorer, gk, chain, target, pen) {
   ctx.pause += T.goalPauseMs;
   st.danger = false;
   st.ball = [50, 32];
+  st.bs = OTHER[side];
   st.counter = null;
   emit(st, out, t + T.goalPauseMs, "restart", {
     side: OTHER[side],
@@ -842,6 +861,7 @@ function penalty(st, out, ctx, side, fouled, f, chain) {
     clk: { s: s, run: 0 },
   });
   st.ball = [px(side, 95), 32];
+  st.bs = def;
   st.counter = def;
   st.danger = false;
   emit(st, out, resEv.at + T.penRestartMs, "restart", {
@@ -895,6 +915,8 @@ function periodEnd(st, out) {
 
 function resume(st, out, type, phase, s, text) {
   st.phase = phase;
+  st.ball = [50, 32]; // kick-off from the centre: the first move of the period starts there, not where the last one died
+  st.bs = null;
   emit(st, out, st.nextAt, type, { text: text, clk: { s: s, run: 1 } });
   st.nextAt += st.timing.kickoffHoldMs; // announcement + walk-on before the first play
 }
@@ -1036,6 +1058,7 @@ function step(st, out) {
   switch (st.phase) {
     case "pre":
       st.phase = "first_half";
+      st.bs = "home";
       emit(st, out, st.nextAt, "kickoff", {
         side: "home",
         ball: [50, 32],

@@ -13,9 +13,11 @@ describe("Pitch penalty camera and shootout reveal", () => {
     const { container } = render(<Pitch frame={frame({ cam: [63, 16, 50, 32] })} home={home} away={away} revealed />);
     const svg = container.querySelector("svg")!;
     expect(svg.getAttribute("viewBox")).toBe("63 16 50 32");
-    expect(svg.style.aspectRatio.replace(/\s/g, "")).toBe("108/77");
+    const box = screen.getByTestId("pitch") as HTMLElement;
+    expect(box.style.aspectRatio.replace(/\s/g, "")).toBe("108/77"); // the box carries the ratio (and a viewport height cap); the svg fills it
+    expect(box.style.maxWidth).toContain("100vh - 360px");
     expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
-    expect(svg.className.baseVal).not.toContain("h-auto");
+    expect(svg.className.baseVal).toContain("h-full");
   });
   it("tension strip names the kick and taker; GOAL reveals the pens score, SAVED! on a save, both gated by `revealed`", () => {
     const { rerender } = render(<Pitch frame={frame({ type: "shootout_setup", flash: "pen", side: "away", who: "Jo Striker", kick: { no: 3, sd: 0 }, pens: [2, 1] })} home={home} away={away} revealed />);
@@ -44,9 +46,9 @@ describe("Pitch kits and numbers", () => {
     expect(nodes[0].querySelector("[data-ring]")).toBeTruthy();
     expect(nodes[2].querySelector("[data-ring]")).toBeNull();
   });
-  it("every player is the same size (r 1.7) — hot player and keeper included; only the ring and the lime fill mark them out", () => {
+  it("every player is the same size (r 1.45) — hot player and keeper included; only the ring and the lime fill mark them out", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
-    for (const n of screen.getAllByTestId("player")) expect(n.querySelector("[data-kit]")!.getAttribute("r")).toBe("1.7");
+    for (const n of screen.getAllByTestId("player")) expect(n.querySelector("[data-kit]")!.getAttribute("r")).toBe("1.45");
   });
   it("home is filled in the team colour, away is white with a team-colour ring, keeper keeps lime plus the ring", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
@@ -62,12 +64,33 @@ describe("Pitch kits and numbers", () => {
     const ref = screen.getByTestId("ref");
     expect(ref.getAttribute("cx")).toBe("40");
     expect(ref.getAttribute("cy")).toBe("20");
-    expect(ref.getAttribute("r")).toBe("1.4");
+    expect(ref.getAttribute("r")).toBe("1.15");
     expect(ref.getAttribute("stroke")).toBe("#000");
   });
   it("has a kit legend with both abbreviations", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
     expect(screen.getByTestId("kit-legend").textContent).toMatch(/HOM.*AWY/);
+  });
+  it("result badges say what happened — WIDE, OVER, BLOCKED, SAVED!, WOODWORK — never a generic NO GOAL; gated by `revealed`", () => {
+    const badge = (flash: Frame["flash"], revealed = true) => {
+      cleanup();
+      render(<Pitch frame={frame({ type: "miss", flash, p: 0.9 })} home={home} away={away} revealed={revealed} />);
+      return screen.getByTestId("pitch").querySelector("span.event-enter")?.textContent ?? null;
+    };
+    expect(badge("miss")).toBe("WIDE");
+    expect(badge("over")).toBe("OVER");
+    expect(badge("block")).toBe("BLOCKED");
+    expect(badge("save")).toBe("SAVED!");
+    expect(badge("wood")).toBe("WOODWORK");
+    expect(badge("miss", false)).toBeNull();
+    expect(document.body.textContent).not.toContain("NO GOAL");
+  });
+  it("pins the HUD to the pitch's top-left corner and keeps the replay chip out of its way", () => {
+    render(<Pitch frame={frame({ players })} home={home} away={away} revealed replay hud={<span>HOM 1–0 AWY</span>} />);
+    const hud = screen.getByTestId("pitch-hud");
+    expect(hud.textContent).toBe("HOM 1–0 AWY");
+    expect(hud.className).toContain("left-2");
+    expect(screen.getByText("Replay").className).toContain("right-2");
   });
 });
 

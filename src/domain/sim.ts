@@ -62,11 +62,18 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
 }
 
-/** Result badges that outlive their scene: SAVED!, WOODWORK, NO GOAL and every shootout reveal stay 2.5 s (real ms, however short the new scene) into the next one. Match goals have the banner, cards their own type-specific text. */
+/** Result badges that outlive their scene: SAVED!, WOODWORK, WIDE/OVER/BLOCKED and every shootout reveal stay 2.5 s (real ms, however short the new scene) into the next one. Match goals have the banner, cards their own type-specific text. */
 const LINGER_MS = 2500;
+const LINGERING = new Set(["save", "wood", "miss", "over", "block"]);
 function lingers(prev: Scene | undefined, scene: Scene, t: number) {
-  return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || prev.flash === "save" || prev.flash === "wood" || prev.flash === "miss");
+  return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || LINGERING.has(prev.flash));
 }
+
+/** Dwell choreography: the carrier jogs on at this pace and lays the ball off to a mate every cycle, so a wait between events reads as passing, not a long solo carry. */
+const DWELL_SPEED = 4.5; // units per second (≈ a jog on a 40 m pitch)
+const DWELL_CYCLE = 3000; // ms between lay-offs
+const DWELL_PASS = 450; // ms the lay-off takes
+const DWELL_LANE = 6; // lateral gap between the two lanes
 
 /**
  * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
@@ -82,18 +89,32 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   }
   const over = Math.max(0, t - 1) * scene.ms;
   if (over > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
-    // Dwell: carrier jogs on at 3 u/s with a gentle weave until the next event, turning 12 short of either goal line (never
-    // retreating to his own), so a long gap reads as patient possession, never a wall-hug. Nearest mate shadows 6 behind.
+    // Dwell: two lanes advance at DWELL_SPEED until the next event, turning 12 short of either goal line (never retreating
+    // to the own line). The ball is laid off between the lanes every DWELL_CYCLE, so the two nearest teammates keep passing
+    // instead of one of them carrying forever; the nearest opponent closes to three in front of whoever has it.
     const dir = scene.side === "home" ? 1 : -1;
     const lo = Math.min(12, b[0]);
     const hi = Math.max(88, b[0]);
-    const x = fold(b[0] + (dir * 3 * over) / 1000, lo, hi);
-    const mdir = Math.sign(fold(b[0] + (dir * 3 * (over + 1)) / 1000, lo, hi) - x) || dir; // which way he's running right now
-    ball[0] = x;
-    ball[1] = clamp(b[1] + 2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
-    const [carrier, mate] = players.filter((p) => p.side === scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - b[0], p.y - b[1]) - Math.hypot(q.x - b[0], q.y - b[1]));
-    if (carrier) Object.assign(carrier, { x: clamp(ball[0] - mdir * 0.8, 0, 100), y: ball[1], hot: true });
-    if (mate) Object.assign(mate, { x: clamp(ball[0] - mdir * 6, 0, 100), y: ball[1] });
+    const x = fold(b[0] + (dir * DWELL_SPEED * over) / 1000, lo, hi);
+    const mdir = Math.sign(fold(b[0] + (dir * DWELL_SPEED * (over + 1)) / 1000, lo, hi) - x) || dir; // which way they're running right now
+    const laneY = clamp(b[1] + (b[1] > 32 ? -DWELL_LANE : DWELL_LANE), 2, 62); // second lane, towards the middle of the pitch
+    const cyc = over % DWELL_CYCLE;
+    const n = Math.floor(over / DWELL_CYCLE);
+    const s0 = n % 2; // lane holding the ball at the start of this cycle
+    const s = cyc < DWELL_CYCLE - DWELL_PASS ? s0 : s0 + (1 - 2 * s0) * ((cyc - (DWELL_CYCLE - DWELL_PASS)) / DWELL_PASS); // 0 = first lane, 1 = second; eases across during the lay-off
+    ball[0] = x + mdir * (s - 0.5) * 2 * 0.6; // the receiver is a touch ahead, so the lay-off goes forward
+    ball[1] = clamp(b[1] + (laneY - b[1]) * s + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
+    const [a, m] = players.filter((p) => p.side === scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - b[0], p.y - b[1]) - Math.hypot(q.x - b[0], q.y - b[1]));
+    const onA = s < 0.5;
+    const weaveY = clamp(b[1] + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
+    if (a) Object.assign(a, { x: clamp(onA ? ball[0] - mdir * 0.8 : x - mdir * 2.5, 0, 100), y: onA ? ball[1] : weaveY, hot: onA });
+    if (m) Object.assign(m, { x: clamp(onA ? x + mdir * 2 : ball[0] - mdir * 0.8, 0, 100), y: onA ? laneY : ball[1], hot: !onA });
+    const marker = players.filter((p) => p.side !== scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - ball[0], p.y - ball[1]) - Math.hypot(q.x - ball[0], q.y - ball[1]))[0];
+    if (marker) {
+      const k = Math.min(1, over / 1500); // closes down over the first 1.5 s, then tracks four in front of the ball
+      marker.x = clamp(marker.x + (ball[0] + mdir * 4 - marker.x) * k, 0, 100);
+      marker.y = clamp(marker.y + (ball[1] - marker.y) * k, 0, 64);
+    }
   } else if (t >= 1 && nowMs) {
     // Idle breathing: scene over, nothing newer yet — everyone sways a touch so the frame never looks frozen.
     ball[0] += Math.sin(nowMs / 400) * 0.4;
@@ -105,8 +126,9 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     }
   }
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
-  // No ref actor: he trails play, ten behind the ball on the far side, so he is always on the pitch and only ever jogs (smooth) into a scene.
-  const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(ball[1] > 32 ? ball[1] - 14 : ball[1] + 14, 0, 64)];
+  // No ref actor: he trails play — ten behind the ball, and on the half of the pitch the ball is not on, sliding smoothly
+  // through the middle (no side flip when the ball crosses the centre line) — so he is always on the pitch and only ever jogs (smooth) into a scene.
+  const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(32 + (32 - ball[1]) * 0.6, 0, 64)];
   let refPt = ref ?? home;
   let cam = scene.cam ?? FULL_CAM;
   const walk = WALK_OFF.has(scene.type) ? 6000 : WALK_ON.has(scene.type) ? 4000 : 0;
@@ -130,7 +152,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
         [p.x, p.y] = t < 0.35 ? sample([[p.x, p.y], ring], seg(0, 0.35)) : t < 0.7 ? ring : sample([ring, end], seg(0.7, 1));
       });
     }
-    refPt = [89, 32];
+    refPt = [86, 19]; // beside the box, where setupScene / penaltyScene keep him (penRefSpot("home"))
     if (t < 0.7) cam = FULL_CAM;
   }
   return { ball, lift: sampleN(scene.ballHeight, t), players, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by };
@@ -210,9 +232,10 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
-/** Rendered frame chases the target: exponential approach per value, players and the ref speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. */
+/** Rendered frame chases the target: exponential approach per value, players and the ref speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. The ref is a slow walker who ignores small target shifts, so he repositions rarely and never darts. */
 const MAX_SPEED = 60; // units per second
-const REF_SPEED = 40;
+const REF_SPEED = 14;
+const REF_DEADBAND = 4; // units: a target this close is "where he already is"
 export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   if (!prev || dtMs > 1000) return target;
   dtMs = Math.min(100, dtMs); // a stutter still reads as a chase, not a jump
@@ -240,7 +263,7 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
   const kc = k(350);
   const cam = target.cam.map((v, i) => prev.cam[i] + (v - prev.cam[i]) * kc) as Cam;
-  const ref = chase(prev.ref[0], prev.ref[1], target.ref[0], target.ref[1], kc, REF_SPEED);
+  const ref = Math.hypot(target.ref[0] - prev.ref[0], target.ref[1] - prev.ref[1]) < REF_DEADBAND ? prev.ref : chase(prev.ref[0], prev.ref[1], target.ref[0], target.ref[1], k(900), REF_SPEED);
   return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, ref, cam };
 }
 

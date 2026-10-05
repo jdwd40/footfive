@@ -270,7 +270,7 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} hud={st ? <Hud fx={shown.fixture} now={now} /> : null} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
@@ -320,6 +320,30 @@ export default function MatchPage() {
   );
 }
 
+/** Broadcast-style strip on the pitch: score and clock as the lagged pitch shows them, plus the shootout score and who is kicking, so none of it is ever out of view with the play. Reads `shown` state only. */
+function Hud({ fx, now }: { fx: MatchView["fixture"]; now: number }) {
+  const st = fx.st!;
+  const so = st.so;
+  const kicker = st.ph === "shootout" && so?.next ? (so.next === "home" ? fx.home : fx.away) : null;
+  return (
+    <>
+      <span className="tabular" data-testid="hud-score">
+        {fx.home.abbreviation} {st.sc[0]}–{st.sc[1]} {fx.away.abbreviation}
+      </span>
+      {st.ph === "shootout" ? null : <MatchClock fx={fx} now={now} />}
+      {so ? (
+        <span className="text-magenta" data-testid="hud-pens">
+          PENS {so.h}–{so.a}
+        </span>
+      ) : null}
+      {kicker ? (
+        <span className="rounded-sm bg-white/15 px-1" data-testid="hud-kicker">
+          {kicker.abbreviation} to kick
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale: boolean }) {
   const fx = view.fixture;
@@ -336,11 +360,11 @@ function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale:
           <PhaseChip fx={fx} now={now} />
         </div>
       </div>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-3 sm:gap-4 sm:px-5">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 sm:gap-4 sm:px-5">
         <TeamLabel team={fx.home} compact className={`text-base sm:text-xl ${winner === "away" ? "opacity-50" : ""}`} align="right" />
         <div className="text-center">
           {st ? (
-            <div key={flash} className={`text-5xl font-bold leading-none tabular sm:text-6xl ${flash ? "score-pop" : ""}`} data-testid="match-score">
+            <div key={flash} className={`text-4xl font-bold leading-none tabular sm:text-5xl ${flash ? "score-pop" : ""}`} data-testid="match-score">
               {st.sc[0]}
               <span className="mx-1 text-muted">–</span>
               {st.sc[1]}

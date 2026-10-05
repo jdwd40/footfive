@@ -1053,6 +1053,7 @@ Private per-user careers/tournaments. Retained only as historical note; schema l
 - Penalty focus + dedicated shootout board; FT score never altered by pens.
 - Mobile-first hierarchy; reduced-motion; aria-live for major events.
 - Measured KO sample (~19% shootouts) — no forced outcomes.
+- 2026-10-05 polish: concrete outcome badges; engine tracks the ball holder (`st.bs`, `turn`) so failed attacks and turnovers resolve possession on screen; on-pitch HUD (score / clock / PENS / kicker) reads the same revealed state as the scoreboard; referee holds the box corner during penalties and shootouts.
 
 ### Live client rules
 

@@ -172,33 +172,54 @@ describe("frameAt", () => {
     expect(e.players.map((p) => [p.x, p.y])).toEqual(c.players.map((p) => [p.x, p.y]));
   });
 
-  it("dwells after a routine scene: the ball carrier jogs on with a teammate in tow; result scenes hold", () => {
+  it("dwells after a routine scene: two teammates jog on passing the ball between them, an opponent closes down; result scenes hold", () => {
     const m = ms[0];
     const pass = m.events.find((e) => e.t === "pass")!;
     const s = sceneFor(pass, [50, 32], 15000)!;
     const end = frameAt(s, 1, m.lineups);
     const later = frameAt(s, 1 + 2000 / s.ms, m.lineups);
     const d = Math.hypot(later.ball[0] - end.ball[0], later.ball[1] - end.ball[1]);
-    expect(d).toBeGreaterThan(3);
-    expect(d).toBeLessThan(10);
+    expect(d).toBeGreaterThan(6); // 4.5 u/s: a jog, quicker than the old 3
+    expect(d).toBeLessThan(12);
     expect(Math.sign(later.ball[0] - end.ball[0])).toBe(pass.side === "home" ? 1 : -1);
-    // Carrier on the ball, a teammate within reach behind him; ball never leaves the pitch.
+    // Carrier on the ball, a teammate within reach in the other lane; ball never leaves the pitch.
     const carrier = later.players.filter((p) => p.side === pass.side && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 1.5);
     expect(carrier).toHaveLength(1);
+    expect(carrier[0].hot).toBe(true);
     expect(later.players.some((p) => p.side === pass.side && p !== carrier[0] && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 7)).toBe(true);
-    // A long gap: still jogging (never a wall-hug), turning 12 short of EITHER goal line, so possession never retreats to his own line.
+    // The nearest opponent closes down: within 1.5 s he is four in front of the ball, and he stays on it.
+    const def = (f: Frame) => f.players.filter((p) => p.side !== pass.side && !p.gk).map((p) => Math.hypot(p.x - f.ball[0], p.y - f.ball[1])).sort((a, b) => a - b)[0];
+    expect(def(later)).toBeLessThan(4.5);
+    expect(def(frameAt(s, 1 + 7000 / s.ms, m.lineups))).toBeLessThan(4.5);
+    // Every 3 s the ball is laid off to the mate: the player on the ball changes, the ball moves forward, nobody teleports.
+    const who = (ms: number) => {
+      const f = frameAt(s, 1 + ms / s.ms, m.lineups);
+      const on = f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5);
+      expect(on, `${ms} ms`).toHaveLength(1);
+      return on[0].no;
+    };
+    expect(who(2400)).not.toBe(who(3100));
+    expect(who(3100)).toBe(who(5400));
+    expect(who(5400)).not.toBe(who(6100));
+    expect(who(6100)).toBe(who(2400));
+    for (let t = 2500; t <= 3000; t += 50) {
+      const a = frameAt(s, 1 + t / s.ms, m.lineups);
+      const b = frameAt(s, 1 + (t + 50) / s.ms, m.lineups);
+      expect(Math.hypot(a.ball[0] - b.ball[0], a.ball[1] - b.ball[1])).toBeLessThan(2); // the lay-off travels, it doesn't jump
+    }
+    // A long gap: still jogging (never a wall-hug), turning 12 short of EITHER goal line, so possession never retreats to the own line.
     const far = frameAt(s, 1 + 60000 / s.ms, m.lineups);
     const farther = frameAt(s, 1 + 61000 / s.ms, m.lineups);
     expect(Math.hypot(farther.ball[0] - far.ball[0], farther.ball[1] - far.ball[1])).toBeGreaterThan(1);
     const xs: number[] = [];
-    for (let sec = 2; sec <= 90; sec += 2) {
-      const f = frameAt(s, 1 + (sec * 1000) / s.ms, m.lineups);
+    for (let sec = 2; sec <= 60; sec += 2) {
+      const f = frameAt(s, 1 + (sec * 1000 + 200) / s.ms, m.lineups); // +200: never inside a lay-off's 450 ms
       xs.push(f.ball[0]);
       expect(f.ball[0]).toBeGreaterThanOrEqual(Math.min(12, end.ball[0]));
       expect(f.ball[0]).toBeLessThanOrEqual(Math.max(88, end.ball[0]));
       expect(f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5)).toHaveLength(1);
     }
-    expect(Math.min(...xs)).toBeLessThan(20); // 90 s at 3 u/s covers the pitch: he reached both turning lines
+    expect(Math.min(...xs)).toBeLessThan(20); // 60 s at 4.5 u/s covers the pitch: they reached both turning lines
     expect(Math.max(...xs)).toBeGreaterThan(80);
     // A goal keeps its final frame (plus breathing only).
     const goal = m.events.find((e) => e.t === "goal")!;
@@ -265,7 +286,7 @@ describe("frameAt", () => {
     expect(frameAt(sv, 0, m.lineups, undefined, 0, undefined, { ...sv, flash: "wood" }).flash).toBe("save");
   });
 
-  it("the referee rides his actor path as Frame.ref; without one he trails ten behind the ball on the far side", () => {
+  it("the referee rides his actor path as Frame.ref; without one he trails ten behind the ball, sliding across the far half without a side flip", () => {
     const m = ms[0];
     const foul = m.events.find((e) => e.t === "foul")!;
     const s = sceneFor(foul, [50, 32], 15000)!;
@@ -276,10 +297,14 @@ describe("frameAt", () => {
     const pass: Scene = { key: "p", seq: 2, type: "pass", ms: 1200, ball: [[40, 20], [60, 20]], actors: [], caption: "", side: "home" };
     const f = frameAt(pass, 0.5, m.lineups);
     expect(f.ref[0]).toBeCloseTo(f.ball[0] - 10, 5);
-    expect(f.ref[1]).toBeCloseTo(f.ball[1] + 14, 5);
+    expect(f.ref[1]).toBeCloseTo(32 + (32 - f.ball[1]) * 0.6, 5);
     const away = frameAt({ ...pass, side: "away", ball: [[60, 50], [40, 50]] }, 0.5, m.lineups);
     expect(away.ref[0]).toBeCloseTo(away.ball[0] + 10, 5);
-    expect(away.ref[1]).toBeCloseTo(away.ball[1] - 14, 5);
+    expect(away.ref[1]).toBeCloseTo(32 + (32 - away.ball[1]) * 0.6, 5);
+    // Crossing the centre line moves him a touch, not to the other side of the pitch (the old far-side rule flipped 28 units).
+    const lo = frameAt({ ...pass, ball: [[50, 31], [50, 31]] }, 0.5, m.lineups).ref;
+    const hi = frameAt({ ...pass, ball: [[50, 33], [50, 33]] }, 0.5, m.lineups).ref;
+    expect(Math.abs(lo[1] - hi[1])).toBeLessThan(2);
     const edge = frameAt({ ...pass, ball: [[3, 3], [3, 3]] }, 0.5, m.lineups).ref;
     expect(edge[0]).toBeGreaterThanOrEqual(0);
     expect(edge[1]).toBeLessThanOrEqual(64);
@@ -341,7 +366,7 @@ describe("frameAt", () => {
     for (const p of end.players.filter((p) => !p.gk)) expect(p.x - 1.7 - 3).toBeGreaterThanOrEqual(end.cam[0]); // whole circle + number inside the pen cam
     for (const p of end.players.filter((p) => !p.gk)) expect(Math.abs(p.x - 58)).toBeLessThan(4); // halfway rows
     expect(end.cam).not.toEqual([-4, -3, 108, 77]);
-    expect(end.ref).toEqual([89, 32]);
+    expect(end.ref).toEqual([86, 19]); // beside the box, off the spot and the ball path
     expect(at(1.5).players.map((p) => [p.x, p.y])).toEqual(end.players.map((p) => [p.x, p.y])); // holds while the setup is awaited
   });
 });
@@ -368,12 +393,14 @@ describe("smooth", () => {
     expect(s.cam[0]).toBeGreaterThan(-4);
     expect(s.cam[0]).toBeLessThan(20);
   });
-  it("the referee jogs after his target — eased over 350 ms, never faster than 40 u/s — so entering or leaving a scene is a run, not a pop", () => {
+  it("the referee walks after his target — eased over 900 ms, never faster than 14 u/s, ignoring shifts under 4 units — so he repositions rarely and never darts", () => {
     const s = smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [60, 10] }, 100);
-    expect(s.ref[0]).toBeGreaterThan(12);
-    expect(s.ref[0]).toBeLessThanOrEqual(14); // 40 u/s cap: 4 per 100 ms
+    expect(s.ref[0]).toBeGreaterThan(11);
+    expect(s.ref[0]).toBeLessThanOrEqual(11.4); // 14 u/s cap: 1.4 per 100 ms
     const tick = smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [60, 10] }, 16);
-    expect(Math.hypot(tick.ref[0] - 10, tick.ref[1] - 10)).toBeLessThan(2);
+    expect(Math.hypot(tick.ref[0] - 10, tick.ref[1] - 10)).toBeLessThan(0.3);
+    expect(smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [13, 12] }, 100).ref).toEqual([10, 10]); // small shift: stays put
+    expect(smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [15, 10] }, 100).ref[0]).toBeGreaterThan(10); // beyond the deadband: walks
   });
   it("a tick after a long gap (suspended tab) snaps to the target instead of chasing from stale positions", () => {
     expect(smooth(at(10), at(60), 1500)).toEqual(at(60));

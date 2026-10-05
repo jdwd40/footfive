@@ -1,6 +1,7 @@
 /**
  * Engine v2, odds and market rules — run against the real PocketBase hook modules.
  */
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -290,6 +291,31 @@ describe("market rules", () => {
     expect(mkt.fixtureState(fx, { ph: "second_half", d: 1 }, 1).closed).toBeTruthy();
     expect(mkt.fixtureState(fx, { ph: "second_half", d: 0 }, 1).closed).toBe(null);
     expect(mkt.fixtureState(fx, { ph: "shootout", d: 1 }, 1).closed).toBeTruthy();
+  });
+});
+
+describe("authoritative outcomes are pinned to the pre-polish engine (base 33dc1b8)", () => {
+  // The live polish only adds possession bookkeeping (`bs`/`turn`) and period ball resets; it must not change
+  // who shoots, what the RNG draws, or who wins. Same probe as the reviewer's rng-probe: 200 seeds (1000..1199),
+  // event tuples (seq/at/type/actors/score/shootout) plus final state (`score`, `winner`, `by`, `so`) and RNG draw
+  // count (`rc`), SHA-256 of the JSON manifest.
+  // The pin was generated from the base engine compiled straight from `git show 33dc1b8:pocketbase/pb_hooks/lib/matchEngine.js`
+  // (78,776 events) — pinned as a constant so the test runs on shallow clones and source archives with no git history.
+  const BASE_SHA256 = "cf385510aa429a37077f5dc8e0b8f1fd4c79657f8ce35184e9c2dab9d94333f1";
+  const liveTiming = eng.buildTiming(8000, 1);
+  type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
+  const run = (seed: number) => {
+    const st = eng.createMatch({ fixtureId: "f" + seed, seed, kickoffAt: 0, home: team(seed % 16), away: team((seed * 7 + 3) % 16), timing: liveTiming });
+    const events = eng.advanceTo(st, 1e13) as Array<Ev & { p?: string; p2?: string }>;
+    const final: Final = { score: st.score, winner: st.winner, by: st.by, so: st.so, rc: st.rc };
+    return { tuples: events.map((x) => [x.seq, x.at, x.t, x.p, x.p2, x.st.sc, x.st.so]), final };
+  };
+
+  it("200 seeds: identical event tuples, final state and RNG draw count", () => {
+    const manifest = [];
+    for (let seed = 1000; seed < 1200; seed++) manifest.push(run(seed));
+    const digest = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+    expect(digest, "200-seed authoritative outcome manifest differs from base 33dc1b8").toBe(BASE_SHA256);
   });
 });
 

@@ -24,7 +24,7 @@ export type Scene = {
   ballHeight?: number[]; // optional lift per keyframe (0..1), for chips/crosses/headers
   actors: Actor[];
   caption: string;
-  flash?: "goal" | "save" | "miss" | "wood" | "card" | "pen" | null;
+  flash?: "goal" | "save" | "miss" | "over" | "block" | "wood" | "card" | "pen" | null; // result badge: miss = wide, over = over the bar
   focus?: Side | null; // celebrating side
   side?: Side | null; // event side (banners)
   who?: string; // event's main player
@@ -69,6 +69,10 @@ export function short(name?: string) {
 }
 function keeperSpot(defSide: Side): Pt {
   return [defSide === "home" ? 3 : 97, GOAL_Y];
+}
+/** Where the referee stands for a penalty at goal `g`: the top corner of the box, clear of the ball path, the goal mouth, the run-up and the arc of waiting players. */
+export function penRefSpot(g: Side): Pt {
+  return [goalX(g) + toward(g, -14), GOAL_Y - 13];
 }
 /** Camera window `w` wide centred on (cx, cy) at the full-pitch aspect (so the SVG never reflows on a zoom), kept inside the full-pitch margins. */
 function camAt(cx: number, cy: number, w: number): Cam {
@@ -126,14 +130,14 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
   switch (e.t) {
     case "restart":
       // The restarting side walks the ball to the spot (centre after a goal, their own box after a failed penalty).
-      return { ...base, ms: d(1600), ball: [prevBall, ball, ball], actors: [{ id: "w", side, path: [prevBall, ball, clampPt([ball[0] - toward(side, 2), ball[1]])] }] };
+      return { ...base, ms: d(1300), ball: [prevBall, ball, ball], actors: [{ id: "w", side, path: [prevBall, ball, clampPt([ball[0] - toward(side, 2), ball[1]])] }] };
     case "kickoff":
     case "second_half":
     case "extra_time":
     case "et_second_half":
       return {
         ...base,
-        ms: e.t === "kickoff" ? d(1600) : 3000, // period restarts carry a banner: give it a life
+        ms: e.t === "kickoff" ? d(1300) : 3000, // period restarts carry a banner: give it a life
         ball: [prevBall, [50, 32], [50, 32]],
         actors: [
           { id: "a", side, label: short(e.p), path: [[50 + toward(side, -1.5), 33], [50, 32], [50 + toward(side, -4), 32]] },
@@ -149,11 +153,33 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const passer = from;
       const recv = ball;
       const run = e.t === "dribble";
-      const lift = e.t === "cross" ? [0, 0.9, 0] : e.t === "through_ball" ? [0, 0.15, 0] : [0, 0, 0];
       const markerStart = clampPt([recv[0] + toward(atk, 6) + jit(s, 2, 3), recv[1] + jit(s, 3, 7)]);
+      // The ball was left deep in a box and nobody in the passer's shirt is on it: the engine leaves it with the keeper (or
+      // blocker) after a failed attack. Either the other team took it there (`turn`, the opponent on it launches it clear) or
+      // the passer's own keeper is holding it (same side regains, `from` inside his own box) and distributes. The named passer
+      // collects it in midfield and moves it on. Same engine positions, no teleport, no attacker in the keeper's hands.
+      const backward = !!e.turn && toward(atk, recv[0] - passer[0]) < -12;
+      const ownBox = !e.turn && toward(atk, passer[0] - goalX(def)) <= 15;
+      if (backward || ownBox) {
+        const inBox = ownBox || toward(atk, passer[0] - goalX(atk)) >= -15;
+        const mid = lerp(passer, recv, 0.55);
+        return {
+          ...base,
+          ms: d(1900),
+          ball: [passer, lerp(passer, mid, 0.5), mid, recv],
+          ballHeight: [0, 0.7, 0, 0],
+          actors: [
+            { id: "clear", side: ownBox ? atk : def, keeper: inBox, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
+            { id: "p", side: atk, label: short(e.p), path: [clampPt([mid[0] - toward(atk, 3), mid[1] + 2]), clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
+            { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] },
+            { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
+          ],
+        };
+      }
+      const lift = e.t === "cross" ? [0, 0.9, 0] : e.t === "through_ball" ? [0, 0.15, 0] : [0, 0, 0];
       return {
         ...base,
-        ms: d(run ? 2200 : e.t === "cross" ? 2000 : 1500),
+        ms: d(run ? 2000 : e.t === "cross" ? 2000 : 1500),
         ball: [passer, lerp(passer, recv, 0.5), recv],
         ballHeight: lift,
         actors: [
@@ -245,13 +271,14 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const shotFrom = (e.from as Pt) || prevBall;
       const gk = keeperSpot(side);
       const catchPt: Pt = [gk[0], target[1]];
-      const parry: Pt = clampPt([ball[0], ball[1] + (target[1] > GOAL_Y ? 6 : -6)]);
+      const held = jit(s, 6, 1) > 0; // catch and hold, or parry and gather: the keeper ends up with the ball either way
+      const parry: Pt = held ? catchPt : clampPt([ball[0], ball[1] + (target[1] > GOAL_Y ? 6 : -6)]);
       return {
         ...base,
         ms: d(2600),
         ball: [shotFrom, lerp(shotFrom, catchPt, 0.85), catchPt, parry],
         actors: [
-          { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, catchPt] },
+          { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, parry] },
           { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
         ],
         flash: "save",
@@ -268,11 +295,11 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
         ms: d(1900),
         ball: [shotFrom, blockAt, rebound],
         actors: [
-          { id: "b", side, label: short(e.p), path: [clampPt([blockAt[0] + toward(shooterSide, 3), blockAt[1] + 4]), blockAt, blockAt] },
+          { id: "b", side, label: short(e.p), path: [clampPt([blockAt[0] + toward(shooterSide, 3), blockAt[1] + 4]), blockAt, rebound] }, // closes down, blocks, wins the loose ball
           { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, shotFrom] },
           { id: "gk", side, keeper: true, path: [keeperSpot(side), keeperSpot(side), keeperSpot(side)] },
         ],
-        flash: "miss",
+        flash: "block",
         impact: blockAt,
       };
     }
@@ -282,16 +309,17 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const shotFrom = (e.from as Pt) || prevBall;
       const out: Pt = e.t === "woodwork" ? (ball as Pt) : [goalX(side) + toward(side, 3), target[1] + (target[1] > GOAL_Y ? 3 : -3)];
       const gk = keeperSpot(other(side));
+      const high = e.t === "miss" && !!(e as MatchEvent & { high?: number }).high;
       return {
         ...base,
         ms: d(2300),
         ball: [shotFrom, lerp(shotFrom, target, 0.6), target, out],
-        ballHeight: e.t === "miss" && (e as MatchEvent & { high?: number }).high ? [0, 0.5, 1, 1] : undefined,
+        ballHeight: high ? [0, 0.5, 1, 1] : undefined,
         actors: [
           { id: "s", side, label: short(e.p), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(side, 2), shotFrom[1]]), clampPt([shotFrom[0] + toward(side, 2), shotFrom[1]])] },
-          { id: "gk", side: other(side), keeper: true, path: [gk, [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.4], [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.5], gk] },
+          { id: "gk", side: other(side), keeper: true, path: [gk, [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.4], [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.5], e.t === "woodwork" ? out : gk] }, // off the woodwork: the keeper gathers the rebound
         ],
-        flash: e.t === "woodwork" ? "wood" : "miss",
+        flash: e.t === "woodwork" ? "wood" : high ? "over" : "miss",
         impact: target,
       };
     }
@@ -329,6 +357,9 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const gk = keeperSpot(def);
       const m1: Pt = clampPt([spot[0] - toward(side, 10), spot[1] - 9]);
       const m2: Pt = clampPt([spot[0] - toward(side, 12), spot[1] + 8]);
+      const refIn: Pt = clampPt([spot[0] - toward(side, 12), spot[1] - 12]);
+      const refPoint: Pt = clampPt([spot[0] - toward(side, 2), spot[1] - 5]);
+      const refSpot = penRefSpot(side);
       return {
         ...base,
         ms: 5000,
@@ -336,7 +367,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
         actors: [
           { id: "fouled", side, label: short(e.p), path: walk(clampPt([at[0], at[1] + 1.5]), clampPt([spot[0] - toward(side, 3), spot[1] + 2]), 0.3, 0.6) },
           { id: "off", side: def, label: short(e.p2), path: walk(offAt, clampPt([offAt[0] + toward(side, 3), offAt[1] + 1]), 0.55, 0.8) },
-          { id: "ref", side: "ref", path: walk(clampPt([spot[0] - toward(side, 12), spot[1] - 12]), clampPt([spot[0] - toward(side, 2), spot[1] - 5]), 0.3, 0.55) },
+          { id: "ref", side: "ref", path: keys((t) => (t < 0.6 ? lerp(refIn, refPoint, seg(t, 0.3, 0.55)) : lerp(refPoint, refSpot, seg(t, 0.6, 0.9)))) }, // runs in to point, then backs off to his penalty spot before the walk-up
           { id: "t1", side, path: walk(m1, closer(m1), 0.2, 0.9) },
           { id: "t2", side, path: walk(m2, closer(m2), 0.3, 1) },
           { id: "gk", side: def, keeper: true, path: walk(clampPt([gk[0] - toward(side, 4), GOAL_Y + 4]), gk, 0.4, 0.9) },
@@ -347,7 +378,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       };
     }
     case "shootout_end":
-      return { ...base, ms: 0, ball: [prevBall], actors: [], cam: penCam("home") };
+      return { ...base, ms: 0, ball: [prevBall], actors: [{ id: "ref", side: "ref", path: [penRefSpot("home")] }], cam: penCam("home") };
     case "half_time":
     case "end_of_normal_time":
     case "et_half_time":
@@ -394,8 +425,7 @@ function setupScene(e: MatchEvent, prevBall: Pt): Scene {
   const spot: Pt = [goalX(g) + toward(g, -11), GOAL_Y];
   const gk = keeperSpot(other(g));
   const back: Pt = clampPt([spot[0] - toward(g, 6), spot[1] + 2]);
-  const refFrom: Pt = clampPt([spot[0] - toward(g, 4), spot[1] - 12]);
-  const refTo: Pt = clampPt([spot[0] - toward(g, 2), spot[1] - 6]);
+  const refSpot = penRefSpot(g);
   const place = (from: Pt, t: number) => lerp(from, spot, Math.min(1, t / 0.2));
   return {
     ...head(e),
@@ -404,7 +434,7 @@ function setupScene(e: MatchEvent, prevBall: Pt): Scene {
     actors: [
       { id: "taker", side, label: short(e.p), path: keys((t) => (t < 0.2 ? place(clampPt(prevBall), t) : t < 0.45 ? lerp(spot, back, (t - 0.2) / 0.25) : [back[0], back[1] + 0.3 * Math.sin((2 * Math.PI * (t - 0.45)) / 0.2)])) },
       { id: "gk", side: def, keeper: true, label: short(e.p2), path: keys((t) => [gk[0], GOAL_Y + 2 * Math.sin(2 * Math.PI * 4 * t)]) },
-      { id: "ref", side: "ref", path: keys((t) => lerp(refFrom, refTo, Math.min(1, t / 0.45))) },
+      { id: "ref", side: "ref", path: [refSpot] }, // already on his spot (smoothing jogs him there from wherever he was) and still for the whole walk-up
     ],
     flash: "pen",
     cam: penCam(g),
@@ -440,7 +470,7 @@ function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnTyp
     flash = "wood";
   } else {
     end = [line + toward(g, 3), pen.height === 2 ? y : y + (col < 0 ? -3 : 3)];
-    flash = "miss";
+    flash = pen.height === 2 ? "over" : "miss";
   }
   const strikeAt: Pt = outcome === "save" ? [gk[0], diveY] : outcome === "woodwork" ? [line, pen.post === "bar" ? y : pen.post === "left" ? 28 : 36] : target;
   return {
@@ -451,6 +481,7 @@ function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnTyp
     actors: [
       { id: "taker", side, label: short(e.p), path: [runStart, lerp(runStart, spot, 0.4), spot, spot, spot] }, // accelerating run-up, strike at 50 %
       { id: "gk", side: def, keeper: true, label: short(e.p2), path: [gk, gk, gk, [gk[0], diveY], [gk[0], diveY]] }, // dives at the strike, not before
+      { id: "ref", side: "ref", path: [penRefSpot(g)] }, // holds his spot through run-up, strike and result: never wanders into the ball path or the view
     ],
     flash,
     flashAt: 0.75,

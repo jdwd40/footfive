@@ -53,6 +53,20 @@ async function mount(v: MatchView) {
 
 describe("MatchPage timeline player", () => {
   afterEach(() => vi.useRealTimers()); // a failed fake-Date test must not leak into the next
+  it("pins a HUD on the pitch with the shown score and clock; in a shootout also the normal score, the pens score and who kicks next — shootout goals never touch the score", async () => {
+    const now = Date.now();
+    const so = { h: 2, a: 1, th: 3, ta: 2, first: "home", next: "away", sd: false, k: [] } as unknown as NonNullable<MatchView["fixture"]["st"]>["so"];
+    const pens = { ...st!, ph: "shootout", sc: [1, 1] as [number, number], so } as NonNullable<MatchView["fixture"]["st"]>;
+    const kick: MatchEvent = { ...ev(1, now - 30000, "Steps up"), t: "shootout_setup", side: "away" as const, kick: { no: 3, sd: 0 }, st: pens };
+    await mount(view([kick], { home: names("Home"), away: names("Away") }, now));
+    const hud = screen.getByTestId("pitch-hud");
+    expect(screen.getByTestId("pitch").contains(hud)).toBe(true);
+    expect(screen.getByTestId("hud-score").textContent).toBe("HOM 1–1 AWA");
+    expect(screen.getByTestId("hud-pens").textContent).toBe("PENS 2–1");
+    expect(screen.getByTestId("hud-kicker").textContent).toBe("AWA to kick");
+    expect(screen.getByTestId("match-score").textContent).toBe("1–1");
+    expect(hud.textContent).toContain("PENS");
+  });
   it("renders 10 players and the commentary of the event under the playhead", async () => {
     const now = Date.now();
     const events = [ev(1, now - 30000, "Older pass"), ev(2, now - 3000, "Current pass"), ev(3, now + 60000, "Future pass")];
@@ -133,7 +147,7 @@ describe("MatchPage timeline player", () => {
     const e3 = { ...ev(3, now + 1100, "Pass three"), from: [10, 10] as [number, number], ball: [10, 10] as [number, number] };
     const { container } = await mount(view([e1, e2, e3], { home: names("Home"), away: names("Away") }, now));
     const ball = () => Number(container.querySelector('svg circle[stroke="#111"]')!.getAttribute("cx"));
-    expect(ball()).toBeGreaterThan(40);
+    expect(Math.abs(ball() - 10)).toBeGreaterThan(5); // still dwelling on from the centre, nowhere near e3's spot
     // The clock leaps straight from e1 to 90 % through e3: a chase from the old ball would still be mid-pitch frames later.
     vi.setSystemTime(now + 1100 + 1500 + 0.9 * 1500);
     await act(() => new Promise((r) => setTimeout(r, 40)));
