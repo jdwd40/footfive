@@ -5,7 +5,7 @@
  * (score / clock / shootout) + commentary + pitch flashes/banners.
  *
  *   node scripts/live-watch.mjs --fixture <id> [--seconds 60] [--viewport 1440x900] [--out dir]
- *   node scripts/live-watch.mjs --replay <seed>[@<jump>] ...   jump: shootout | pen | minute:<n> | seq:<n>
+ *   node scripts/live-watch.mjs --replay <seed>[@<jump>] ...   jump: shootout | sd | pen | minute:<n> | seq:<n>
  *
  * --fixture watches an ACTUAL engine match on the backend (--pb, default http://127.0.0.1:8097; the
  * app is served from --base, default http://127.0.0.1:5187; login --user / --pass, default seeded e2e_user_a).
@@ -58,6 +58,7 @@ function replayFixture(spec) {
   const events = eng.advanceTo(st, 1e13);
   let jumpAt = 0;
   if (jump === "shootout") jumpAt = (events.find((e) => e.t === "shootout_start")?.at ?? 0) - 3000;
+  else if (jump === "sd") jumpAt = (events.find((e) => e.t === "shootout_setup" && e.kick?.sd)?.at ?? 0) - 2000; // first sudden-death kick
   else if (jump === "pen") jumpAt = (events.find((e) => e.t === "penalty_awarded")?.at ?? 0) - 4000;
   else if (jump.startsWith("minute:")) jumpAt = events.find((e) => e.min >= Number(jump.slice(7)))?.at ?? 0;
   else if (jump.startsWith("seq:")) jumpAt = events.find((e) => e.seq >= Number(jump.slice(4)))?.at ?? 0;
