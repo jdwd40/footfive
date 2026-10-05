@@ -2,8 +2,8 @@ import { createRequire } from "node:module";
 import { cleanup, render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Pitch from "./Pitch";
-import { sceneFor, type Pt } from "../domain/scenes";
-import { frameAt } from "../domain/sim";
+import { sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { frameAt, playhead, smooth, type Frame } from "../domain/sim";
 import type { MatchEvent, TeamPublic, LineupPlayer } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -21,6 +21,49 @@ const home = { name: "Home", abbreviation: "HOM" } as TeamPublic;
 const away = { name: "Away", abbreviation: "AWY" } as TeamPublic;
 
 describe("Pitch event-snapshot end projection", () => {
+  it.each(["half_time", "end_of_normal_time", "et_half_time"])("keeps the visible ball continuous through off-centre %s to the next period", (type) => {
+    const scenes = new Map<number, Scene>();
+    let prev: Pt = [50, 32];
+    for (const e of events) {
+      const s = sceneFor(e, prev, 8000) ?? { key: String(e.seq), seq: e.seq, type: e.t, phase: e.st.ph, ms: 0, ball: [prev], actors: [], caption: e.text };
+      prev = s.ball.at(-1)!;
+      scenes.set(e.seq, s);
+    }
+    const marker = events.find(e => e.t === type)!;
+    const next = events[events.indexOf(marker) + 1];
+    const authored = JSON.stringify([...scenes]);
+    let drawn: Frame | null = null;
+    let startBall: Pt | undefined;
+    let switches = 0;
+    const displayX = (f: Frame) => ["second_half", "et_break", "extra_time_2", "shootout", "finished"].includes(f.phase!) ? 100 - f.ball[0] : f.ball[0];
+    for (let now = marker.at - 1000; now <= next.at + 4000; now += 100) {
+      const ph = playhead(events, now)!;
+      const scene = scenes.get(ph.cur.seq)!;
+      if (drawn?.seq !== scene.seq) startBall = drawn?.ball;
+      const target = frameAt(scene, scene.ms ? ph.elapsed / scene.ms : 1, lineups, undefined, now, startBall);
+      const frame = smooth(drawn, target, 100);
+      if (drawn?.seq === marker.seq && frame.seq === marker.seq) {
+        expect(Math.hypot(frame.ball[0] - drawn.ball[0], frame.ball[1] - drawn.ball[1]), "return during break stays continuous").toBeLessThan(2);
+      }
+      if (drawn && drawn.phase !== frame.phase && frame.seq === next.seq) {
+        switches++;
+        cleanup();
+        const { container, rerender } = render(<Pitch frame={drawn} home={home} away={away} revealed />);
+        const before = Number(container.querySelector('circle[stroke="#111"]')!.getAttribute("cx"));
+        rerender(<Pitch frame={frame} home={home} away={away} revealed />);
+        const after = Number(container.querySelector('circle[stroke="#111"]')!.getAttribute("cx"));
+        const distance = Math.hypot(after - before, frame.ball[1] - drawn.ball[1]);
+        console.log(`${type}: canonical ${drawn.ball} -> ${frame.ball}; SVG ${before} -> ${after}; 100ms movement ${distance}`);
+        expect(distance, `${type} end switch`).toBeLessThan(1);
+        expect(displayX(drawn)).toBeCloseTo(50, 2);
+        expect(drawn.ball[1]).toBeCloseTo(32, 2);
+      }
+      drawn = frame;
+    }
+    expect(JSON.stringify([...scenes])).toBe(authored);
+    expect(switches).toBe(1);
+  });
+
   it("swaps every playing period, keeps each break's outgoing end and one shootout end, without mutating canonical frames or mirroring numbers", () => {
     const phases = new Set<string>();
     let prev: Pt = [50, 32];

@@ -164,6 +164,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     const to = (p: Pt): Pt => (WALK_OFF.has(scene.type) ? sample([p, TUNNEL], f) : sample([TUNNEL, p], f));
     for (const p of players) [p.x, p.y] = to([p.x, p.y]);
     refPt = to(refPt);
+    // Return the ball during the break, before the next period reflects ends. Centre is invariant under that projection.
+    if (WALK_OFF.has(scene.type) && scene.type !== "match_end") [ball[0], ball[1]] = sample([b, [50, 32]], f);
   } else if (scene.type === "shootout_start") {
     // Shootout intro (10 s): everyone walks to the centre circle (0–35 %) and huddles there in two arcs of five (35–70 %); then the
     // keepers go to the shootout end — the first kick's keeper on his line, the other by the post — and the rest line the halfway
