@@ -21,6 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
+import { snapshot } from "./live-watch-snapshot.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -116,35 +117,13 @@ async function main() {
   let i = 0;
   let lastKey = "";
   while (Date.now() - t0 < SECONDS * 1000) {
-    const snap = await page.evaluate(() => {
-      const q = (id) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() ?? null;
-      const svg = document.querySelector('[data-testid="pitch"] svg');
-      const r = svg?.getBoundingClientRect();
-      const sb = document.querySelector('[data-testid="match-scoreboard"]')?.getBoundingClientRect();
-      return {
-        score: q("match-score"),
-        clock: document.querySelector('[aria-label="Match clock"]')?.textContent?.trim() ?? null,
-        pens: q("match-shootout-score"),
-        soTotal: q("shootout-total"),
-        commentary: q("commentary"),
-        banner: q("goal-banner") ?? q("ft-banner") ?? q("period-banner"),
-        pen: q("pen-banner"),
-        strip: q("pen-strip"),
-        badge: document.querySelector('[data-testid="pitch"] span.event-enter')?.textContent?.trim() ?? null,
-        final: q("final-result"),
-        viewBox: svg?.getAttribute("viewBox"),
-        pitchRect: r && { top: Math.round(r.top), h: Math.round(r.height), w: Math.round(r.width) },
-        scoreboardRect: sb && { top: Math.round(sb.top), h: Math.round(sb.height) },
-        playerR: svg?.querySelector('[data-testid="player"] [data-kit]')?.getAttribute("r"),
-        scrollY: Math.round(window.scrollY),
-      };
-    });
-    const key = JSON.stringify([snap.score, snap.pens, snap.soTotal, snap.commentary, snap.banner, snap.pen, snap.badge, snap.final]);
+    const snap = await page.evaluate(snapshot);
+    const key = JSON.stringify([snap.score, snap.hud, snap.pens, snap.soTotal, snap.commentary, snap.banner, snap.pen, snap.badge, snap.final]);
     const entry = { t: Date.now() - t0, ...snap };
     if (key !== lastKey) {
       log.push(entry);
       lastKey = key;
-      console.log(`${String(entry.t).padStart(6)}ms ${snap.clock ?? "--:--"} ${snap.score ?? "-"} ${snap.pens ?? ""} ${snap.badge ? "[" + snap.badge + "] " : ""}${snap.banner ? "{" + snap.banner + "} " : ""}${snap.pen ? "<" + snap.pen + "> " : ""}${snap.commentary ?? ""}`);
+      console.log(`${String(entry.t).padStart(6)}ms ${snap.clock ?? "--:--"} ${snap.score ?? "-"} ${snap.pens ?? ""} ${snap.hud ? "hud=" + JSON.stringify(snap.hud) + " " : ""}${snap.badge ? "[" + snap.badge + "] " : ""}${snap.banner ? "{" + snap.banner + "} " : ""}${snap.pen ? "<" + snap.pen + "> " : ""}${snap.commentary ?? ""}`);
     }
     if (i % Math.max(1, Math.round(EVERY / 500)) === 0) await page.screenshot({ path: path.join(OUT, `frame-${String(i).padStart(4, "0")}.png`) });
     i++;
