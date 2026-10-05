@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { FULL_CAM, sample, sampleN, sceneFor, type Cam, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, penRefSpot, sample, sampleN, sceneFor, type Cam, type Pt, type Scene } from "./scenes";
 import type { MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -27,6 +27,7 @@ function events(n = 40): MatchEvent[][] {
 
 const inMouth = (y: number) => y >= 27.5 && y <= 36.5;
 const end = (s: Scene): Pt => s.ball[s.ball.length - 1];
+const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 /** Penalty camera at the x=100 end: 56 wide at the full-pitch aspect, centred on y=32, pushed left to the right-hand margin (104). */
 const PEN_HOME: Cam = [48, 32 - (56 * 77) / 108 / 2, 56, (56 * 77) / 108];
 
@@ -284,8 +285,124 @@ describe("highlight scenes agree with the simulation", () => {
     const gkY = [0.1, 0.3, 0.5, 0.7, 0.9].map((t) => at("gk", t)[1]);
     expect(Math.max(...gkY) - Math.min(...gkY)).toBeGreaterThan(1.5); // bouncing on the line
     expect(s.actors.some((a) => a.side === "ref")).toBe(true);
-    expect(at("ref", 0)).not.toEqual(at("ref", 0.5));
+    expect(at("ref", 0)).toEqual(penRefSpot("home")); // already on his spot: smoothing walks him there, then he holds still
+    expect(at("ref", 0.5)).toEqual(at("ref", 1));
     expect(s.impact).toEqual([89, 32]);
+  });
+
+  it("penalties: the referee holds one spot beside the box through setup, run-up, strike and result — never on the ball path, in the goal mouth or on the spot", () => {
+    const pens = all.filter((e) => ["penalty_setup", "shootout_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick", "shootout_end"].includes(e.t));
+    expect(pens.length).toBeGreaterThan(30);
+    for (const e of pens) {
+      const s = sceneFor(e, [50, 32], 15000)!;
+      const ref = s.actors.find((a) => a.side === "ref")!;
+      expect(ref, `${e.t} #${e.seq}`).toBeTruthy();
+      const g = e.t.startsWith("shootout") ? "home" : e.side!;
+      const spot = penRefSpot(g);
+      for (const t of [0, 0.25, 0.5, 0.75, 1]) expect(sample(ref.path, t), `${e.t} #${e.seq} t=${t}`).toEqual(spot);
+      const line = g === "home" ? 100 : 0;
+      const penSpot = g === "home" ? 89 : 11;
+      expect(Math.abs(spot[1] - 32)).toBeGreaterThanOrEqual(8); // off the spot→goal line and the mouth (y 28..36)
+      expect(Math.abs(spot[0] - line)).toBeGreaterThanOrEqual(12); // not in the goal area
+      expect(Math.hypot(spot[0] - penSpot, spot[1] - 32)).toBeGreaterThan(9); // clear of the spot and the run-up
+      // Inside the penalty camera, so he is seen holding still rather than popping in and out.
+      const [cx, cy, cw, ch] = s.cam!;
+      expect(spot[0] > cx + 2 && spot[0] < cx + cw - 2 && spot[1] > cy + 2 && spot[1] < cy + ch - 2, `${e.t} in cam`).toBe(true);
+      // Ball never comes within 4 of him.
+      for (let t = 0; t <= 1.0001; t += 0.02) expect(Math.hypot(...(sample(s.ball, t).map((v, i) => v - spot[i]) as [number, number])), `${e.t} #${e.seq} ball`).toBeGreaterThan(4);
+    }
+    // The award runs him in to point to the spot, then he backs off to that same spot before the walk-up.
+    const award = all.find((e) => e.t === "penalty_awarded")!;
+    const a = sceneFor(award, [50, 32], 15000)!;
+    const ref = a.actors.find((x) => x.side === "ref")!;
+    expect(sample(ref.path, 1)).toEqual(penRefSpot(award.side!));
+    expect(Math.hypot(...(sample(ref.path, 0.57).map((v, i) => v - a.impact![i]) as [number, number]))).toBeLessThan(6); // pointing at the spot
+  });
+
+  it("result badges are concrete: blocks flash BLOCKED, wide misses WIDE, high ones OVER; in-match and shootout alike", () => {
+    const flashes = new Map<string, Set<string>>();
+    for (const e of all) {
+      const s = sceneFor(e, [70, 32], 15000);
+      if (!s?.flash) continue;
+      if (!flashes.has(e.t)) flashes.set(e.t, new Set());
+      flashes.get(e.t)!.add(s.flash);
+    }
+    expect(flashes.get("block")).toEqual(new Set(["block"]));
+    expect(flashes.get("miss")).toEqual(new Set(["miss", "over"]));
+    expect(flashes.get("save")).toEqual(new Set(["save"]));
+    expect(flashes.get("woodwork")).toEqual(new Set(["wood"]));
+    const so = flashes.get("shootout_kick")!;
+    expect(so.has("goal") && so.has("save") && so.has("miss")).toBe(true);
+    for (const f of so) expect(["goal", "save", "miss", "over", "wood"]).toContain(f);
+    for (const e of all.filter((e) => e.t === "miss")) expect(sceneFor(e, [70, 32], 15000)!.flash).toBe((e as MatchEvent & { high?: number }).high ? "over" : "miss");
+  });
+
+  it("failed attacks resolve possession on screen: the blocker ends on the loose ball, the keeper ends with a save or a woodwork rebound", () => {
+    let n = 0;
+    for (const e of all) {
+      if (!["block", "save", "woodwork"].includes(e.t)) continue;
+      const s = sceneFor(e, [70, 32], 15000)!;
+      const who = e.t === "block" ? s.actors.find((a) => a.id === "b")! : s.actors.find((a) => a.keeper)!;
+      const [bx, by] = end(s);
+      const [px, py] = sample(who.path, 1);
+      expect(Math.hypot(bx - px, by - py), `${e.t} #${e.seq}`).toBeLessThan(1.5);
+      n++;
+    }
+    expect(n).toBeGreaterThan(100);
+  });
+
+  it("a turnover that starts deep in the other team's half is shown as a clearance collected in midfield, never an attacker standing in the keeper's hands", () => {
+    let n = 0;
+    let plain = 0;
+    for (const m of matches) {
+      let bs: string | null = "home";
+      for (const e of m) {
+        const s = sceneFor(e, (e.from as Pt) ?? [50, 32], 15000);
+        // The engine's flag matches an independent possession trace: a side's first touch after the other side had the ball.
+        if (e.t === "build_up" || (e.t === "pass" && !e.chain && m[m.indexOf(e) - 1]?.t !== "pass")) expect(!!e.turn, `${e.t} #${e.seq}`).toBe(!!bs && bs !== e.side);
+        if (e.ball && e.side && !["foul", "yellow_card", "red_card", "shot", "penalty_awarded", "penalty_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "goal", "celebration"].includes(e.t)) bs = ["miss", "woodwork"].includes(e.t) ? (e.side === "home" ? "away" : "home") : e.side;
+        if (e.t === "restart") bs = e.side!;
+        if (["kickoff"].includes(e.t)) bs = "home";
+        if (["second_half", "extra_time", "et_second_half"].includes(e.t)) bs = null;
+        if (!s || !e.turn) continue;
+        const dx = (e.side === "home" ? 1 : -1) * (e.ball![0] - e.from![0]);
+        const clear = s.actors.find((a) => a.id === "clear");
+        if (dx >= -12) {
+          expect(clear).toBeUndefined();
+          plain++;
+          continue;
+        }
+        n++;
+        expect(clear, `${e.t} #${e.seq}`).toBeTruthy();
+        expect(clear!.side).not.toBe(e.side);
+        expect(clear!.path[0]).toEqual(e.from); // the opponent is on the ball where it was left
+        const inBox = e.side === "home" ? e.from![0] >= 85 : e.from![0] <= 15;
+        expect(!!clear!.keeper).toBe(inBox);
+        const p = s.actors.find((a) => a.id === "p")!;
+        expect(Math.hypot(...(sample(p.path, 1).map((v, i) => v - lerp(e.from!, e.ball!, 0.55)[i]) as [number, number]))).toBeLessThan(3); // the passer collects in midfield
+        expect(sampleN(s.ballHeight, 0.3)).toBeGreaterThan(0.3); // the clearance is lofted
+        expect(end(s)).toEqual(e.ball);
+      }
+    }
+    expect(n).toBeGreaterThan(50);
+    expect(plain).toBeGreaterThan(50);
+  });
+
+  it("dribbles stay short enough to carry; a long progression is a through ball to the build-up starter (no extra RNG, so other seeds are untouched)", () => {
+    const runs = all.filter((e) => e.t === "dribble");
+    expect(runs.length).toBeGreaterThan(20);
+    for (const e of runs) expect(Math.hypot(e.ball![0] - e.from![0], e.ball![1] - e.from![1]), `dribble #${e.seq}`).toBeLessThanOrEqual(24);
+    const long = all.filter((e) => e.t === "through_ball" && Math.hypot(e.ball![0] - e.from![0], e.ball![1] - e.from![1]) > 24);
+    expect(long.length).toBeGreaterThan(20);
+  });
+
+  it("a period restart kicks off from the centre: the first move of the half starts there, not where the last one died", () => {
+    for (const m of matches)
+      m.forEach((e, i) => {
+        if (!["second_half", "extra_time", "et_second_half"].includes(e.t)) return;
+        const next = m.slice(i + 1).find((x) => x.from);
+        expect(next?.from, `${e.t} #${e.seq}`).toEqual([50, 32]);
+      });
   });
 
   it("penalty_awarded fills the engine's 5 s award wait: fouled player down, ref runs in to point, offender walks off, taker moves", () => {

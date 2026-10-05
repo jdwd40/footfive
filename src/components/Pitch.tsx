@@ -2,6 +2,7 @@
  * Stateless SVG pitch: draws one Frame (10 players + ball). The parent ticks the playhead;
  * nothing animates in here.
  */
+import type { ReactNode } from "react";
 import type { TeamPublic } from "../lib/pocketbase";
 import type { Frame } from "../domain/sim";
 import { FULL_CAM } from "../domain/scenes";
@@ -12,12 +13,16 @@ type Props = {
   away: TeamPublic;
   replay?: boolean;
   revealed: boolean; // MatchPage decides when the result may show (flash moment + displayed ball at the impact point)
+  hud?: ReactNode; // compact score / clock / shootout strip pinned to the pitch's top-left corner
 };
 
 const W = 100;
 const H = 64;
+const R = 1.45; // player radius: one size for everyone (the ring and the lime fill are the only marks)
+/** Result badge per flash kind (what actually happened, never a generic "no goal"); shootout goals and cards are special-cased below. */
+const BADGE: Record<string, string> = { goal: "GOAL!", save: "SAVED!", wood: "WOODWORK", miss: "WIDE", over: "OVER", block: "BLOCKED", pen: "PENALTY" };
 
-export default function Pitch({ frame, home, away, replay, revealed }: Props) {
+export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
   const ball = frame?.ball ?? ([50, 32] as [number, number]);
@@ -72,8 +77,9 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           <i className="inline-block h-2.5 w-2.5 rounded-full bg-[#f4f7ff]" style={{ boxShadow: `0 0 0 2px ${ac}` }} /> {away.abbreviation}
         </span>
       </div>
-      <div className="relative w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" data-testid="pitch">
-        <svg viewBox={(frame?.cam ?? FULL_CAM).join(" ")} preserveAspectRatio="xMidYMid meet" className="block w-full" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}` }} role="img" aria-label={frame ? frame.caption : "Pitch"}>
+      {/* Sized by the full-pitch aspect but never taller than the viewport minus the chrome above it (~360 px: nav, switcher, ticker, scoreboard), so the pitch, its HUD and the commentary line share the screen on a laptop; never under 260 px wide. */}
+      <div className="relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: `max(260px, calc((100vh - 360px) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))` }} data-testid="pitch">
+        <svg viewBox={(frame?.cam ?? FULL_CAM).join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
             <rect width="6.25" height={H} fill="#0f3a22" />
@@ -105,7 +111,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
         {frame?.players.map((p) => {
           const c = p.side === "home" ? hc : ac;
           const isAway = p.side === "away";
-          const r = 1.7; // one size for everyone: the ring (hot) and lime fill (keeper) are the only marks
+          const r = R;
           return (
             <g key={`${p.side}-${p.name}`} transform={`translate(${p.x} ${p.y})`} data-testid="player">
               <ellipse cx={0} cy={r} rx={r} ry={0.6} fill="rgba(0,0,0,0.35)" />
@@ -118,7 +124,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           );
         })}
 
-        {frame ? <circle cx={frame.ref[0]} cy={frame.ref[1]} r={1.4} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-testid="ref" /> : null}
+        {frame ? <circle cx={frame.ref[0]} cy={frame.ref[1]} r={1.15} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-testid="ref" /> : null}
 
         {/* ball: shadow on the ground, ball lifted by height */}
         <ellipse cx={ball[0]} cy={ball[1] + 0.9} rx={0.9} ry={0.35} fill="rgba(0,0,0,0.45)" />
@@ -145,7 +151,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           </div>
         </div>
       ) : frame && flash ? (
-        <div className="pointer-events-none absolute inset-x-0 top-2 flex justify-center">
+        <div className="pointer-events-none absolute inset-x-0 top-9 flex justify-center">
           <span
             className={`event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg ${
               flash === "goal" ? "bg-lime text-ink" : flash === "save" ? "bg-cyan text-ink" : flash === "card" ? "bg-live text-white" : "bg-amber text-ink"
@@ -155,18 +161,17 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
               ? frame.type === "shootout_kick" && frame.pens
                 ? `GOAL! ${frame.pens[0]}–${frame.pens[1]}`
                 : "GOAL!"
-              : flash === "save"
-                ? "SAVED!"
-                : flash === "wood"
-                  ? "WOODWORK"
-                  : flash === "card"
-                    ? frame.type === "red_card"
-                      ? "RED CARD"
-                      : "BOOKED"
-                    : flash === "pen"
-                      ? "PENALTY"
-                      : "NO GOAL"}
+              : flash === "card"
+                ? frame.type === "red_card"
+                  ? "RED CARD"
+                  : "BOOKED"
+                : BADGE[flash]}
           </span>
+        </div>
+      ) : null}
+      {hud ? (
+        <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-2 rounded-md bg-black/60 px-2 py-1 font-display text-[11px] font-bold tracking-wider text-white shadow-lg sm:text-xs" data-testid="pitch-hud">
+          {hud}
         </div>
       ) : null}
       {strip ? (
@@ -181,7 +186,7 @@ export default function Pitch({ frame, home, away, replay, revealed }: Props) {
           </span>
         </div>
       ) : null}
-        {replay ? <span className="chip chip-amber absolute left-2 top-2">Replay</span> : null}
+        {replay ? <span className="chip chip-amber absolute right-2 top-2">Replay</span> : null}
       </div>
     </>
   );
