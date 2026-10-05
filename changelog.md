@@ -4,7 +4,7 @@
 
 - Failed attacks show what happened (WIDE / OVER / BLOCKED / SAVED! / WOODWORK badges) instead of a generic NO GOAL; badge and commentary read the same engine outcome.
 - Possession resolves on screen: blocker collects, keeper catches or parries then gathers, keeper launches the saving side's own distribution; engine tracks the ball holder (`st.bs`, `turn` flag on turnovers) so a turnover is drawn as a clearance, not an attacker in the keeper's hands.
-- Dribbles over 24 units become through balls (same RNG order); period restarts reset the ball to the centre; livelier dwell (lay-offs, nearest opponent closes); restart/kick-off/dribble scenes slightly shorter. Engine goal/penalty/shootout holds unchanged.
+- Engine authoritative outcomes preserved: a 200-seed regression (`engine.test.ts`) pins event tuples, final score/winner and RNG draw count to base 33dc1b8 (a long-dribble → through-ball conversion that changed 17/200 seeded results was removed after review). Period restarts reset the ball to the centre; livelier dwell (client lay-offs, nearest opponent closes) means passing is seen slightly more often; restart/kick-off/dribble scenes slightly shorter. Engine goal/penalty/shootout holds unchanged.
 - Smaller players (r 1.45, ref 1.15); pitch capped to the viewport; on-pitch HUD (score, clock, PENS, "<ABB> to kick") fed from the same reveal-gated state as the scoreboard.
 - Referee trails play without the centre-line flip and holds the box corner during penalties and shootouts.
 - QA harness `scripts/live-watch.mjs` (+ `live-watch-snapshot.mjs`): frames, video, console errors and chronological score/clock/HUD snapshots from a real backend match or a labelled offline-engine replay.
