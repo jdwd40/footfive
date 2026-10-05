@@ -1054,6 +1054,9 @@ Private per-user careers/tournaments. Retained only as historical note; schema l
 - Mobile-first hierarchy; reduced-motion; aria-live for major events.
 - Measured KO sample (~19% shootouts) — no forced outcomes.
 - 2026-10-05 polish: concrete outcome badges; engine tracks the ball holder (`st.bs`, `turn`) so failed attacks and turnovers resolve possession on screen; on-pitch HUD (score / clock / PENS / kicker) reads the same revealed state as the scoreboard; referee holds the box corner during penalties and shootouts.
+- 2026-10-05 pitch/ends follow-up (implemented; bounded independent QA PASS, final review and human feel pending): modestly larger pitch from 360px upwards, compact tiny pitch retained. Compact actual ticker/scoreboard and completed winner/auto-return chrome preserve pitch, critical HUD and commentary at the five tested viewports; the detailed shootout board may still require scrolling.
+- Display-only orientation comes from each event's phase snapshot: home attacks right in the first half and ET1, left in the second half and ET2; away attacks the opposite end. Breaks keep the outgoing orientation while the presentation ball eases to centre during the existing six-second walk-off. Shootout intro/setup/alternating kicks/results keep one left end; players, ball, referee and camera project together, numbers stay upright. Engine coordinates, persisted events, outcomes and RNG remain unchanged.
+- Every player, both keepers and referee use base radius 1.45/stroke 0.3. At most one possession ring: a semantic carrier candidate must also contact the smoothed rendered ball (distance ≤1.6, lift <0.05); named participants alone are not marked, grounded/airborne free-flight is unmarked. Fast dribble or striker smoothing gaps can correctly suppress the ring; continuous carrier highlighting is not guaranteed.
 
 ### Live client rules
 
