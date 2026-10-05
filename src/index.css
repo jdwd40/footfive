@@ -300,6 +300,14 @@ h3,
 .match-score-row > .text-center > :nth-child(2) { display: flex; align-items: center; }
 .match-score-row > .text-center > :nth-child(2) > span { line-height: 1.2; }
 .match-page > .grid { margin-top: 8px; }
+/* Final chrome must fit without taking height from the pitch. */
+.match-page [data-testid="final-result"] { padding-block: 2px; }
+.match-page > div:has(> [data-testid="auto-return"]) { margin-top: 0; line-height: 1; }
+@media (max-width: 359px) {
+  /* The pitch HUD already carries the final score, clock and penalties. */
+  .match-page [data-testid="match-scoreboard"]:has([data-testid="final-result"]) .match-score-row { display: none; }
+  .match-page:has([data-testid="final-result"]) [aria-label="Highlights"] { position: absolute; top: 8px; right: 8px; }
+}
 @media (min-width: 360px) {
   .match-page { margin-inline: -4px; --pitch-chrome: 328px; }
   .match-pitch-panel { padding: 4px; }
