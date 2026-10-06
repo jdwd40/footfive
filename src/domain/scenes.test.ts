@@ -164,10 +164,10 @@ describe("highlight scenes agree with the simulation", () => {
     expect(shots).toBeGreaterThan(100);
   });
 
-  it("the event after a shot result or card waits resultHoldMs so the client can show it", () => {
+  it("the event after a save, miss, woodwork or card waits resultHoldMs so the client can show it", () => {
     const hold = eng.buildTiming(1000, 1).resultHoldMs as number;
     expect(hold).toBe(1200);
-    const held = new Set(["miss", "block", "woodwork", "save", "yellow_card", "red_card"]);
+    const held = new Set(["miss", "woodwork", "save", "yellow_card", "red_card"]); // blocks deliberately play on
     let n = 0;
     for (const m of matches)
       for (let i = 0; i + 1 < m.length; i++)
@@ -178,6 +178,18 @@ describe("highlight scenes agree with the simulation", () => {
           if (i + 2 < m.length && m[i + 2].min === m[i + 1].min) expect(m[i + 2].at, `${m[i + 1].t} → ${m[i + 2].t}`).toBeGreaterThan(m[i + 1].at);
         }
     expect(n).toBeGreaterThan(50);
+  });
+
+  it("a block bounces straight back into play — no resultHoldMs pause", () => {
+    const hold = eng.buildTiming(1000, 1).resultHoldMs as number;
+    let n = 0;
+    for (const m of matches)
+      for (let i = 0; i + 1 < m.length; i++)
+        if (m[i].t === "block" && m[i + 1].t === "bounce") {
+          n++;
+          expect(m[i + 1].at - m[i].at, `block → bounce`).toBeLessThan(hold);
+        }
+    expect(n).toBeGreaterThan(20);
   });
 
   it("the first play after a kick-off / period restart waits kickoffHoldMs (announcement + walk-on)", () => {

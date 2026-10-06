@@ -305,7 +305,10 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
   // Issue #9 re-pin (cf385510aa429a37077f5dc8e0b8f1fd4c79657f8ce35184e9c2dab9d94333f1 →
   // f1e646ad18a3fa5c6f8318b46da0a21df7252d99ed639e3b766ad020086dad4d): attack-variety tuning deliberately changes
   // seeded outcomes — 2–4 passes per chain, occasional long-range shots, higher shot/save base rates.
-  const BASE_SHA256 = "f1e646ad18a3fa5c6f8318b46da0a21df7252d99ed639e3b766ad020086dad4d";
+  // Blocked-shot re-pin (f1e646ad18a3fa5c6f8318b46da0a21df7252d99ed639e3b766ad020086dad4d →
+  // eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b): blocks no longer add resultHoldMs,
+  // so `at` timestamps after a block shift; outcomes, actors, scores and RNG draw count are untouched.
+  const BASE_SHA256 = "eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b";
   const liveTiming = eng.buildTiming(8000, 1);
   type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
   const run = (seed: number) => {

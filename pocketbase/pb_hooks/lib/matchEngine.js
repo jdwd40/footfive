@@ -711,7 +711,8 @@ function attack(st, out, ctx, side, c) {
   }
   st.danger = false; // the outcome is public with this event, so markets reopen
   emit(st, out, ctx.at(f), outcome, res);
-  ctx.pause += st.timing.resultHoldMs; // the save/miss/block is shown before play moves on (shifts the rest of the minute)
+  // save/miss/woodwork hold so the client can show them (shifts the rest of the minute); a block bounces straight back into play
+  if (outcome !== "block") ctx.pause += st.timing.resultHoldMs;
   st.ball = res.ball;
   st.bs = def; // keeper / blocker / defender on the loose ball
   // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues. A miss always leaves the pitch.
