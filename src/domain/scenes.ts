@@ -164,6 +164,15 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       if (backward || ownBox) {
         const inBox = ownBox || toward(atk, passer[0] - goalX(atk)) >= -15;
         const mid = lerp(passer, recv, 0.55);
+        // A short distribution would start the collector in the keeper's hands: place him
+        // beside the collection point instead (exactly 4 units off the keeper's spot).
+        let pStart: Pt = clampPt([mid[0] - toward(atk, 3), mid[1] + 2]);
+        if (Math.hypot(pStart[0] - passer[0], pStart[1] - passer[1]) < 3.5) {
+          const dx = mid[0] - passer[0];
+          const dy = mid[1] - passer[1];
+          const len = Math.hypot(dx, dy) || 1;
+          pStart = clampPt([passer[0] + (dx / len) * 3.2 - (dy / len) * 2.4, passer[1] + (dy / len) * 3.2 + (dx / len) * 2.4]);
+        }
         return {
           ...base,
           ms: d(1900),
@@ -171,7 +180,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           ballHeight: [0, 0.7, 0, 0],
           actors: [
             { id: "clear", side: ownBox ? atk : def, keeper: inBox, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
-            { id: "p", side: atk, label: short(e.p), path: [clampPt([mid[0] - toward(atk, 3), mid[1] + 2]), clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
+            { id: "p", side: atk, label: short(e.p), path: [pStart, clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
             { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] },
             { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
           ],

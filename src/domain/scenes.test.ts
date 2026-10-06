@@ -16,7 +16,9 @@ function team(i: number) {
 }
 
 /** All published events of several full simulated matches. */
-function events(n = 40): MatchEvent[][] {
+// 120 matches: the shootout-badge test below needs a wide shootout miss, which the
+// engine produces only every few dozen kicks — 40 matches may not roll one.
+function events(n = 120): MatchEvent[][] {
   const out: MatchEvent[][] = [];
   for (let i = 0; i < n; i++) {
     const st = eng.createMatch({ fixtureId: "f" + i, seed: 1000 + i, kickoffAt: 0, home: team(i % 16), away: team((i * 7 + 3) % 16), timing: eng.buildTiming(1000, 1) });
