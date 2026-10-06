@@ -154,9 +154,9 @@ function isSchemaReady($app) {
 
 function ensureWorld($app) {
   if (!isSchemaReady($app)) throw new Error("schema_not_ready");
+  ensureTeams($app); // creates missing teams and re-syncs template colours onto existing ones (runs on every bootstrap, so colour edits in teams.js self-heal deployed DBs)
   var w = one($app, "world", "key = 'main'");
   if (w) return w;
-  ensureTeams($app);
   var rec = new Record($app.findCollectionByNameOrId("world"));
   rec.set("key", "main");
   rec.set("pace", "normal");
@@ -179,15 +179,30 @@ function ensureWorld($app) {
   return rec;
 }
 
+/** teams.js owns kit colours: bring an existing team row in line, saving only on drift. */
+function syncTeamColours($app, rec, t) {
+  if (rec.get("primary_color") === t.primary && rec.get("secondary_color") === t.secondary) return;
+  rec.set("primary_color", t.primary);
+  rec.set("secondary_color", t.secondary);
+  $app.save(rec);
+}
+
 function ensureTeams($app) {
   var existing = all($app, "proball_teams", "id != ''", "sort_order", {}, 50);
-  if (existing.length >= 16) return existing;
+  if (existing.length >= 16) {
+    for (var s = 0; s < existing.length; s++) {
+      var tmpl = teamsMod.getTeamBySlug(existing[s].get("slug"));
+      if (tmpl) syncTeamColours($app, existing[s], tmpl);
+    }
+    return existing;
+  }
   var TEAMS = teamsMod.TEAMS;
   var created = [];
   for (var i = 0; i < TEAMS.length; i++) {
     var t = TEAMS[i];
     var found = one($app, "proball_teams", "slug = {:s}", "", { s: t.slug });
     if (found) {
+      syncTeamColours($app, found, t);
       created.push(found);
       continue;
     }
