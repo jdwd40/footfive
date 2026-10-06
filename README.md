@@ -158,26 +158,39 @@ Admin reset with “must change” → user must complete `/change-password` bef
   `/api/footfive/admin/*` routes. Ordinary signup and profile edits (ordinary fields only)
   are unaffected.
 - `must_change_password` is enforced on every protected `/api/footfive/*` route and on native
-  collection access (403 "Password change required"; native list rules return no rows). The
-  only reachable exceptions are session discovery (`GET /api/footfive/me`) and
-  `POST /api/footfive/account/change-password`, plus login/auth-refresh — no business data and
-  no native self-writes (profile or password) while the flag is set. The flag is cleared only
-  by the change-password route.
+  collection access (403 "Password change required"; native business list rules return no rows).
+  The only reachable exceptions are session discovery (`GET /api/footfive/me`) and
+  `POST /api/footfive/account/change-password`, plus login/auth-refresh — no business data
+  while the flag is set. Native users list/view stay self-only (`id = @request.auth.id`) so a
+  forced-password user can still read its own record for session discovery, but they
+  additionally require `disabled = false`. Native forced self-writes (profile or password)
+  reject — 403 from the hooks, or 404 when the hardened users update rule hides the record.
+  The flag is cleared only by the change-password route.
 - Disabling an account rotates its `tokenKey`, so existing tokens stop working immediately and
   stay invalid after re-enable. Accounts already disabled before this enforcement was deployed
   have their tokens revoked by migration `1750000016_account_security_rules.js` at upgrade —
-  no data reset; records, IDs and business data are preserved. Disabled accounts are rejected
-  on **all** `/api/footfive/*` routes including `/me` and change-password: a revoked token
-  fails auth with 401, and any token presented for a disabled record gets 403
-  "Account disabled". (401 = token invalid/revoked; 403 = authenticated but forbidden by
-  account state.)
+  EVERY disabled record is rotated (fully paginated, no capped page) — no data reset; records,
+  IDs and business data are preserved. Disabled rejection is scoped by route class:
+  - **Public routes** — `/api/footfive/health`, `/api/footfive/public-scoreboard` and
+    `/api/footfive/auth/login` deliberately skip account-state checks entirely. They answer
+    200 without a token, and also 200 with a still-valid token of a disabled record.
+  - **Protected routes** — every other `/api/footfive/*` route, including the session-discovery
+    (`/me`) and change-password exceptions (those exempt only forced-password users, never
+    disabled ones): a revoked token fails auth with 401, and any still-valid token presented
+    for a disabled record gets 403 "Account disabled". Native users self-read (list/view) is
+    likewise closed to disabled accounts by the `disabled = false` rule above.
+  (401 = token invalid/revoked; 403 = authenticated but forbidden by account state.)
 - Login errors are generic and do not reveal account state, but the two login surfaces differ:
   the custom `/api/footfive/auth/login` route answers 401 "Invalid credentials" for a
   nonexistent identity, a wrong password and a disabled account alike; PocketBase's native
   `auth-with-password` endpoint answers 400 "Failed to authenticate." for the same cases.
   PocketBase's native rate limiter is enabled (`pb_migrations/1750000015_rate_limits.js`):
-  120 requests/min per IP on auth endpoints, 429 beyond that (headroom for NAT/shared IPs;
-  bcrypt cost bounds per-IP throughput).
+  120 requests/min per IP on the password-login surfaces above and on the `*:auth` endpoint
+  class (429 beyond that, verified on both login surfaces; headroom for NAT/shared IPs,
+  bcrypt cost bounds per-IP throughput), plus a general 300 requests/10s per-IP `/api/` budget.
+  A 429 is throttling, not an auth failure: the frontend preserves a healthy session on 429
+  (on `/me` and on auth-refresh alike) and clears it only on definitive rejections —
+  auth-refresh 400, `/me` 401, or disabled 403.
 
 ## Deploy / production
 
