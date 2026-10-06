@@ -297,6 +297,34 @@ async function main() {
     const resurrectB = await req("/api/footfive/world", "GET", tokB);
     ok("upgrade: 501st base token NOT resurrected after enable (F6)", resurrectB.status === 401, `status=${resurrectB.status}`);
 
+    // --- F7: native users session discovery requires disabled=false ---
+    // A disabled record whose token escaped revocation (field flipped offline,
+    // no rotation — the exact F6 escape shape, defense-in-depth control) must
+    // not keep native self-discovery; forced-password discovery must remain.
+    const escEmail = `up_escape_${stamp}@t.local`;
+    await create(escEmail);
+    const esc = await login(escEmail);
+    ok("F7: escape fixture login", esc.ok, `status=${esc.status}`);
+    const tokE = esc.data.token;
+    const idE = esc.data.record.id;
+    sql(DB, `c.execute("update users set disabled=1 where id='${idE}'"); c.commit()`);
+    const escGet = await req(`/api/collections/users/records/${idE}`, "GET", tokE);
+    ok("F7: escaped disabled token rejected on native self GET", [401, 403, 404].includes(escGet.status), `status=${escGet.status}`);
+    const escList = await req("/api/collections/users/records?perPage=5", "GET", tokE);
+    ok("F7: escaped disabled token sees no native users rows", escList.status >= 400 || (escList.data.items || []).length === 0, `status=${escList.status}`);
+
+    const fpEmail = `up_forced_${stamp}@t.local`;
+    const fpCreate = await req("/api/footfive/admin/users", "POST", at, { email: fpEmail, password: "temppass99", display_name: "UpForced", reason: "F7 discovery control" });
+    ok("F7: forced fixture created", fpCreate.ok, `status=${fpCreate.status}`);
+    const fpReset = await req(`/api/footfive/admin/users/${fpCreate.data.id}/password`, "POST", at, { password: "temppass99", mustChange: true, reason: "F7 control" });
+    ok("F7: forced reset applied", fpReset.ok, `status=${fpReset.status}`);
+    const fpLogin = await login(fpEmail, "temppass99");
+    ok("F7: forced login", fpLogin.ok, `status=${fpLogin.status}`);
+    const fpGet = await req(`/api/collections/users/records/${fpLogin.data.record.id}`, "GET", fpLogin.data.token);
+    ok("F7: forced-password native self GET still works (session discovery)", fpGet.ok, `status=${fpGet.status}`);
+    const fpMe = await req("/api/footfive/me", "GET", fpLogin.data.token);
+    ok("F7: forced /me session discovery still works", fpMe.ok && fpMe.data.must_change_password === true, `status=${fpMe.status}`);
+
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     process.exitCode = failed ? 1 : 0;
   } finally {

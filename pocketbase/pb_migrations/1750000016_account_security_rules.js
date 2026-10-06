@@ -34,10 +34,14 @@ migrate(
         var rule = String(raw);
         if (rule === "") continue;
         if (rule.indexOf("must_change_password") >= 0) continue;
-        // Session discovery stays possible: users list/view are how a client
-        // reads its own record; the forced-password/disabled write blocks live
-        // in hooks. Every other exposed rule gets the account-state guard.
+        // Forced-password session discovery stays possible: users list/view
+        // are how a client reads its own record while must_change_password is
+        // set, so they keep a self-only shape — but a DISABLED account is
+        // excluded from session discovery too (review F7). Every other
+        // exposed rule gets the full account-state guard.
         if (col.name === "users" && (prop === "listRule" || prop === "viewRule")) {
+          col[prop] = "(" + rule + ") && @request.auth.disabled = false";
+          changed = true;
           continue;
         }
         col[prop] = "(" + rule + ") && " + GUARD;
@@ -88,8 +92,13 @@ migrate(
         if (raw === null || raw === undefined) continue;
         var rule = String(raw);
         var suffix = ") && " + GUARD;
+        var disabledSuffix = ") && @request.auth.disabled = false";
         if (rule.indexOf("(") === 0 && rule.slice(-suffix.length) === suffix) {
           col[prop] = rule.slice(1, rule.length - suffix.length);
+          changed = true;
+        } else if (rule.indexOf("(") === 0 && rule.slice(-disabledSuffix.length) === disabledSuffix) {
+          // users list/view self-discovery shape (see up migration).
+          col[prop] = rule.slice(1, rule.length - disabledSuffix.length);
           changed = true;
         }
       }
