@@ -170,7 +170,7 @@ var TEAMS = [
     name: "St Marry",
     abbreviation: "STM",
     grade: "B-",
-    primary: "#ffd60a",
+    primary: "#5856d6",
     secondary: "#1a1608",
     badge: "st_marry",
     players: [
@@ -224,7 +224,7 @@ var TEAMS = [
     name: "Doge City",
     abbreviation: "DOG",
     grade: "C+",
-    primary: "#ffcc00",
+    primary: "#232326",
     secondary: "#1a1400",
     badge: "doge_city",
     players: [
