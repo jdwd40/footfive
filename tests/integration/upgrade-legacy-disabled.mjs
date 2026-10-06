@@ -11,7 +11,8 @@
  *      of them (no 500-row truncation) and preserve all other data.
  *
  * Standalone:  node tests/integration/upgrade-legacy-disabled.mjs
- * Env: UPGRADE_PB_PORT (default 8293), UPGRADE_BASE (git ref, default origin/main).
+ * Env: UPGRADE_PB_PORT (default 8293), UPGRADE_BASE (git ref, default
+ *      DEFAULT_BASE below).
  * Own PB instance, own scratch DB; no other service is touched.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -25,7 +26,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 const PB_BIN = path.join(ROOT, "pocketbase", "pocketbase");
 const PORT = process.env.UPGRADE_PB_PORT || "8293";
 const URL = `http://127.0.0.1:${PORT}`;
-const BASE = process.env.UPGRADE_BASE || "origin/main";
+// Pinned legacy base: the last main commit WITHOUT the account-security
+// changes (original PR base). origin/main is unusable as a default: it gains
+// the fix once merged, and CI's shallow checkout has no local origin/main.
+const DEFAULT_BASE = "b3e6bffdc594fb7ea15d44e474c740dc67dfdd44";
+const BASE = process.env.UPGRADE_BASE || DEFAULT_BASE;
 
 let passed = 0;
 let failed = 0;
@@ -147,6 +152,17 @@ async function main() {
   mkdirSync(dataDir, { recursive: true });
   try {
     // Extract the exact base hooks/migrations (no working-tree mutation).
+    // Shallow CI checkouts (actions/checkout fetch-depth 1) do not contain the
+    // pinned base commit; fetch it by SHA on demand (GitHub serves reachable
+    // commits by SHA).
+    const resolves = () =>
+      spawnSync("git", ["rev-parse", "--verify", "--quiet", `${BASE}^{commit}`], { cwd: ROOT }).status === 0;
+    if (!resolves()) {
+      const fetch = spawnSync("git", ["fetch", "--depth", "1", "origin", BASE], { cwd: ROOT, encoding: "utf8" });
+      if (fetch.status !== 0 || !resolves()) {
+        throw new Error(`cannot resolve upgrade base ${BASE}: ${(fetch.stderr || "").trim()}`);
+      }
+    }
     const files = spawnSync(
       "git",
       ["ls-tree", "-r", "--name-only", BASE, "pocketbase/pb_hooks", "pocketbase/pb_migrations"],
