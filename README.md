@@ -172,8 +172,13 @@ Admin reset with “must change” → user must complete `/change-password` bef
   EVERY disabled record is rotated (fully paginated, no capped page) — no data reset; records,
   IDs and business data are preserved. Disabled rejection is scoped by route class:
   - **Public routes** — `/api/footfive/health`, `/api/footfive/public-scoreboard` and
-    `/api/footfive/auth/login` deliberately skip account-state checks entirely. They answer
-    200 without a token, and also 200 with a still-valid token of a disabled record.
+    `/api/footfive/auth/login` deliberately skip account-state checks entirely: no
+    pre-existing auth token is required or consulted. `/health` and `/public-scoreboard`
+    answer 200 without a token, and also 200 with a still-valid token of a disabled
+    record. `POST /auth/login` instead validates the submitted credentials and answers
+    401 "Invalid credentials" (generic, no account-state disclosure) for a nonexistent
+    identity, a wrong password and a disabled account alike, or 400 when identity or
+    password is missing; only valid credentials for an enabled account get 200.
   - **Protected routes** — every other `/api/footfive/*` route, including the session-discovery
     (`/me`) and change-password exceptions (those exempt only forced-password users, never
     disabled ones): a revoked token fails auth with 401, and any still-valid token presented
