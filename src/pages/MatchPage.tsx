@@ -374,9 +374,7 @@ function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale:
           ) : (
             <div className="font-display text-2xl text-muted">vs</div>
           )}
-          <div className="mt-0.5">
-            {st ? <MatchClock fx={fx} now={now} big /> : <span className="text-sm text-muted">Kick-off in {countdown(fx.kickoffAt - now)}</span>}
-          </div>
+          {st ? null : <div className="mt-0.5 text-sm text-muted">Kick-off in {countdown(fx.kickoffAt - now)}</div>}
           {st?.so ? (
             <div className="mt-1 text-sm font-bold text-magenta" data-testid="match-shootout-score">
               Pens {st.so.h}–{st.so.a}
