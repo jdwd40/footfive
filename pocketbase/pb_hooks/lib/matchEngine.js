@@ -527,6 +527,10 @@ function attack(st, out, ctx, side, c) {
     else outcome = rnd(st) < M.woodworkRate ? "woodwork" : "miss";
   } else outcome = rnd(st) < 0.55 ? "tackle" : "interception";
 
+  // An occasional shot comes from range, without final-third progression.
+  var isShot = outcome === "block" || outcome === "on_target" || outcome === "woodwork" || outcome === "miss";
+  var long = isShot && rnd(st) < M.longShotRate;
+
   var chain = st.seq + 1;
   var f = 0.12 + rnd(st) * 0.08;
   var STEP = 0.11;
@@ -552,7 +556,7 @@ function attack(st, out, ctx, side, c) {
   });
 
   var last = passer;
-  var passes = 2 + Math.floor(rnd(st) * 2);
+  var passes = 2 + Math.floor(rnd(st) * 3);
   for (var i = 0; i < passes; i++) {
     f += STEP;
     var back = i > 0 && rnd(st) < 0.4 && passer.name !== last.name;
@@ -601,35 +605,44 @@ function attack(st, out, ctx, side, c) {
   }
 
   // Progression into the final third — markets suspend until the outcome is public.
-  f += STEP;
-  var kind = outcome === "penalty" ? pick(st, ["dribble", "through_ball"]) : pick(st, ["through_ball", "dribble", "cross", "through_ball"]);
-  var runner = kind === "dribble" ? last : attacker(st, side, last);
-  var from3 = ball;
-  x = outcome === "penalty" ? 86 + rnd(st) * 4 : 74 + rnd(st) * 10;
-  y = kind === "cross" ? (y < 32 ? 5 + rnd(st) * 6 : 53 + rnd(st) * 6) : clamp(20 + rnd(st) * 24, 14, 50);
-  ball = pos(side, x, y);
-  st.danger = true;
-  emit(st, out, ctx.at(f), kind, {
-    side: side,
-    chain: chain,
-    p: kind === "dribble" ? runner.name : last.name,
-    p2: runner.name,
-    from: from3,
-    ball: ball,
-    text:
-      kind === "through_ball"
-        ? pick(st, [last.name + " threads a through ball for " + runner.name, "Defence split — " + last.name + " releases " + runner.name])
-        : kind === "dribble"
-          ? pick(st, [runner.name + " drives at the " + abbr(st, def) + " defence", runner.name + " skips past a challenge"])
-          : last.name + " goes wide to " + runner.name + ", who crosses",
-    clk: ctx.clk(f),
-  });
+  // A long-range effort skips it: the shot comes from where the move stalls.
+  var kind = null;
+  var runner = last;
+  if (long) {
+    x = clamp(x, M.longShotMinX, M.longShotMaxX);
+    ball = pos(side, x, y);
+    st.danger = true;
+  } else {
+    f += STEP;
+    kind = outcome === "penalty" ? pick(st, ["dribble", "through_ball"]) : pick(st, ["through_ball", "dribble", "cross", "through_ball"]);
+    runner = kind === "dribble" ? last : attacker(st, side, last);
+    var from3 = ball;
+    x = outcome === "penalty" ? 86 + rnd(st) * 4 : 74 + rnd(st) * 10;
+    y = kind === "cross" ? (y < 32 ? 5 + rnd(st) * 6 : 53 + rnd(st) * 6) : clamp(20 + rnd(st) * 24, 14, 50);
+    ball = pos(side, x, y);
+    st.danger = true;
+    emit(st, out, ctx.at(f), kind, {
+      side: side,
+      chain: chain,
+      p: kind === "dribble" ? runner.name : last.name,
+      p2: runner.name,
+      from: from3,
+      ball: ball,
+      text:
+        kind === "through_ball"
+          ? pick(st, [last.name + " threads a through ball for " + runner.name, "Defence split — " + last.name + " releases " + runner.name])
+          : kind === "dribble"
+            ? pick(st, [runner.name + " drives at the " + abbr(st, def) + " defence", runner.name + " skips past a challenge"])
+            : last.name + " goes wide to " + runner.name + ", who crosses",
+      clk: ctx.clk(f),
+    });
 
-  if (outcome === "penalty") return penalty(st, out, ctx, side, runner, f + STEP, chain);
+    if (outcome === "penalty") return penalty(st, out, ctx, side, runner, f + STEP, chain);
+  }
 
   var shooter = kind === "cross" ? attacker(st, side, runner) : runner;
   var shotFrom = kind === "cross" ? pos(side, 84 + rnd(st) * 6, 24 + rnd(st) * 16) : ball;
-  if (outcome === "on_target") outcome = rnd(st) < saveChance(st, shooter, def) ? "save" : "goal";
+  if (outcome === "on_target") outcome = rnd(st) < saveChance(st, shooter, def) + (long ? M.longShotSaveBonus : 0) ? "save" : "goal";
 
   f += STEP;
   st.stats[side].sh += 1;
@@ -641,7 +654,13 @@ function attack(st, out, ctx, side, c) {
     from: kind === "cross" ? ball : null,
     ball: shotFrom,
     header: kind === "cross" ? 1 : 0,
-    text: kind === "cross" ? shooter.name + " rises to meet it!" : pick(st, [shooter.name + " shoots!", shooter.name + " lets fly!", shooter.name + " goes for goal"]),
+    long: long ? 1 : 0,
+    text:
+      kind === "cross"
+        ? shooter.name + " rises to meet it!"
+        : long
+          ? pick(st, [shooter.name + " tries his luck from distance!", shooter.name + " shoots from range!", shooter.name + " lets one fly from a long way out!"])
+          : pick(st, [shooter.name + " shoots!", shooter.name + " lets fly!", shooter.name + " goes for goal"]),
     clk: ctx.clk(f),
   });
 

@@ -57,14 +57,20 @@ var BALANCE = {
     edgeOffset: 18, // attack − defence is ≈ −18 for evenly matched sides
     seqBase: 0.28,
     seqK: 0.006,
-    shotBase: 0.5,
+    shotBase: 0.54,
     shotK: 0.004,
     onTargetBase: 0.45,
     onTargetK: 0.003,
     blockRate: 0.22,
     woodworkRate: 0.12,
-    saveBase: 0.55,
+    saveBase: 0.57,
     saveK: 0.004,
+    // Occasional long-range effort: fraction of shots taken from deep (x 58–70)
+    // without final-third progression; the keeper's save chance gets this bonus.
+    longShotRate: 0.08,
+    longShotMinX: 58,
+    longShotMaxX: 70,
+    longShotSaveBonus: 0.15,
     possK: 0.004,
     penBase: 0.006,
     penK: 0.0002,
