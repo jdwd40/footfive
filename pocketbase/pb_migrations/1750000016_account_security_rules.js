@@ -46,19 +46,30 @@ migrate(
       if (changed) app.save(col);
     }
 
-    // Revoke outstanding tokens of already-disabled accounts (upgrade path).
-    var disabled = app.findRecordsByFilter("users", "disabled = true", "", 500, 0);
-    for (var d = 0; d < (disabled || []).length; d++) {
-      var u = disabled[d];
-      if (typeof u.refreshTokenKey === "function") {
-        u.refreshTokenKey();
-      } else if (typeof $security !== "undefined" && $security.randomString) {
-        u.set("tokenKey", $security.randomString(50));
-      } else {
-        throw new Error("token rotation unavailable for disabled user " + u.id);
+    // Revoke outstanding tokens of ALL already-disabled accounts (upgrade
+    // path). Paginate the whole result set: a single capped page silently
+    // leaves legacy tokens unrevoked, and re-enable would resurrect them
+    // (review F6). Rotation does not change the filter, so offset paging is
+    // stable. Fail closed: if rotation is impossible the migration fails
+    // rather than shipping a silently unrevoked state.
+    var PAGE = 500;
+    var offset = 0;
+    var disabled;
+    do {
+      disabled = app.findRecordsByFilter("users", "disabled = true", "", PAGE, offset) || [];
+      for (var d = 0; d < disabled.length; d++) {
+        var u = disabled[d];
+        if (typeof u.refreshTokenKey === "function") {
+          u.refreshTokenKey();
+        } else if (typeof $security !== "undefined" && $security.randomString) {
+          u.set("tokenKey", $security.randomString(50));
+        } else {
+          throw new Error("token rotation unavailable for disabled user " + u.id);
+        }
+        app.save(u);
       }
-      app.save(u);
-    }
+      offset += disabled.length;
+    } while (disabled.length === PAGE);
   },
   (app) => {
     // Down: remove the guard clauses (tokenKey rotation is intentionally not
