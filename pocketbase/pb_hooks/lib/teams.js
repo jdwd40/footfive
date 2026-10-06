@@ -8,7 +8,7 @@ var TEAMS = [
     name: "New Metro City",
     abbreviation: "MET",
     grade: "A++",
-    primary: "#00f0ff",
+    primary: "#ff453a",
     secondary: "#0a0a1a",
     badge: "new_metro_city",
     players: [
@@ -26,7 +26,7 @@ var TEAMS = [
     name: "Mega City One",
     abbreviation: "MC1",
     grade: "A+",
-    primary: "#ff2d55",
+    primary: "#2f5bff",
     secondary: "#1a0a10",
     badge: "mega_city_one",
     players: [
@@ -44,7 +44,7 @@ var TEAMS = [
     name: "Port Hilo",
     abbreviation: "PHL",
     grade: "A",
-    primary: "#ff9f0a",
+    primary: "#d4a017",
     secondary: "#1a1208",
     badge: "port_hilo",
     players: [
@@ -80,7 +80,7 @@ var TEAMS = [
     name: "Outside City",
     abbreviation: "OUT",
     grade: "A-",
-    primary: "#30d158",
+    primary: "#98989d",
     secondary: "#0a1a0e",
     badge: "outside_city",
     players: [
@@ -116,7 +116,7 @@ var TEAMS = [
     name: "Mega City Two",
     abbreviation: "MC2",
     grade: "B+",
-    primary: "#ff6482",
+    primary: "#6ab4ff",
     secondary: "#1a0c10",
     badge: "mega_city_two",
     players: [
@@ -134,7 +134,7 @@ var TEAMS = [
     name: "Airway City",
     abbreviation: "AIR",
     grade: "B",
-    primary: "#64d2ff",
+    primary: "#f051d8",
     secondary: "#0a121a",
     badge: "airway_city",
     players: [
@@ -188,7 +188,7 @@ var TEAMS = [
     name: "Orlean City",
     abbreviation: "ORL",
     grade: "B-",
-    primary: "#ff6b4a",
+    primary: "#ff5fa8",
     secondary: "#1a0e0a",
     badge: "orlean_city",
     players: [
@@ -206,7 +206,7 @@ var TEAMS = [
     name: "Atlan",
     abbreviation: "ATL",
     grade: "C+",
-    primary: "#5ac8fa",
+    primary: "#0d9488",
     secondary: "#0a1018",
     badge: "atlan",
     players: [
@@ -242,7 +242,7 @@ var TEAMS = [
     name: "Metro Bay",
     abbreviation: "MBY",
     grade: "C",
-    primary: "#0a84ff",
+    primary: "#00f0ff",
     secondary: "#080e1a",
     badge: "metro_bay",
     players: [
@@ -260,7 +260,7 @@ var TEAMS = [
     name: "Redstone",
     abbreviation: "RED",
     grade: "C",
-    primary: "#ff3b30",
+    primary: "#b23a31",
     secondary: "#1a0808",
     badge: "redstone",
     players: [
