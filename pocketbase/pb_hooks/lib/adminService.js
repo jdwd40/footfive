@@ -222,6 +222,16 @@ function setUserDisabled($app, adminId, userId, disabled, reason) {
   var u = $app.findRecordById("users", userId);
   var before = !!u.get("disabled");
   u.set("disabled", !!disabled);
+  if (disabled && !before) {
+    // Revoke outstanding auth tokens: PB validates tokens against tokenKey (review B2)
+    try {
+      if (typeof u.refreshTokenKey === "function") {
+        u.refreshTokenKey();
+      } else if (typeof $security !== "undefined" && $security.randomString) {
+        u.set("tokenKey", $security.randomString(50));
+      }
+    } catch (_) {}
+  }
   $app.save(u);
   audit(
     $app,

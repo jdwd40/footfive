@@ -54,6 +54,9 @@ onRecordCreateRequest((e) => {
     return;
   }
   e.record.set("role", "user");
+  // Account-state fields are admin/server-owned; never client-set at signup (review B1)
+  e.record.set("disabled", false);
+  e.record.set("must_change_password", false);
   try {
     const bal = require(`${__hooks}/lib/balance.js`);
     e.record.set("credits", bal.BALANCE.startingCredits);
@@ -103,6 +106,8 @@ onRecordUpdateRequest((e) => {
       e.record.set("disabled", src.get("disabled"));
       e.record.set("admin_note", src.get("admin_note") || "");
       e.record.set("role", src.get("role") || "user");
+      // Only the change-password route clears this (review B1)
+      e.record.set("must_change_password", !!src.get("must_change_password"));
     }
   } catch (_) {
     if (src) {
@@ -113,17 +118,52 @@ onRecordUpdateRequest((e) => {
   e.next();
 }, "users");
 
-// Block disabled accounts from signing in / refreshing tokens
+// Block disabled accounts from signing in / refreshing tokens.
+// Generic message: the native failure is 400 "Failed to authenticate." — never
+// reveal that the account exists but is disabled (review B10).
 onRecordAuthRequest((e) => {
   try {
     if (e.record && e.record.get("disabled")) {
-      throw new ForbiddenError("Account disabled");
+      throw new BadRequestError("Failed to authenticate.");
     }
   } catch (err) {
-    if (err instanceof ForbiddenError) throw err;
+    if (err instanceof BadRequestError) throw err;
   }
   e.next();
 }, "users");
+
+// Account-state guard for every protected FootFive route (review B1/B2):
+// disabled accounts and users with must_change_password get 403 everywhere
+// except public routes, session discovery (/me) and the password change itself.
+// e.auth is resolved fresh from the DB before this middleware (probed on PB 0.28.4);
+// routes without a token are still rejected by their own $apis.requireAuth().
+routerUse((e) => {
+  var path = "";
+  try {
+    path = e.request.url.path || "";
+  } catch (_) {}
+  if (path.indexOf("/api/footfive/") !== 0) return e.next();
+  if (
+    path === "/api/footfive/health" ||
+    path === "/api/footfive/public-scoreboard" ||
+    path === "/api/footfive/auth/login" ||
+    path === "/api/footfive/me" ||
+    path === "/api/footfive/account/change-password"
+  ) {
+    return e.next();
+  }
+  var auth = null;
+  try {
+    auth = e.auth;
+  } catch (_) {}
+  if (auth && auth.id) {
+    if (auth.get("disabled")) throw new ForbiddenError("Account disabled");
+    if (auth.get("must_change_password")) {
+      throw new ForbiddenError("Password change required");
+    }
+  }
+  return e.next();
+});
 
 onRecordCreateRequest((e) => {
   throw new ForbiddenError("Use protected FootFive routes");
@@ -1197,14 +1237,12 @@ routerAdd("POST", "/api/footfive/auth/login", (e) => {
     authRecord = null;
   }
   if (!authRecord) throw new UnauthorizedError("Invalid credentials");
-  try {
-    if (authRecord.get("disabled")) throw new ForbiddenError("Account disabled");
-  } catch (err) {
-    if (err instanceof ForbiddenError) throw err;
-  }
+  // Validate the password BEFORE any account-state check: one generic error for
+  // nonexistent identity, wrong password and disabled account alike (review B10).
   if (!authRecord.validatePassword(password)) {
     throw new UnauthorizedError("Invalid credentials");
   }
+  if (authRecord.get("disabled")) throw new UnauthorizedError("Invalid credentials");
   return $apis.recordAuthResponse(e, authRecord);
 });
 

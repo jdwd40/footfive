@@ -76,7 +76,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       mapped = await enrichFromMe(mapped);
       setUser(mapped);
       return mapped;
-    } catch {
+    } catch (err) {
+      const status = (err as { status?: number } | null)?.status;
+      if (typeof status === "number" && status >= 400 && status < 500) {
+        // Server rejected the token (disabled/deleted/revoked): drop the session
+        // instead of silently keeping the cached user (review B2).
+        pb.authStore.clear();
+        setUser(null);
+        return null;
+      }
+      // Network/server errors: tolerate offline with the cached record.
       if (pb.authStore.record) {
         let mapped = mapRecord(pb.authStore.record as unknown as AuthUser);
         mapped = await enrichFromMe(mapped);

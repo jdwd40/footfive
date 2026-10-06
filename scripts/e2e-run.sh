@@ -82,4 +82,13 @@ if [[ "$API_FAIL" == "1" || "$UI_FAIL" == "1" ]]; then
   echo "FAIL api=$API_FAIL ui=$UI_FAIL"
   exit 1
 fi
+
+# Account-security regression runs last: its 429 checks deliberately exhaust the
+# login rate-limit bucket, which would otherwise poison UI/API logins above.
+SEC_FAIL=0
+node "$ROOT/tests/integration/account-security.mjs" || SEC_FAIL=1
+if [[ "$SEC_FAIL" == "1" ]]; then
+  echo "FAIL sec=$SEC_FAIL"
+  exit 1
+fi
 echo "E2E OK"

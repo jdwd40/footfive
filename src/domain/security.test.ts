@@ -29,6 +29,9 @@ describe("security contracts", () => {
     expect(main).toContain('e.record.set("credits"');
     expect(main).toContain("disabled");
     expect(main).toContain("onRecordAuthRequest");
+    // issue #14: account-state fields pinned and enforced server-side
+    expect(main).toContain('e.record.set("must_change_password"');
+    expect(main).toContain("routerUse");
   });
 
   it("match_states client writes forbidden", async () => {
