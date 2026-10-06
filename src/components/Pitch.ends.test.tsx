@@ -14,7 +14,9 @@ const team = (i: number) => {
   const t = TEAMS[i];
   return { id: t.slug, name: t.name, abbr: t.abbreviation, grade: t.grade, players: defaultStarters(t.players), ai: true };
 };
-const state = eng.createMatch({ seed: 1018, fixtureId: "ends", kickoffAt: 0, home: team(10), away: team(9), timing: eng.buildTiming(8000, 1) });
+// Seed picked so this fixture reaches extra time and a shootout (the engine's seeded
+// outcomes shift with any engine tuning — see the 200-seed pin in engine.test.ts).
+const state = eng.createMatch({ seed: 1024, fixtureId: "ends", kickoffAt: 0, home: team(10), away: team(9), timing: eng.buildTiming(8000, 1) });
 const events = eng.advanceTo(state, 1e13) as MatchEvent[];
 const lineups = Object.fromEntries(["home", "away"].map(side => [side, state.teams[side].players.map((p: { name: string; no: number; role: string; is_starter: boolean }) => ({ name: p.name, no: p.no, role: p.role, starter: p.is_starter }))])) as { home: LineupPlayer[]; away: LineupPlayer[] };
 const home = { name: "Home", abbreviation: "HOM" } as TeamPublic;
