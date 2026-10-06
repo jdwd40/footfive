@@ -22,6 +22,12 @@ const R = 1.45; // player radius: one size for everyone (the ring and the lime f
 /** Result badge per flash kind (what actually happened, never a generic "no goal"); shootout goals and cards are special-cased below. */
 const BADGE: Record<string, string> = { goal: "GOAL!", save: "SAVED!", wood: "WOODWORK", miss: "WIDE", over: "OVER", block: "BLOCKED", pen: "PENALTY" };
 
+/** Number colour from the kit fill: dark text on light kits, white on dark (relative luminance, one threshold). */
+function textOn(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  return 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255) > 150 ? "#0b1404" : "#fff";
+}
+
 export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
@@ -123,7 +129,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
               <ellipse cx={0} cy={r} rx={r} ry={0.6} fill="rgba(0,0,0,0.35)" />
               {frame.carrier === p.side + ":" + p.no && lift < 0.05 && Math.hypot(p.x - frame.ball[0], p.y - frame.ball[1]) <= 1.6 ? <circle r={r + 0.7} fill="none" stroke="#fff" strokeWidth={0.5} data-ring /> : null}
               <circle r={r} fill={p.gk ? "#c6ff00" : isAway ? "#f4f7ff" : c} stroke={p.gk || isAway ? c : "rgba(255,255,255,0.7)"} strokeWidth={0.3} data-kit />
-              <text y={r * 0.42} textAnchor="middle" fontWeight={700} fill={p.gk || isAway ? "#0b1404" : "#fff"} fontSize={r * 1.1}>
+              <text y={r * 0.42} textAnchor="middle" fontWeight={700} fill={textOn(p.gk ? "#c6ff00" : isAway ? "#f4f7ff" : c)} fontSize={r * 1.1}>
                 {p.no}
               </text>
             </g>

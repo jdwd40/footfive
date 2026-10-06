@@ -61,6 +61,16 @@ describe("Pitch kits and numbers", () => {
     expect(kit(1).getAttribute("fill")).toBe("#c6ff00");
     expect(kit(1).getAttribute("stroke")).toBe("#00f0ff");
   });
+  it("number text is dark on light kits and white on dark ones", () => {
+    const numFill = (i: number) => screen.getAllByTestId("player")[i].querySelector("text")!.getAttribute("fill");
+    const { unmount } = render(<Pitch frame={frame({ players })} home={{ ...home, primary_color: "#ffffff" }} away={away} revealed />);
+    expect(numFill(0)).toBe("#0b1404"); // Virgin white home kit → dark number
+    expect(numFill(1)).toBe("#0b1404"); // keeper lime stays dark
+    expect(numFill(2)).toBe("#0b1404"); // away white stays dark
+    unmount();
+    render(<Pitch frame={frame({ players })} home={{ ...home, primary_color: "#0a84ff" }} away={away} revealed />);
+    expect(numFill(0)).toBe("#fff"); // dark blue home kit → white number
+  });
   it("always draws the referee as an equal-sized yellow circle with a black stroke", () => {
     render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
     const ref = screen.getByTestId("ref");
