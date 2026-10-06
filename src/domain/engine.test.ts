@@ -294,12 +294,13 @@ describe("market rules", () => {
   });
 });
 
-describe("authoritative outcomes are pinned to the pre-issue-9 engine (base 33dc1b8)", () => {
-  // The live polish only adds possession bookkeeping (`bs`/`turn`) and period ball resets; it must not change
-  // who shoots, what the RNG draws, or who wins. Same probe as the reviewer's rng-probe: 200 seeds (1000..1199),
+describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
+  // The pin guards against UNINTENTIONAL outcome drift: any engine change that alters who shoots, what the
+  // RNG draws, or who wins must fail this test and be re-pinned deliberately (with old→new recorded below).
+  // Same probe as the reviewer's rng-probe: 200 seeds (1000..1199),
   // event tuples (seq/at/type/actors/score/shootout) plus final state (`score`, `winner`, `by`, `so`) and RNG draw
   // count (`rc`), SHA-256 of the JSON manifest.
-  // The pin was generated from the base engine compiled straight from `git show 33dc1b8:pocketbase/pb_hooks/lib/matchEngine.js`
+  // The original pin was generated from the base engine compiled straight from `git show 33dc1b8:pocketbase/pb_hooks/lib/matchEngine.js`
   // (78,776 events) — pinned as a constant so the test runs on shallow clones and source archives with no git history.
   // Issue #9 re-pin (cf385510aa429a37077f5dc8e0b8f1fd4c79657f8ce35184e9c2dab9d94333f1 →
   // f1e646ad18a3fa5c6f8318b46da0a21df7252d99ed639e3b766ad020086dad4d): attack-variety tuning deliberately changes
