@@ -188,7 +188,7 @@ var TEAMS = [
     name: "Orlean City",
     abbreviation: "ORL",
     grade: "B-",
-    primary: "#ff5fa8",
+    primary: "#ff9500",
     secondary: "#1a0e0a",
     badge: "orlean_city",
     players: [
