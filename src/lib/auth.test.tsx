@@ -97,6 +97,42 @@ describe("bootstrap", () => {
     await screen.findByText("u1@t.local");
     expect(h.clear).not.toHaveBeenCalled();
   });
+
+  it("keeps the session when /me is rate-limited (429) after a successful refresh", async () => {
+    h.me.mockRejectedValue(Object.assign(new Error("too many"), { status: 429 }));
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await screen.findByText("u1@t.local");
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.authStore.isValid).toBe(true);
+  });
+
+  it("keeps the session when auth-refresh itself is rate-limited (429)", async () => {
+    h.authRefresh.mockRejectedValue(Object.assign(new Error("too many"), { status: 429 }));
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await screen.findByText("u1@t.local");
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.authStore.isValid).toBe(true);
+  });
+
+  it("clears the session when auth-refresh definitively rejects the token (400)", async () => {
+    h.authRefresh.mockRejectedValue(Object.assign(new Error("failed to authenticate"), { status: 400 }));
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await screen.findByText("anon");
+    expect(h.clear).toHaveBeenCalledTimes(1);
+    expect(h.authStore.isValid).toBe(false);
+  });
 });
 
 describe("refreshMe", () => {
@@ -151,5 +187,41 @@ describe("refreshMe", () => {
     expect((out as AuthUser | null)?.id).toBe("u1");
     expect(h.clear).not.toHaveBeenCalled();
     expect(screen.getByText("u1@t.local")).toBeInTheDocument();
+  });
+
+  it("keeps the session when auth-refresh is rate-limited (429)", async () => {
+    await mount();
+    h.authRefresh.mockRejectedValue(Object.assign(new Error("too many"), { status: 429 }));
+    let out: AuthUser | null = null;
+    await act(async () => {
+      out = await ctx!.refreshMe();
+    });
+    expect((out as AuthUser | null)?.id).toBe("u1");
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(screen.getByText("u1@t.local")).toBeInTheDocument();
+  });
+
+  it("keeps the session when /me is rate-limited (429) after a successful refresh", async () => {
+    await mount();
+    h.me.mockRejectedValue(Object.assign(new Error("too many"), { status: 429 }));
+    let out: AuthUser | null = null;
+    await act(async () => {
+      out = await ctx!.refreshMe();
+    });
+    expect((out as AuthUser | null)?.id).toBe("u1");
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(screen.getByText("u1@t.local")).toBeInTheDocument();
+  });
+
+  it("drops the session when /me rejects with 401 after a successful refresh", async () => {
+    await mount();
+    h.me.mockRejectedValue(Object.assign(new Error("unauthorized"), { status: 401 }));
+    let out: AuthUser | null = null as unknown as AuthUser;
+    await act(async () => {
+      out = await ctx!.refreshMe();
+    });
+    expect(out).toBeNull();
+    expect(h.clear).toHaveBeenCalled();
+    expect(screen.getByText("anon")).toBeInTheDocument();
   });
 });

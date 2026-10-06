@@ -46,6 +46,16 @@ function mapRecord(r: {
   };
 }
 
+// Definitive auth rejections are surface-specific (review F8): a 429 from the
+// rate limiter is NOT evidence of dead credentials, and PocketBase's native
+// auth-refresh answers 400 (not 401) for an invalid/revoked/disabled token,
+// while the custom /me route answers 401 (requireAuth) or 403 (disabled).
+function isDefinitiveAuthRejection(status: number | undefined, surface: "me" | "refresh"): boolean {
+  if (typeof status !== "number") return false;
+  if (status === 401 || status === 403) return true;
+  return surface === "refresh" && status === 400;
+}
+
 async function enrichFromMe(base: AuthUser): Promise<AuthUser> {
   try {
     const me = await footfiveApi.me();
@@ -57,10 +67,11 @@ async function enrichFromMe(base: AuthUser): Promise<AuthUser> {
       email: String(me.email || base.email),
     };
   } catch (err) {
-    // A definitive auth rejection (4xx) must propagate so the session is
-    // cleared; only offline/network failures fall back to the cached record.
+    // A definitive auth rejection (401/403 on /me) must propagate so the
+    // session is cleared; throttling (429), offline/network and server
+    // failures fall back to the cached record.
     const status = (err as { status?: number } | null)?.status;
-    if (typeof status === "number" && status >= 400 && status < 500) throw err;
+    if (isDefinitiveAuthRejection(status, "me")) throw err;
     return base;
   }
 }
@@ -82,14 +93,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return mapped;
     } catch (err) {
       const status = (err as { status?: number } | null)?.status;
-      if (typeof status === "number" && status >= 400 && status < 500) {
-        // Server rejected the token (disabled/deleted/revoked): drop the session
-        // instead of silently keeping the cached user (review B2).
+      if (isDefinitiveAuthRejection(status, "refresh")) {
+        // Server definitively rejected the token (disabled/deleted/revoked):
+        // drop the session instead of silently keeping the cached user
+        // (review B2). Throttling (429) is not a rejection.
         pb.authStore.clear();
         setUser(null);
         return null;
       }
-      // Network/server errors: tolerate offline with the cached record.
+      // Network/server/throttle errors: tolerate with the cached record.
       if (pb.authStore.record) {
         let mapped = mapRecord(pb.authStore.record as unknown as AuthUser);
         mapped = await enrichFromMe(mapped);
