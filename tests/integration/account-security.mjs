@@ -93,24 +93,24 @@ async function main() {
   }
   const tokAdmin = adminAuth.data.token;
 
-  // --- 1. Direct writes to protected fields (create) ---
+  // --- 1. Direct writes to protected fields (create) — explicit rejection (F1) ---
   const evilEmail = `sec_evil_${stamp}@t.local`;
   const evilCreated = await createUser(evilEmail, "testpass99", {
     role: "admin",
     disabled: true,
     must_change_password: true,
   });
-  ok("create with protected fields accepted", evilCreated.ok, JSON.stringify(evilCreated.data).slice(0, 120));
-  const evilLogin = await loginRetry(evilEmail, "testpass99");
-  ok("created user can log in (not disabled)", evilLogin.ok, JSON.stringify(evilLogin.data).slice(0, 120));
-  if (evilLogin.ok) {
-    ok("create: role forced to user", evilLogin.data.record.role !== "admin", String(evilLogin.data.record.role));
-    const me = await json("/api/footfive/me", { token: evilLogin.data.token });
-    ok("create: must_change_password forced false", me.ok && me.data.must_change_password === false, JSON.stringify(me.data));
-    ok("create: disabled forced false", me.ok && me.data.disabled === false, JSON.stringify(me.data));
-  }
+  ok("create with protected fields rejected", !evilCreated.ok, `status=${evilCreated.status} ${JSON.stringify(evilCreated.data).slice(0, 120)}`);
+  const evilLogin = await loginNative(evilEmail, "testpass99");
+  ok("rejected create did not persist a user", !evilLogin.ok, `status=${evilLogin.status}`);
+  // Ordinary signup (no protected keys) must keep working
+  const ordinaryEmail = `sec_ok_${stamp}@t.local`;
+  const ordinary = await createUser(ordinaryEmail, "testpass99");
+  ok("ordinary signup still works", ordinary.ok, JSON.stringify(ordinary.data).slice(0, 120));
+  const ordinaryLogin = await loginRetry(ordinaryEmail, "testpass99");
+  ok("ordinary user can log in", ordinaryLogin.ok && ordinaryLogin.data.record.role !== "admin", JSON.stringify(ordinaryLogin.data).slice(0, 120));
 
-  // --- 2. Direct writes to protected fields (update) ---
+  // --- 2. Direct writes to protected fields (update) — explicit rejection (F1) ---
   const uEmail = `sec_u_${stamp}@t.local`;
   await createUser(uEmail, "testpass99");
   const uAuth = await loginRetry(uEmail, "testpass99");
@@ -121,24 +121,32 @@ async function main() {
     token: tokU,
     body: { role: "admin" },
   });
-  if (rolePatch.ok) ok("update: role not escalated", rolePatch.data.role !== "admin", String(rolePatch.data.role));
-  else ok("update: role patch rejected", true);
+  ok("update: role escalation rejected", !rolePatch.ok, `status=${rolePatch.status}`);
+  const meAfterRole = await json("/api/footfive/me", { token: tokU });
+  ok("update: role still user after attempt", meAfterRole.ok && meAfterRole.data.role !== "admin", JSON.stringify(meAfterRole.data));
   const disPatch = await json(`/api/collections/users/records/${idU}`, {
     method: "PATCH",
     token: tokU,
     body: { disabled: true },
   });
+  ok("update: disabled self-set rejected", !disPatch.ok, `status=${disPatch.status}`);
   const meAfterDis = await json("/api/footfive/me", { token: tokU });
-  ok("update: disabled not self-set", meAfterDis.ok && meAfterDis.data.disabled === false, JSON.stringify(meAfterDis.data));
-  void disPatch;
-  // legit profile change with unchanged-but-present protected field in payload
+  ok("update: disabled still false after attempt", meAfterDis.ok && meAfterDis.data.disabled === false, JSON.stringify(meAfterDis.data));
+  // Unchanged-but-present protected field in the payload is still an attempt
+  const unchangedPatch = await json(`/api/collections/users/records/${idU}`, {
+    method: "PATCH",
+    token: tokU,
+    body: { display_name: "SecSneaky", role: "user" },
+  });
+  ok("update: unchanged protected field payload rejected", !unchangedPatch.ok, `status=${unchangedPatch.status}`);
+  // Legit profile change (ordinary fields only) must keep working
   const profPatch = await json(`/api/collections/users/records/${idU}`, {
     method: "PATCH",
     token: tokU,
-    body: { display_name: "SecRenamed", role: "admin" },
+    body: { display_name: "SecRenamed" },
   });
   ok("update: legit profile field still works", profPatch.ok && profPatch.data.display_name === "SecRenamed", JSON.stringify(profPatch.data).slice(0, 120));
-  ok("update: role pinned during legit edit", profPatch.ok && profPatch.data.role !== "admin", String(profPatch.data.role));
+  ok("update: role untouched by legit edit", profPatch.ok && profPatch.data.role !== "admin", String(profPatch.data.role));
 
   // --- 3. must_change_password enforcement ---
   const pwEmail = `sec_pw_${stamp}@t.local`;
@@ -168,14 +176,45 @@ async function main() {
   const meFlag = await json("/api/footfive/me", { token: tokPw });
   ok("flagged: /me allowed (session discovery)", meFlag.ok && meFlag.data.must_change_password === true, JSON.stringify(meFlag.data));
 
-  // self-clear attempt must not stick
-  await json(`/api/collections/users/records/${idPw}`, {
+  // self-clear attempt must be rejected outright (F1)
+  const selfClear = await json(`/api/collections/users/records/${idPw}`, {
     method: "PATCH",
     token: tokPw,
     body: { must_change_password: false },
   });
+  ok("flagged: native self-clear of must_change_password rejected", !selfClear.ok, `status=${selfClear.status}`);
   const meAfterClear = await json("/api/footfive/me", { token: tokPw });
-  ok("flagged: self-clear of must_change_password rejected", meAfterClear.ok && meAfterClear.data.must_change_password === true, JSON.stringify(meAfterClear.data));
+  ok("flagged: must_change_password still true after attempt", meAfterClear.ok && meAfterClear.data.must_change_password === true, JSON.stringify(meAfterClear.data));
+
+  // --- 3b. Forced-password native boundaries (F2) ---
+  // Native business collection list must return no data (rule excludes the
+  // forced-password auth record) or reject outright.
+  const nativeTeams = await json("/api/collections/proball_teams/records?perPage=5", { token: tokPw });
+  const teamsLeak = nativeTeams.ok && Array.isArray(nativeTeams.data.items) && nativeTeams.data.items.length > 0;
+  ok("flagged: native proball_teams list returns no data", !teamsLeak, `status=${nativeTeams.status} items=${nativeTeams.data?.items?.length}`);
+  const nativeWorld = await json("/api/collections/world/records?perPage=5", { token: tokPw });
+  const worldLeak = nativeWorld.ok && Array.isArray(nativeWorld.data.items) && nativeWorld.data.items.length > 0;
+  ok("flagged: native world list returns no data", !worldLeak, `status=${nativeWorld.status} items=${nativeWorld.data?.items?.length}`);
+  // Native self profile mutation is rejected while forced
+  const forcedProfile = await json(`/api/collections/users/records/${idPw}`, {
+    method: "PATCH",
+    token: tokPw,
+    body: { display_name: "forced-profile-mutated" },
+  });
+  ok("flagged: native profile mutation rejected", !forcedProfile.ok, `status=${forcedProfile.status}`);
+  const meProfile = await json("/api/footfive/me", { token: tokPw });
+  ok("flagged: display_name unchanged after native attempt", meProfile.ok && meProfile.data.display_name !== "forced-profile-mutated", JSON.stringify(meProfile.data.display_name));
+  // Native password update bypass is rejected while forced
+  const forcedPw = await json(`/api/collections/users/records/${idPw}`, {
+    method: "PATCH",
+    token: tokPw,
+    body: { oldPassword: "temppass99", password: "nativepass99", passwordConfirm: "nativepass99" },
+  });
+  ok("flagged: native password update rejected", !forcedPw.ok, `status=${forcedPw.status}`);
+  const nativePwLogin = await loginNative(pwEmail, "nativepass99");
+  ok("flagged: native password bypass did not stick", !nativePwLogin.ok, `status=${nativePwLogin.status}`);
+  const tempStill = await loginRetry(pwEmail, "temppass99");
+  ok("flagged: temporary password still valid after rejected bypass", tempStill.ok, `status=${tempStill.status}`);
 
   const badChange = await json("/api/footfive/account/change-password", {
     method: "POST",
@@ -195,6 +234,89 @@ async function main() {
   const worldAfter = await json("/api/footfive/world", { token: pwRelogin.data.token });
   ok("after change: /world allowed", worldAfter.ok, `status=${worldAfter.status}`);
 
+  // --- 3c. Application admins are NOT exempt at the native boundary (F1) ---
+  const idAdmin = adminAuth.data.record.id;
+  const adminDis = await json(`/api/collections/users/records/${idAdmin}`, {
+    method: "PATCH",
+    token: tokAdmin,
+    body: { disabled: true },
+  });
+  ok("admin: native self-disable rejected", !adminDis.ok, `status=${adminDis.status}`);
+  const adminOverview1 = await json("/api/footfive/admin/overview", { token: tokAdmin });
+  ok("admin: still active after rejected self-disable", adminOverview1.ok, `status=${adminOverview1.status}`);
+  const adminEn = await json(`/api/collections/users/records/${idAdmin}`, {
+    method: "PATCH",
+    token: tokAdmin,
+    body: { disabled: false },
+  });
+  ok("admin: native self-enable rejected", !adminEn.ok, `status=${adminEn.status}`);
+  const adminRoleSame = await json(`/api/collections/users/records/${idAdmin}`, {
+    method: "PATCH",
+    token: tokAdmin,
+    body: { role: "admin" },
+  });
+  ok("admin: unchanged role payload rejected", !adminRoleSame.ok, `status=${adminRoleSame.status}`);
+  // forced-password admin cannot self-clear natively nor use admin routes
+  const adminReset = await json(`/api/footfive/admin/users/${idAdmin}/password`, {
+    method: "POST",
+    token: tokAdmin,
+    body: { password: "admintemp99", mustChange: true, reason: "F1 admin guard" },
+  });
+  ok("admin: forced-password reset applied", adminReset.ok && adminReset.data.must_change_password === true, JSON.stringify(adminReset.data));
+  const adminForced = await loginRetry("e2e_admin@test.local", "admintemp99");
+  ok("admin: temp password login works", adminForced.ok, `status=${adminForced.status}`);
+  const tokAf = adminForced.data.token;
+  const adminClear = await json(`/api/collections/users/records/${idAdmin}`, {
+    method: "PATCH",
+    token: tokAf,
+    body: { must_change_password: false, role: "admin", disabled: false },
+  });
+  ok("admin: forced self-clear rejected", !adminClear.ok, `status=${adminClear.status}`);
+  const overviewForced = await json("/api/footfive/admin/overview", { token: tokAf });
+  ok("admin: forced-password admin denied on admin routes", overviewForced.status === 403 || overviewForced.status === 401, `status=${overviewForced.status}`);
+  const adminNativeTeams = await json("/api/collections/proball_teams/records?perPage=5", { token: tokAf });
+  const adminTeamsLeak = adminNativeTeams.ok && Array.isArray(adminNativeTeams.data.items) && adminNativeTeams.data.items.length > 0;
+  ok("admin: forced-password admin native teams list empty", !adminTeamsLeak, `status=${adminNativeTeams.status}`);
+  // complete the required change; this also restores the seeded admin password
+  const adminChange = await json("/api/footfive/account/change-password", {
+    method: "POST",
+    token: tokAf,
+    body: { currentPassword: "admintemp99", newPassword: "adminpass99" },
+  });
+  ok("admin: forced change-password completes", adminChange.ok && adminChange.data.must_change_password === false, JSON.stringify(adminChange.data));
+  const adminBack = await loginRetry("e2e_admin@test.local", "adminpass99");
+  ok("admin: restored login works", adminBack.ok, `status=${adminBack.status}`);
+  const overviewBack = await json("/api/footfive/admin/overview", { token: adminBack.data.token });
+  ok("admin: overview 200 after restore", overviewBack.ok, `status=${overviewBack.status}`);
+  // The 3c reset rotated the admin tokenKey (fail-closed revocation), so the
+  // original tokAdmin is dead by design; sections below use the fresh token.
+  const tokAdminLive = adminBack.data.token;
+
+  // --- 3d. Trusted PocketBase superuser exception (F1, intentional) ---
+  const sup = await json("/api/collections/_superusers/auth-with-password", {
+    method: "POST",
+    body: { identity: "e2e-super@test.local", password: "e2esuper99" },
+  });
+  if (sup.ok) {
+    const supEmail = `sec_sup_${stamp}@t.local`;
+    await createUser(supEmail, "testpass99");
+    const supTarget = await loginRetry(supEmail, "testpass99");
+    const supPatch = await json(`/api/collections/users/records/${supTarget.data.record.id}`, {
+      method: "PATCH",
+      token: sup.data.token,
+      body: { role: "admin" },
+    });
+    ok("superuser: role change allowed (trusted exception)", supPatch.ok && supPatch.data.role === "admin", JSON.stringify(supPatch.data).slice(0, 120));
+    // revert to plain user so no stray admin remains
+    await json(`/api/collections/users/records/${supTarget.data.record.id}`, {
+      method: "PATCH",
+      token: sup.data.token,
+      body: { role: "user" },
+    });
+  } else {
+    console.log("  … superuser not seeded; exception case skipped");
+  }
+
   // --- 4. Disabled user: existing token revoked, stays revoked after re-enable ---
   const dEmail = `sec_d_${stamp}@t.local`;
   await createUser(dEmail, "testpass99");
@@ -205,7 +327,7 @@ async function main() {
   ok("pre-disable: /world works", worldBefore.ok, `status=${worldBefore.status}`);
   const disable = await json(`/api/footfive/admin/users/${idD}/disable`, {
     method: "POST",
-    token: tokAdmin,
+    token: tokAdminLive,
     body: { reason: "sec test" },
   });
   ok("admin disable", disable.ok && disable.data.disabled === true, JSON.stringify(disable.data));
@@ -216,11 +338,24 @@ async function main() {
   ok("disabled: old token denied on native collection", recDis.status === 401 || recDis.status === 403 || recDis.status === 404, `status=${recDis.status}`);
   const refreshDis = await json("/api/collections/users/auth-refresh", { method: "POST", token: tokD });
   ok("disabled: old token denied on auth-refresh", refreshDis.status === 400 || refreshDis.status === 401 || refreshDis.status === 403, `status=${refreshDis.status}`);
+  // Disabled accounts get no exception routes either (F3): /me and
+  // change-password must reject just like business routes.
+  const meDis = await json("/api/footfive/me", { token: tokD });
+  ok("disabled: old token denied on /me exception", meDis.status === 401 || meDis.status === 403, `status=${meDis.status}`);
+  const cpDis = await json("/api/footfive/account/change-password", {
+    method: "POST",
+    token: tokD,
+    body: { currentPassword: "testpass99", newPassword: "whatever99" },
+  });
+  ok("disabled: old token denied on change-password exception", cpDis.status === 401 || cpDis.status === 403, `status=${cpDis.status}`);
+  const nativeTeamsDis = await json("/api/collections/proball_teams/records?perPage=5", { token: tokD });
+  const disTeamsLeak = nativeTeamsDis.ok && Array.isArray(nativeTeamsDis.data.items) && nativeTeamsDis.data.items.length > 0;
+  ok("disabled: native teams list returns no data", !disTeamsLeak, `status=${nativeTeamsDis.status} items=${nativeTeamsDis.data?.items?.length}`);
   const freshDis = await loginNative(dEmail, "testpass99");
   ok("disabled: fresh login rejected", !freshDis.ok, `status=${freshDis.status}`);
   const enable = await json(`/api/footfive/admin/users/${idD}/enable`, {
     method: "POST",
-    token: tokAdmin,
+    token: tokAdminLive,
     body: { reason: "sec test" },
   });
   ok("admin re-enable", enable.ok && enable.data.disabled === false, JSON.stringify(enable.data));
@@ -235,7 +370,7 @@ async function main() {
   const g1 = await json("/api/footfive/auth/login", { method: "POST", body: { identity: `ghost_${stamp}@t.local`, password: "testpass99" } });
   const g2 = await json("/api/footfive/auth/login", { method: "POST", body: { identity: uEmail, password: "wrongpass99" } });
   // disable user U first so both disabled variants are covered
-  await json(`/api/footfive/admin/users/${idU}/disable`, { method: "POST", token: tokAdmin, body: { reason: "sec test" } });
+  await json(`/api/footfive/admin/users/${idU}/disable`, { method: "POST", token: tokAdminLive, body: { reason: "sec test" } });
   const g3 = await json("/api/footfive/auth/login", { method: "POST", body: { identity: uEmail, password: "testpass99" } });
   const g4 = await json("/api/footfive/auth/login", { method: "POST", body: { identity: uEmail, password: "wrongpass99" } });
   const msgs = [g1, g2, g3, g4].map((r) => `${r.status}:${r.data.message}`);

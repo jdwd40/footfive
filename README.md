@@ -150,18 +150,34 @@ Admin reset with “must change” → user must complete `/change-password` bef
 
 ## Account security (server-enforced)
 
-- `role`, `disabled` and `must_change_password` are server-owned: client writes to them on the
-  users collection (create or update) are pinned/ignored for non-admins; admin changes go through
-  the protected `/api/footfive/admin/*` routes and are audited.
-- `must_change_password` is enforced on every protected `/api/footfive/*` route (403 until the
-  password is changed; only `/me` and `/api/footfive/account/change-password` stay reachable).
-  The flag is cleared only by the change-password route.
-- Disabling an account rotates its `tokenKey`, so existing tokens stop working immediately
-  (custom routes, native collections and auth-refresh) and stay invalid after re-enable.
-- Login errors are generic: nonexistent identity, wrong password and disabled account all get the
-  same "Invalid credentials" response — no account-state oracle. PocketBase's native rate
-  limiter is enabled (`pb_migrations/1750000015_rate_limits.js`): 120 requests/min per IP on auth
-  endpoints, 429 beyond that (headroom for NAT/shared IPs; bcrypt cost bounds per-IP throughput).
+- `role`, `disabled`, `must_change_password`, `credits` and `admin_note` are server-owned.
+  Any create/update on the native users collection that contains one of these fields is
+  **rejected** (403, "Field … is server-owned") for every application user, admins included —
+  even when the value is unchanged. The only exception is the trusted PocketBase superuser
+  (server-ops CLI). Application-admin changes go through the protected, audited
+  `/api/footfive/admin/*` routes. Ordinary signup and profile edits (ordinary fields only)
+  are unaffected.
+- `must_change_password` is enforced on every protected `/api/footfive/*` route and on native
+  collection access (403 "Password change required"; native list rules return no rows). The
+  only reachable exceptions are session discovery (`GET /api/footfive/me`) and
+  `POST /api/footfive/account/change-password`, plus login/auth-refresh — no business data and
+  no native self-writes (profile or password) while the flag is set. The flag is cleared only
+  by the change-password route.
+- Disabling an account rotates its `tokenKey`, so existing tokens stop working immediately and
+  stay invalid after re-enable. Accounts already disabled before this enforcement was deployed
+  have their tokens revoked by migration `1750000016_account_security_rules.js` at upgrade —
+  no data reset; records, IDs and business data are preserved. Disabled accounts are rejected
+  on **all** `/api/footfive/*` routes including `/me` and change-password: a revoked token
+  fails auth with 401, and any token presented for a disabled record gets 403
+  "Account disabled". (401 = token invalid/revoked; 403 = authenticated but forbidden by
+  account state.)
+- Login errors are generic and do not reveal account state, but the two login surfaces differ:
+  the custom `/api/footfive/auth/login` route answers 401 "Invalid credentials" for a
+  nonexistent identity, a wrong password and a disabled account alike; PocketBase's native
+  `auth-with-password` endpoint answers 400 "Failed to authenticate." for the same cases.
+  PocketBase's native rate limiter is enabled (`pb_migrations/1750000015_rate_limits.js`):
+  120 requests/min per IP on auth endpoints, 429 beyond that (headroom for NAT/shared IPs;
+  bcrypt cost bounds per-IP throughput).
 
 ## Deploy / production
 

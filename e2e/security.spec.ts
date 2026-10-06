@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { apiLogin, PB } from "./helpers";
+import { apiLogin, injectAuth, PB } from "./helpers";
 
 // Prefer request fixture (works even if some UI projects skip)
 test.describe("security negative", () => {
@@ -11,13 +11,12 @@ test.describe("security negative", () => {
       headers: { Authorization: a.token },
       data: { role: "admin" },
     });
-    // either rejected or role ignored
-    if (res.ok()) {
-      const body = await res.json();
-      expect(body.role).not.toBe("admin");
-    } else {
-      expect(res.status()).toBeGreaterThanOrEqual(400);
-    }
+    // issue #14 fix wave (review F1): explicit rejection, not silent pinning
+    expect(res.ok()).toBe(false);
+    expect(res.status()).toBeGreaterThanOrEqual(400);
+    expect(res.status()).toBeLessThan(500);
+    const again = await apiLogin(request, "e2e_user_a@test.local", "testpass99");
+    expect(again.record.role).not.toBe("admin");
   });
 
   test("user cannot set credits", async ({ request }) => {
@@ -28,13 +27,12 @@ test.describe("security negative", () => {
       headers: { Authorization: a.token },
       data: { credits: 999999 },
     });
+    expect(res.ok()).toBe(false);
     // re-auth / re-fetch
     const again = await apiLogin(request, "e2e_user_a@test.local", "testpass99");
     const after = Number(again.record.credits ?? 0);
     expect(after).not.toBe(999999);
     expect(after).toBe(before);
-    // patch may appear ok but value must not stick
-    void res;
   });
 
   test("user cannot mutate match_states", async ({ request }) => {
@@ -170,6 +168,41 @@ test.describe("security negative", () => {
       headers: { Authorization: admin.token },
       data: { retention_days: 30, reason: "e2e restore" },
     });
+  });
+
+  test("revoked session is cleared on reload after disable (review F4)", async ({ page, request }) => {
+    const admin = await apiLogin(request, "e2e_admin@test.local", "adminpass99");
+    if (!admin.ok) {
+      test.skip(true, "admin not promoted");
+      return;
+    }
+    // Fresh throwaway user so the disable cannot poison other tests.
+    const email = `e2e_boot_${Date.now()}@test.local`;
+    const created = await request.post(`${PB}/api/collections/users/records`, {
+      data: { email, password: "testpass99", passwordConfirm: "testpass99", display_name: "Boot" },
+    });
+    expect(created.ok()).toBe(true);
+    const a = await apiLogin(request, email, "testpass99");
+    expect(a.ok).toBe(true);
+
+    await injectAuth(page, a.token, a.record);
+    await page.goto("/live");
+    await expect(page).toHaveURL(/\/live/);
+    // Control: an ordinary reload keeps a healthy session.
+    await page.reload();
+    await expect(page).toHaveURL(/\/live/);
+
+    // Disable through the protected admin route, then reload: bootstrap must
+    // validate the session server-side and clear the revoked token (F4).
+    const dis = await request.post(`${PB}/api/footfive/admin/users/${a.record.id}/disable`, {
+      headers: { Authorization: admin.token },
+      data: { reason: "browser bootstrap regression" },
+    });
+    expect(dis.ok()).toBe(true);
+    await page.reload();
+    await expect(page).toHaveURL(/\/login/);
+    const stored = await page.evaluate(() => localStorage.getItem("pocketbase_auth"));
+    expect(stored === null || !stored.includes(a.token)).toBe(true);
   });
 
   test("backfill preview is safe", async ({ request }) => {

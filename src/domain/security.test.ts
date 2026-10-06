@@ -19,18 +19,19 @@ describe("security contracts", () => {
     expect(main).toContain("recovery");
   });
 
-  it("user update strips role and credits for non-admin", async () => {
+  it("users native create/update reject protected fields for all application users", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const main = fs.readFileSync(
       path.resolve(__dirname, "../../pocketbase/pb_hooks/main.pb.js"),
       "utf8",
     );
-    expect(main).toContain('e.record.set("credits"');
-    expect(main).toContain("disabled");
+    // issue #14 fix wave (review F1/F2): hard rejection at the native boundary,
+    // trusted PocketBase superuser excepted; no silent field pinning.
+    expect(main).toContain("hasSuperuserAuth");
+    expect(main).toContain("is server-owned");
+    expect(main).toContain('"must_change_password"');
     expect(main).toContain("onRecordAuthRequest");
-    // issue #14: account-state fields pinned and enforced server-side
-    expect(main).toContain('e.record.set("must_change_password"');
     expect(main).toContain("routerUse");
   });
 

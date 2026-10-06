@@ -48,10 +48,32 @@ onBootstrap((e) => {
   }
 });
 
+// Protected account-state/economy fields are server-owned (review F1).
+// Any application user — including role=admin — attempting to set them through
+// the native users API is REJECTED (no silent pinning). The only exception is
+// the trusted PocketBase superuser (server ops CLI). Application-admin changes
+// to these fields go through the audited /api/footfive/admin/* routes, which
+// write with $app.save() and never traverse these request hooks.
 onRecordCreateRequest((e) => {
   if (e.collection.name !== "users") {
     e.next();
     return;
+  }
+  try {
+    if (typeof e.hasSuperuserAuth === "function" && e.hasSuperuserAuth()) {
+      e.next();
+      return;
+    }
+  } catch (_) {}
+  var createBody = {};
+  try {
+    createBody = e.requestInfo().body || {};
+  } catch (_) {}
+  var createProtected = ["role", "disabled", "must_change_password", "credits", "admin_note"];
+  for (var ci = 0; ci < createProtected.length; ci++) {
+    if (Object.prototype.hasOwnProperty.call(createBody, createProtected[ci])) {
+      throw new ForbiddenError("Field " + createProtected[ci] + " is server-owned");
+    }
   }
   e.record.set("role", "user");
   // Account-state fields are admin/server-owned; never client-set at signup (review B1)
@@ -79,40 +101,27 @@ onRecordUpdateRequest((e) => {
     }
   } catch (_) {}
   const auth = e.auth;
-  const isAdmin = auth && auth.get("role") === "admin";
-  let original = null;
-  try {
-    original = e.record.originalCopy ? e.record.originalCopy() : null;
-  } catch (_) {
-    original = null;
+  // Disabled accounts have no native write access at all (review F2/F3).
+  if (auth && auth.get("disabled")) {
+    throw new ForbiddenError("Account disabled");
   }
-  // Prefer reloading from DB if originalCopy missing
-  let dbUser = null;
+  // Forced-password users cannot bypass via native self-writes: no profile
+  // mutation and no native password update (review F2). The only password path
+  // is the protected /api/footfive/account/change-password route.
+  if (auth && auth.get("must_change_password")) {
+    throw new ForbiddenError("Password change required");
+  }
+  // Reject any protected-field write attempt — present in the payload at all,
+  // even with an unchanged value — for every application user, admins included
+  // (review F1). Legitimate profile edits only send ordinary fields.
+  var body = {};
   try {
-    dbUser = $app.findRecordById("users", e.record.id);
+    body = e.requestInfo().body || {};
   } catch (_) {}
-  const src = original || dbUser;
-  try {
-    const newRole = e.record.get("role");
-    const oldRole = src ? src.get("role") : "user";
-    if (newRole !== oldRole && !isAdmin) {
-      e.record.set("role", oldRole || "user");
-    }
-    // Credits only change via footfive admin/betting routes
-    if (src && !isAdmin) {
-      e.record.set("credits", src.get("credits"));
-    }
-    if (!isAdmin && src) {
-      e.record.set("disabled", src.get("disabled"));
-      e.record.set("admin_note", src.get("admin_note") || "");
-      e.record.set("role", src.get("role") || "user");
-      // Only the change-password route clears this (review B1)
-      e.record.set("must_change_password", !!src.get("must_change_password"));
-    }
-  } catch (_) {
-    if (src) {
-      e.record.set("role", src.get("role") || "user");
-      if (!isAdmin) e.record.set("credits", src.get("credits"));
+  var protectedFields = ["role", "disabled", "must_change_password", "credits", "admin_note"];
+  for (var i = 0; i < protectedFields.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(body, protectedFields[i])) {
+      throw new ForbiddenError("Field " + protectedFields[i] + " is server-owned");
     }
   }
   e.next();
@@ -132,9 +141,15 @@ onRecordAuthRequest((e) => {
   e.next();
 }, "users");
 
-// Account-state guard for every protected FootFive route (review B1/B2):
-// disabled accounts and users with must_change_password get 403 everywhere
-// except public routes, session discovery (/me) and the password change itself.
+// Account-state guard for every protected FootFive route (review B1/B2/F2/F3):
+// - Disabled accounts get 403 "Account disabled" on EVERY /api/footfive/* route,
+//   including the session-discovery/password exceptions below. In practice a
+//   disabled account's tokens are revoked on disable (tokenKey rotation), so its
+//   old tokens already fail $apis.requireAuth() with 401; this check is the
+//   defense-in-depth layer for any token issued before revocation completed.
+// - Users with must_change_password get 403 "Password change required" on every
+//   protected route except session discovery (/me) and the password change
+//   itself — those two are session/necessity exceptions, not business access.
 // e.auth is resolved fresh from the DB before this middleware (probed on PB 0.28.4);
 // routes without a token are still rejected by their own $apis.requireAuth().
 routerUse((e) => {
@@ -146,9 +161,7 @@ routerUse((e) => {
   if (
     path === "/api/footfive/health" ||
     path === "/api/footfive/public-scoreboard" ||
-    path === "/api/footfive/auth/login" ||
-    path === "/api/footfive/me" ||
-    path === "/api/footfive/account/change-password"
+    path === "/api/footfive/auth/login"
   ) {
     return e.next();
   }
@@ -157,7 +170,14 @@ routerUse((e) => {
     auth = e.auth;
   } catch (_) {}
   if (auth && auth.id) {
+    // Disabled: rejected even on the /me and change-password exceptions (F3).
     if (auth.get("disabled")) throw new ForbiddenError("Account disabled");
+    if (
+      path === "/api/footfive/me" ||
+      path === "/api/footfive/account/change-password"
+    ) {
+      return e.next();
+    }
     if (auth.get("must_change_password")) {
       throw new ForbiddenError("Password change required");
     }
@@ -1555,11 +1575,15 @@ routerAdd(
       rec.set("password", newPassword);
       rec.set("passwordConfirm", newPassword);
       rec.set("must_change_password", false);
-      try {
-        if (typeof $security !== "undefined" && $security.randomString) {
-          rec.set("tokenKey", $security.randomString(50));
-        }
-      } catch (_) {}
+      // Rotate the tokenKey so other sessions are invalidated. Fail closed:
+      // a password change that cannot revoke old tokens must not succeed (F3).
+      if (typeof rec.refreshTokenKey === "function") {
+        rec.refreshTokenKey();
+      } else if (typeof $security !== "undefined" && $security.randomString) {
+        rec.set("tokenKey", $security.randomString(50));
+      } else {
+        throw new BadRequestError("Token rotation unavailable");
+      }
       $app.save(rec);
       try {
         const adm = require(`${__hooks}/lib/adminService.js`);

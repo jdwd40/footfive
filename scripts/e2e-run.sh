@@ -91,4 +91,13 @@ if [[ "$SEC_FAIL" == "1" ]]; then
   echo "FAIL sec=$SEC_FAIL"
   exit 1
 fi
+
+# Existing-data upgrade regression (review F3): spawns its own PB pair on
+# UPGRADE_PB_PORT against a scratch DB; no shared state with the e2e instance.
+UPG_FAIL=0
+UPGRADE_PB_PORT="${UPGRADE_PB_PORT:-8293}" node "$ROOT/tests/integration/upgrade-legacy-disabled.mjs" || UPG_FAIL=1
+if [[ "$UPG_FAIL" == "1" ]]; then
+  echo "FAIL upgrade=$UPG_FAIL"
+  exit 1
+fi
 echo "E2E OK"
