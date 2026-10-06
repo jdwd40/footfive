@@ -104,7 +104,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Network/server/throttle errors: tolerate with the cached record.
       if (pb.authStore.record) {
         let mapped = mapRecord(pb.authStore.record as unknown as AuthUser);
-        mapped = await enrichFromMe(mapped);
+        try {
+          mapped = await enrichFromMe(mapped);
+        } catch {
+          // enrichFromMe only rethrows definitive /me rejections (401/403):
+          // the cached record belongs to a revoked session, so clear it here
+          // instead of letting the throw escape this catch block and hang
+          // bootstrap (review F8 follow-up).
+          pb.authStore.clear();
+          setUser(null);
+          return null;
+        }
         setUser(mapped);
         return mapped;
       }

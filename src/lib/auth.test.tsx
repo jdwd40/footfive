@@ -133,6 +133,26 @@ describe("bootstrap", () => {
     expect(h.clear).toHaveBeenCalledTimes(1);
     expect(h.authStore.isValid).toBe(false);
   });
+
+  // Combined regression (review F8 follow-up): a throttled refresh sends the
+  // bootstrap into the cached-record fallback; a definitive /me rejection
+  // there must still clear the revoked session AND complete bootstrap.
+  it.each([401, 403])(
+    "clears a revoked session and finishes bootstrap when refresh is throttled (429) and /me rejects (%i)",
+    async (meStatus) => {
+      h.authRefresh.mockRejectedValue(Object.assign(new Error("too many"), { status: 429 }));
+      h.me.mockRejectedValue(Object.assign(new Error("rejected"), { status: meStatus }));
+      render(
+        <AuthProvider>
+          <Probe />
+        </AuthProvider>,
+      );
+      await screen.findByText("anon");
+      expect(h.clear).toHaveBeenCalledTimes(1);
+      expect(h.authStore.isValid).toBe(false);
+      expect(h.authStore.record).toBeNull();
+    },
+  );
 });
 
 describe("refreshMe", () => {
