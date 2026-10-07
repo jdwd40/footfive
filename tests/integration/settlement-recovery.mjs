@@ -11,6 +11,8 @@
  * resumed; legacy stranded bets are settled by the recovery sweep exactly once;
  * player-record and championship-award write failures roll back their fixture /
  * completion transaction and are retried (review R2);
+ * the stranded-bet sweep progresses past not-yet-progressed and failing fixtures,
+ * reporting failures (review R1);
  * credit_ledger's unique idempotency index is collection-owned (migration 17) and
  * its duplicate preflight fails closed without modifying data.
  *
@@ -436,6 +438,44 @@ async function main() {
     const sw2 = (sweep2.data.actions || []).find((a) => a.strandedBets);
     ok("legacy: second sweep is a no-op", sw2 && sw2.strandedBets.settled === 0, JSON.stringify(sw2));
     checkInvariants("legacy stranded");
+
+    // ===== Sweep progress: a not-yet-progressed fixture (>= one page of bets) and a
+    // failing fixture, both ordered before a healthy one, must not starve it.
+    // World paused so championship #2 stays where the legacy-resume stage expects it.
+    await pause(true);
+    const sweep = async () => {
+      const res = await req("/api/footfive/admin/recovery/run", "POST", adminTok);
+      return { res, sw: ((res.data.actions || []).find((a) => a.strandedBets) || {}).strandedBets };
+    };
+    const [fA, fB] = q("SELECT * FROM shared_fixtures WHERE id IN (?, ?, ?, ?, ?) ORDER BY id", fx.slice(3).map((f) => f.id));
+    const betsOn = (f, n) =>
+      Array.from({ length: n }, (_, i) => ({ user: i % 2 ? u1.id : u2.id, fixture: f.id, round: r16.id, tournament: t.id, market: "winner", selection: i % 2 ? "home" : "away", stake: 2, odds: 2, status: "locked" }));
+    await write([["UPDATE match_states SET progression_settled = 0 WHERE fixture = ?", [fA.id]]]); // finished, progression not yet run
+    const blockedBets = await seedBets(betsOn(fA, 201));
+    const [healthy] = await seedBets(betsOn(fB, 1));
+    const s1 = await sweep();
+    ok("sweep: not-ready fixture's bets stay open (readiness guard)", num("SELECT COUNT(*) n FROM shared_bets WHERE fixture = ? AND settled = 0", [fA.id]) === 201);
+    ok("sweep: healthy later fixture settles despite 201 not-ready bets before it", num("SELECT settled n FROM shared_bets WHERE id = ?", [healthy.id]) === 1, JSON.stringify(s1.sw));
+    checkInvariants("sweep starvation");
+
+    const [healthy2] = await seedBets(betsOn(fB, 1));
+    await write([
+      ["UPDATE match_states SET progression_settled = 1 WHERE fixture = ?", [fA.id]],
+      [`CREATE TRIGGER inj_S BEFORE INSERT ON credit_ledger WHEN (SELECT fixture FROM shared_bets WHERE id || ':settle' = NEW.idempotency_key) = '${fA.id}' BEGIN SELECT RAISE(ABORT, 'injected:S'); END`, []],
+    ]);
+    const s2 = await sweep();
+    ok("sweep: failing fixture rolled back whole (no bet of it settled)", num("SELECT COUNT(*) n FROM shared_bets WHERE fixture = ? AND settled = 1", [fA.id]) === 0);
+    ok("sweep: failure isolated — later fixture still settles", num("SELECT settled n FROM shared_bets WHERE id = ?", [healthy2.id]) === 1, JSON.stringify(s2.sw));
+    ok("sweep: failure reported, not swallowed", !!s2.sw && s2.sw.failed >= 1 && /injected:S/.test(JSON.stringify(s2.sw.errors)) && /strandedBets/.test(s2.res.data.error || ""), JSON.stringify(s2.res.data).slice(0, 400));
+    checkInvariants("sweep failure");
+    await clear("S");
+    const s3 = await sweep();
+    ok("sweep: fault removed — the failed fixture settles", num("SELECT COUNT(*) n FROM shared_bets WHERE fixture = ? AND settled = 1", [fA.id]) === 201, JSON.stringify(s3.sw));
+    const s4 = await sweep();
+    ok("sweep: repeat is a no-op (no double payout)", s4.sw && s4.sw.settled === 0 && !s4.sw.failed, JSON.stringify(s4.sw));
+    ok("sweep: blocked fixture's winners paid exactly once", num("SELECT COUNT(*) n FROM credit_ledger WHERE type = 'bet_win' AND idempotency_key IN (SELECT id || ':settle' FROM shared_bets WHERE fixture = ? AND status = 'won')", [fA.id]) === num("SELECT COUNT(*) n FROM shared_bets WHERE fixture = ? AND status = 'won'", [fA.id]) && blockedBets.length === 201);
+    checkInvariants("sweep retry");
+    await pause(false);
 
     // ===== Legacy: pre-v2 tail failure — R16 marked completed with no QF created
     t = activeT();

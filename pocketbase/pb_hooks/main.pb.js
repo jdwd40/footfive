@@ -295,6 +295,7 @@ cronAdd("footfive_catchup", "*/1 * * * *", () => {
     // (idempotent, bounded per run) rather than on the request-driven tick path.
     const stranded = require(`${__hooks}/lib/bettingService.js`).settleStrandedBets($app, Date.now());
     if (stranded.settled) log.info("stranded_bets_settled", stranded);
+    if (stranded.failed) log.error("stranded_bets_failed", stranded);
     health.recordCatchUp($app, { actions: r.actions || [] }, Date.now() - t0, "");
   } catch (err) {
     log.error("catchup_error", { durationMs: Date.now() - t0, message: String(err).slice(0, 200) });

@@ -407,26 +407,51 @@ function settleFixtureBets(tx, fx, r, now) {
  * settled bets after their completion transaction, at most 200 per fixture, and never
  * retried; v2 settles them inside finaliseFixture. Settles each such fixture in its
  * own transaction (idempotent per bet) and never pre-empts finaliseFixture.
+ *
+ * Only fixtures whose progression already ran are read, keyset-paged by fixture id,
+ * so neither a not-yet-progressed fixture nor a failing one can hide later fixtures.
+ * A failing fixture rolls back alone and is reported in `errors`; the rest proceed.
+ * At most STRANDED_FIXTURES fixtures per sweep.
  */
+var STRANDED_FIXTURES = 100;
 function settleStrandedBets($app, now) {
   var W = ws();
-  var rows = all($app, "shared_bets", '(status = "open" || status = "locked") && fixture != "" && fixture.status = "finished"', "fixture", {}, 200);
-  var seen = {};
-  var settled = 0;
-  rows.forEach(function (b) {
-    var fxId = b.get("fixture");
-    if (seen[fxId]) return;
-    seen[fxId] = true;
-    $app.runInTransaction(function (tx) {
-      var fx = tx.findRecordById("shared_fixtures", fxId);
-      var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fxId });
-      if (!ms || !ms.get("progression_settled")) return;
-      var r = W.resultOf(ms, fx);
-      if (!r) return;
-      settled += settleFixtureBets(tx, fx, r, now || Date.now());
-    });
-  });
-  return { fixtures: Object.keys(seen).length, settled: settled };
+  var out = { fixtures: 0, settled: 0, failed: 0, errors: [] };
+  var last = "";
+  while (out.fixtures < STRANDED_FIXTURES) {
+    var rows = all(
+      $app,
+      "shared_bets",
+      '(status = "open" || status = "locked") && fixture > {:last} && fixture.status = "finished" && fixture.match_states_via_fixture.progression_settled ?= true',
+      "fixture",
+      { last: last },
+      BET_PAGE,
+    );
+    if (!rows.length) break;
+    for (var i = 0; i < rows.length && out.fixtures < STRANDED_FIXTURES; i++) {
+      var fxId = rows[i].get("fixture");
+      if (fxId === last) continue;
+      last = fxId;
+      out.fixtures++;
+      var n = 0;
+      try {
+        $app.runInTransaction(function (tx) {
+          var fx = tx.findRecordById("shared_fixtures", fxId);
+          var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fxId });
+          if (!ms || !ms.get("progression_settled")) return;
+          var r = W.resultOf(ms, fx);
+          if (!r) return;
+          n = settleFixtureBets(tx, fx, r, now || Date.now());
+        });
+        out.settled += n;
+      } catch (err) {
+        out.failed++;
+        out.errors.push(fxId + ": " + String(err).slice(0, 200));
+      }
+    }
+    if (rows.length < BET_PAGE) break;
+  }
+  return out;
 }
 
 function goalsAfter($app, fixtureId, from, now) {

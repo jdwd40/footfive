@@ -208,7 +208,9 @@ function recoverAll($app, opts) {
     } catch (e) {
       bets = require("./bettingService.js");
     }
-    report.actions.push({ strandedBets: bets.settleStrandedBets($app, Date.now()) });
+    var stranded = bets.settleStrandedBets($app, Date.now());
+    report.actions.push({ strandedBets: stranded });
+    if (stranded.failed) report.error += "strandedBets:" + stranded.errors.join(" | ") + "; ";
   } catch (err4) {
     report.error += "strandedBets:" + String(err4) + "; ";
   }
