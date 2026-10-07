@@ -291,6 +291,10 @@ cronAdd("footfive_catchup", "*/1 * * * *", () => {
   try {
     if (!svc.isSchemaReady($app)) return;
     const r = svc.tick($app, Date.now());
+    // Pre-v2 rounds could leave bets open on finished fixtures; settle them here
+    // (idempotent, bounded per run) rather than on the request-driven tick path.
+    const stranded = require(`${__hooks}/lib/bettingService.js`).settleStrandedBets($app, Date.now());
+    if (stranded.settled) log.info("stranded_bets_settled", stranded);
     health.recordCatchUp($app, { actions: r.actions || [] }, Date.now() - t0, "");
   } catch (err) {
     log.error("catchup_error", { durationMs: Date.now() - t0, message: String(err).slice(0, 200) });
