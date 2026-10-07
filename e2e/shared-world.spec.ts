@@ -91,17 +91,27 @@ test.describe("shared world", () => {
     }
     const t1 = free[0].id;
     const t2 = free[1].id;
-    const c1 = await request.post(`${PB}/api/footfive/teams/${t1}/claim`, {
-      headers: { Authorization: a.token },
-    });
+    // The shared /api/ per-IP budget (migration 1750000015) can throttle a
+    // burst from the suite itself; wait out one 10s window and retry once.
+    const postClaim = async (teamId: string, token: string) => {
+      let r = await request.post(`${PB}/api/footfive/teams/${teamId}/claim`, {
+        headers: { Authorization: token },
+      });
+      if (r.status() === 429) {
+        await new Promise((res) => setTimeout(res, 11000));
+        r = await request.post(`${PB}/api/footfive/teams/${teamId}/claim`, {
+          headers: { Authorization: token },
+        });
+      }
+      return r;
+    };
+    const c1 = await postClaim(t1, a.token);
     expect(c1.ok()).toBe(true);
     const conflict = await request.post(`${PB}/api/footfive/teams/${t1}/claim`, {
       headers: { Authorization: b.token },
     });
     expect(conflict.ok()).toBe(false);
-    const c2 = await request.post(`${PB}/api/footfive/teams/${t2}/claim`, {
-      headers: { Authorization: b.token },
-    });
+    const c2 = await postClaim(t2, b.token);
     expect(c2.ok()).toBe(true);
     // A cannot claim second team
     const teams2 = (

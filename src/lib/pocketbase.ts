@@ -209,7 +209,11 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(msg || `Request failed (${res.status})`);
+    // Preserve the HTTP status so callers can distinguish a definitive auth
+    // rejection (4xx) from offline/network failures (review F4).
+    const err = new Error(msg || `Request failed (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   return res.json() as Promise<T>;
 }

@@ -82,4 +82,22 @@ if [[ "$API_FAIL" == "1" || "$UI_FAIL" == "1" ]]; then
   echo "FAIL api=$API_FAIL ui=$UI_FAIL"
   exit 1
 fi
+
+# Account-security regression runs last: its 429 checks deliberately exhaust the
+# login rate-limit bucket, which would otherwise poison UI/API logins above.
+SEC_FAIL=0
+node "$ROOT/tests/integration/account-security.mjs" || SEC_FAIL=1
+if [[ "$SEC_FAIL" == "1" ]]; then
+  echo "FAIL sec=$SEC_FAIL"
+  exit 1
+fi
+
+# Existing-data upgrade regression (review F3): spawns its own PB pair on
+# UPGRADE_PB_PORT against a scratch DB; no shared state with the e2e instance.
+UPG_FAIL=0
+UPGRADE_PB_PORT="${UPGRADE_PB_PORT:-8293}" node "$ROOT/tests/integration/upgrade-legacy-disabled.mjs" || UPG_FAIL=1
+if [[ "$UPG_FAIL" == "1" ]]; then
+  echo "FAIL upgrade=$UPG_FAIL"
+  exit 1
+fi
 echo "E2E OK"

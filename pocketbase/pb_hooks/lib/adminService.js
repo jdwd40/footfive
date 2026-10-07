@@ -218,10 +218,28 @@ function createUser($app, adminId, body) {
   return { id: rec.id, email: rec.get("email") };
 }
 
+function rotateTokenKey(u) {
+  // Fail closed (review F3): never save an account-state change whose token
+  // revocation silently failed — that would leave old tokens valid.
+  if (typeof u.refreshTokenKey === "function") {
+    u.refreshTokenKey();
+    return;
+  }
+  if (typeof $security !== "undefined" && $security.randomString) {
+    u.set("tokenKey", $security.randomString(50));
+    return;
+  }
+  throw new Error("token rotation unavailable");
+}
+
 function setUserDisabled($app, adminId, userId, disabled, reason) {
   var u = $app.findRecordById("users", userId);
   var before = !!u.get("disabled");
   u.set("disabled", !!disabled);
+  if (disabled && !before) {
+    // Revoke outstanding auth tokens: PB validates tokens against tokenKey (review B2)
+    rotateTokenKey(u);
+  }
   $app.save(u);
   audit(
     $app,
@@ -274,18 +292,8 @@ function resetUserPassword($app, adminId, userId, password, opts) {
   u.set("passwordConfirm", password);
   if (opts.mustChange) u.set("must_change_password", true);
   else u.set("must_change_password", false);
-  // Invalidate existing auth tokens
-  try {
-    if (typeof $security !== "undefined" && $security.randomString) {
-      u.set("tokenKey", $security.randomString(50));
-    } else {
-      u.set("tokenKey", "reset" + Date.now() + Math.random().toString(36).slice(2));
-    }
-  } catch (_) {
-    try {
-      u.set("tokenKey", "reset" + Date.now());
-    } catch (_) {}
-  }
+  // Invalidate existing auth tokens (fail closed — review F3)
+  rotateTokenKey(u);
   $app.save(u);
   audit(
     $app,
