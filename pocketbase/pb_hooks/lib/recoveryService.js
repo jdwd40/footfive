@@ -200,6 +200,21 @@ function recoverAll($app, opts) {
     report.error += "catchUp:" + String(err2) + "; ";
   }
 
+  // Bets left open on already-finished fixtures (pre-v2 tail failures)
+  try {
+    var bets;
+    try {
+      bets = require(__hooks + "/lib/bettingService.js");
+    } catch (e) {
+      bets = require("./bettingService.js");
+    }
+    var stranded = bets.settleStrandedBets($app, Date.now());
+    report.actions.push({ strandedBets: stranded });
+    if (stranded.failed) report.error += "strandedBets:" + stranded.errors.join(" | ") + "; ";
+  } catch (err4) {
+    report.error += "strandedBets:" + String(err4) + "; ";
+  }
+
   try {
     var world3 = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0)[0];
     world3.set("last_recovery_at", toPbDate(new Date()));

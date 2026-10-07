@@ -452,27 +452,23 @@ function settlePlayerRecordsFromMatch($app, fixture, matchState, extra) {
       if (!p || !p.name) continue;
       var appeared = p.is_starter !== false; // engine usually only lists active; count all present
       if (p.energy == null && p.is_starter === false) appeared = false;
-      // Prefer id match when present
+      // Prefer id match when present. An unresolvable player is skipped; a failed
+      // query throws so the enclosing settlement transaction rolls back and retries.
       var prec = null;
-      try {
-        if (p.id) {
-          prec = $app.findRecordById("proball_players", p.id);
-        }
-      } catch (_) {
-        prec = null;
+      if (p.id) {
+        var byId = $app.findRecordsByFilter("proball_players", "id = {:id}", "", 1, 0, { id: p.id });
+        if (byId && byId.length) prec = byId[0];
       }
       if (!prec) {
-        try {
-          var found = $app.findRecordsByFilter(
-            "proball_players",
-            "team = {:t} && name = {:n}",
-            "",
-            1,
-            0,
-            { t: teamId, n: p.name },
-          );
-          if (found && found.length) prec = found[0];
-        } catch (_) {}
+        var found = $app.findRecordsByFilter(
+          "proball_players",
+          "team = {:t} && name = {:n}",
+          "",
+          1,
+          0,
+          { t: teamId, n: p.name },
+        );
+        if (found && found.length) prec = found[0];
       }
       if (!prec) continue;
 
@@ -524,28 +520,23 @@ function settlePlayerRecordsFromMatch($app, fixture, matchState, extra) {
       if (rows && rows.length) {
         rec = rows[0];
       } else {
-        try {
-          var col = $app.findCollectionByNameOrId("global_player_records");
-          rec = new Record(col);
-          rec.set("player", prec.id);
-          rec.set("team", teamId);
-          rec.set("player_name", prec.get("name"));
-          rec.set("role", prec.get("role"));
-          rec.set("appearances", 0);
-          rec.set("goals", 0);
-          rec.set("fouls", 0);
-          rec.set("yellow_cards", 0);
-          rec.set("red_cards", 0);
-          rec.set("penalties_taken", 0);
-          rec.set("penalties_scored", 0);
-          rec.set("penalties_missed", 0);
-          rec.set("shootout_taken", 0);
-          rec.set("shootout_scored", 0);
-          rec.set("shootout_missed", 0);
-          rec.set("championships", 0);
-        } catch (_) {
-          continue;
-        }
+        rec = new Record($app.findCollectionByNameOrId("global_player_records"));
+        rec.set("player", prec.id);
+        rec.set("team", teamId);
+        rec.set("player_name", prec.get("name"));
+        rec.set("role", prec.get("role"));
+        rec.set("appearances", 0);
+        rec.set("goals", 0);
+        rec.set("fouls", 0);
+        rec.set("yellow_cards", 0);
+        rec.set("red_cards", 0);
+        rec.set("penalties_taken", 0);
+        rec.set("penalties_scored", 0);
+        rec.set("penalties_missed", 0);
+        rec.set("shootout_taken", 0);
+        rec.set("shootout_scored", 0);
+        rec.set("shootout_missed", 0);
+        rec.set("championships", 0);
       }
       if (appeared) rec.set("appearances", (rec.get("appearances") || 0) + 1);
       rec.set("goals", (rec.get("goals") || 0) + goals);
@@ -561,28 +552,25 @@ function settlePlayerRecordsFromMatch($app, fixture, matchState, extra) {
       rec.set("player_name", prec.get("name"));
       rec.set("team", teamId);
       rec.set("role", prec.get("role"));
-      try {
-        $app.save(rec);
-      } catch (_) {}
+      $app.save(rec);
     }
   }
 }
 
+/** Throws on a failed read/save so completeRound's transaction rolls back and retries. */
 function awardChampionshipPlayers($app, teamId) {
-  try {
-    var rows = $app.findRecordsByFilter(
-      "global_player_records",
-      "team = {:t}",
-      "",
-      20,
-      0,
-      { t: teamId },
-    );
-    for (var i = 0; i < (rows || []).length; i++) {
-      rows[i].set("championships", (rows[i].get("championships") || 0) + 1);
-      $app.save(rows[i]);
-    }
-  } catch (_) {}
+  var rows = $app.findRecordsByFilter(
+    "global_player_records",
+    "team = {:t}",
+    "",
+    20,
+    0,
+    { t: teamId },
+  );
+  for (var i = 0; i < (rows || []).length; i++) {
+    rows[i].set("championships", (rows[i].get("championships") || 0) + 1);
+    $app.save(rows[i]);
+  }
 }
 
 function listPlayerRecords($app, filters) {

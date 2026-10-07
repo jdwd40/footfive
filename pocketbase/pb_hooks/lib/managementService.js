@@ -751,33 +751,32 @@ function loadTeamSnapshot($app, teamId) {
   };
 }
 
+/**
+ * Pay a reward once per settlement key. Errors propagate: callers run inside the
+ * fixture/round settlement transaction, which must roll back and retry rather than
+ * commit a half-paid reward (treasury moved, ledger or settlement row missing).
+ */
 function settleMatchReward($app, teamId, amount, type, description, meta) {
   if (!amount || amount <= 0) return;
   var key = meta.idempotency_key;
-  try {
-    var existing = $app.findRecordsByFilter(
-      "reward_settlements",
-      "settlement_key = {:k}",
-      "",
-      1,
-      0,
-      { k: key },
-    );
-    if (existing && existing.length) return;
-  } catch (_) {}
+  var existing = $app.findRecordsByFilter(
+    "reward_settlements",
+    "settlement_key = {:k}",
+    "",
+    1,
+    0,
+    { k: key },
+  );
+  if (existing && existing.length) return;
 
-  try {
-    var team = $app.findRecordById("proball_teams", teamId);
-    adjustTreasury($app, team, amount, type, description, meta);
-    var col = $app.findCollectionByNameOrId("reward_settlements");
-    var rec = new Record(col);
-    rec.set("settlement_key", key);
-    rec.set("kind", type);
-    rec.set("team", teamId);
-    $app.save(rec);
-  } catch (err) {
-    console.log("[footfive] settleMatchReward: " + err);
-  }
+  var team = $app.findRecordById("proball_teams", teamId);
+  adjustTreasury($app, team, amount, type, description, meta);
+  var col = $app.findCollectionByNameOrId("reward_settlements");
+  var rec = new Record(col);
+  rec.set("settlement_key", key);
+  rec.set("kind", type);
+  rec.set("team", teamId);
+  $app.save(rec);
 }
 
 function gradeStrength(grade) {
@@ -950,6 +949,7 @@ if (typeof module !== "undefined") {
     rewardFixture: rewardFixture,
     rewardElimination: rewardElimination,
     rewardChampion: rewardChampion,
+    adjustTreasury: adjustTreasury,
     aiMaintainTeam: aiMaintainTeam,
     materialisePlayerEnergy: materialisePlayerEnergy,
     requireManagerTeam: requireManagerTeam,

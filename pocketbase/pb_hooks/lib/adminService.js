@@ -1,15 +1,22 @@
 /**
  * Administrator operations — role-checked by routes.
  */
-var balMod, mgmtMod;
+var balMod, mgmtMod, betMod;
 try {
   balMod = require(__hooks + "/lib/balance.js");
   mgmtMod = require(__hooks + "/lib/managementService.js");
+  betMod = require(__hooks + "/lib/bettingService.js");
 } catch (e) {
   balMod = require("./balance.js");
   mgmtMod = require("./managementService.js");
+  betMod = require("./bettingService.js");
 }
 var BALANCE = balMod.BALANCE;
+
+/** Suffix keeping same-millisecond admin ledger keys distinct (keys are unique). */
+function uniq() {
+  return Math.random().toString(36).slice(2, 10);
+}
 
 function toPbDate(d) {
   var x = d instanceof Date ? d : new Date(d);
@@ -324,18 +331,11 @@ function adjustCredits($app, adminId, userId, mode, amount, reason) {
     else if (mode === "remove") after = before - amount;
     else throw new BadRequestError("mode must be set|add|remove");
     if (after < 0) throw new BadRequestError("Balance cannot be negative");
-    u.set("credits", after);
-    txApp.save(u);
-    try {
-      var col = txApp.findCollectionByNameOrId("credit_ledger");
-      var led = new Record(col);
-      led.set("user", userId);
-      led.set("type", "admin_adjust");
-      led.set("amount", after - before);
-      led.set("description", "Admin: " + reason);
-      led.set("idempotency_key", "admin_cred:" + userId + ":" + Date.now());
-      txApp.save(led);
-    } catch (_) {}
+    // Same balance+ledger write as betting (balance_after, unique key); a ledger
+    // failure rolls the adjustment back instead of leaving an unledgered balance.
+    if (!betMod.credit(txApp, userId, after - before, "admin_adjust", "Admin: " + reason, "admin_cred:" + userId + ":" + Date.now() + ":" + uniq())) {
+      throw new Error("Duplicate admin adjustment key");
+    }
   });
   audit(
     $app,
@@ -365,19 +365,11 @@ function adjustTreasury($app, adminId, teamId, mode, amount, reason) {
     else if (mode === "remove") after = before - amount;
     else throw new BadRequestError("mode must be set|add|remove");
     if (after < 0) throw new BadRequestError("Treasury cannot be negative");
-    t.set("treasury", after);
-    txApp.save(t);
-    try {
-      var col = txApp.findCollectionByNameOrId("team_finance_ledger");
-      var led = new Record(col);
-      led.set("team", teamId);
-      led.set("amount", after - before);
-      led.set("type", "admin_adjust");
-      led.set("description", "Admin: " + reason);
-      led.set("balance_after", after);
-      led.set("idempotency_key", "admin_tre:" + teamId + ":" + Date.now());
-      txApp.save(led);
-    } catch (_) {}
+    // Same treasury+ledger write as rewards and purchases; a ledger failure rolls
+    // the adjustment back instead of leaving an unledgered treasury change.
+    mgmtMod.adjustTreasury(txApp, t, after - before, "admin_adjust", "Admin: " + reason, {
+      idempotency_key: "admin_tre:" + teamId + ":" + Date.now() + ":" + uniq(),
+    });
   });
   audit(
     $app,

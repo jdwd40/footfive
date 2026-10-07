@@ -356,13 +356,31 @@ function settle(tx, betId, outcome, note) {
   return true;
 }
 
+var BET_PAGE = 500;
+
+/**
+ * Every unsettled bet matching `filter`, read in id-ordered pages. Settlement must
+ * never stop at a page boundary: a fixture is finalised once, so a capped read
+ * would strand the remaining bets forever. Keyset paging (id > last) stays correct
+ * while the caller settles rows out of the open set.
+ */
 function openBets(tx, filter, params) {
-  return all(tx, "shared_bets", '(status = "open" || status = "locked") && ' + filter, "", params, 1000);
+  var out = [];
+  var last = "";
+  for (;;) {
+    var q = { last: last };
+    for (var k in params || {}) q[k] = params[k];
+    var page = all(tx, "shared_bets", '(status = "open" || status = "locked") && id > {:last} && (' + filter + ")", "id", q, BET_PAGE);
+    out = out.concat(page);
+    if (page.length < BET_PAGE) return out;
+    last = page[page.length - 1].id;
+  }
 }
 
 /** Fixture markets at the (public) final whistle. */
 function settleFixtureBets(tx, fx, r, now) {
   var note = "Final " + r.sh + "–" + r.sa + (r.by === "pens" ? " (pens " + r.soh + "–" + r.soa + ")" : r.by === "aet" ? " AET" : "");
+  var n = 0;
   openBets(tx, "fixture = {:f}", { f: fx.id }).forEach(function (b) {
     var market = b.get("market");
     var sel = b.get("selection");
@@ -375,12 +393,65 @@ function settleFixtureBets(tx, fx, r, now) {
       var g = goalsAfter(tx, fx.id, b.get("placed_ms") || 0, Infinity)[0];
       if (g) {
         var side = ws().readJson(g, "data", {}).side;
-        settle(tx, b.id, sel === side ? "won" : "lost", "Next goal: " + side);
+        if (settle(tx, b.id, sel === side ? "won" : "lost", "Next goal: " + side)) n++;
         return;
       }
     }
-    settle(tx, b.id, mkt.settleFixtureBet(market, sel, r), note);
+    if (settle(tx, b.id, mkt.settleFixtureBet(market, sel, r), note)) n++;
   });
+  return n;
+}
+
+/**
+ * Fixture bets still open on a fixture whose progression already ran. Pre-v2 rounds
+ * settled bets after their completion transaction, at most 200 per fixture, and never
+ * retried; v2 settles them inside finaliseFixture. Settles each such fixture in its
+ * own transaction (idempotent per bet) and never pre-empts finaliseFixture.
+ *
+ * Only fixtures whose progression already ran are read, keyset-paged by fixture id,
+ * so neither a not-yet-progressed fixture nor a failing one can hide later fixtures.
+ * A failing fixture rolls back alone and is reported in `errors`; the rest proceed.
+ * At most STRANDED_FIXTURES fixtures per sweep.
+ */
+var STRANDED_FIXTURES = 100;
+function settleStrandedBets($app, now) {
+  var W = ws();
+  var out = { fixtures: 0, settled: 0, failed: 0, errors: [] };
+  var last = "";
+  while (out.fixtures < STRANDED_FIXTURES) {
+    var rows = all(
+      $app,
+      "shared_bets",
+      '(status = "open" || status = "locked") && fixture > {:last} && fixture.status = "finished" && fixture.match_states_via_fixture.progression_settled ?= true',
+      "fixture",
+      { last: last },
+      BET_PAGE,
+    );
+    if (!rows.length) break;
+    for (var i = 0; i < rows.length && out.fixtures < STRANDED_FIXTURES; i++) {
+      var fxId = rows[i].get("fixture");
+      if (fxId === last) continue;
+      last = fxId;
+      out.fixtures++;
+      var n = 0;
+      try {
+        $app.runInTransaction(function (tx) {
+          var fx = tx.findRecordById("shared_fixtures", fxId);
+          var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fxId });
+          if (!ms || !ms.get("progression_settled")) return;
+          var r = W.resultOf(ms, fx);
+          if (!r) return;
+          n = settleFixtureBets(tx, fx, r, now || Date.now());
+        });
+        out.settled += n;
+      } catch (err) {
+        out.failed++;
+        out.errors.push(fxId + ": " + String(err).slice(0, 200));
+      }
+    }
+    if (rows.length < BET_PAGE) break;
+  }
+  return out;
 }
 
 function goalsAfter($app, fixtureId, from, now) {
@@ -534,6 +605,7 @@ if (typeof module !== "undefined") {
     topUp: topUp,
     claimConflict: claimConflict,
     settleFixtureBets: settleFixtureBets,
+    settleStrandedBets: settleStrandedBets,
     settleNextGoal: settleNextGoal,
     settleRoundFirst: settleRoundFirst,
     settleSemis: settleSemis,

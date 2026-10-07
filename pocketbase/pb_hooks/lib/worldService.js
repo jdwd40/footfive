@@ -862,27 +862,46 @@ function finaliseFixture($app, fixtureId, roundKey, now) {
   return done;
 }
 
-/** Close a round once every fixture is finalised; schedule the next one. */
-function completeRound($app, roundId, now, T) {
+/**
+ * Close a round once every fixture is finalised; schedule the next one. One
+ * transaction: any failure rolls the whole step back and the next tick retries.
+ *
+ * Legacy resume: pre-v2 code marked a round progression_done inside its transaction
+ * and only then (outside it) settled bets, paid rewards and created the next round.
+ * If that tail failed, the round is completed with no successor and the tournament
+ * would stall. tick() passes resume=true for exactly that state (completed, still the
+ * current round of the active tournament): the successor is created, or the
+ * tournament closed, and round/championship markets are settled. Ruling: the
+ * non-idempotent championship counters and awards (team/player championships, the
+ * champion reward) are NOT re-run on resume — the pre-v2 tail ran them before the
+ * tournament save, so re-running would risk double counting.
+ */
+function completeRound($app, roundId, now, T, resume) {
   var out = null;
   $app.runInTransaction(function (tx) {
     var round = tx.findRecordById("shared_rounds", roundId);
-    if (round.get("progression_done")) return;
+    var t = tx.findRecordById("shared_tournaments", round.get("tournament"));
+    if (resume) {
+      if (!round.get("progression_done") || round.get("status") !== "completed" || t.get("status") !== "active") return;
+      var latest = currentRound(tx, t.id);
+      if (!latest || latest.id !== round.id) return;
+    } else if (round.get("progression_done")) return;
     var fixtures = fixturesOf(tx, round.id);
     var winners = {};
     var finished = 0;
     for (var i = 0; i < fixtures.length; i++) {
-      if (fixtures[i].get("status") !== "finished") return;
+      if (fixtures[i].get("status") !== "finished" || !fixtures[i].get("winner_team")) return;
       winners[fixtures[i].get("slot")] = fixtures[i].get("winner_team");
       finished = Math.max(finished, fixtures[i].get("finished_ms") || 0);
     }
     if (!fixtures.length) return;
-    round.set("status", "completed");
-    round.set("progression_done", true);
-    round.set("completed_at", toPbDate(now));
-    round.set("finished_ms", finished);
-    tx.save(round);
-    var t = tx.findRecordById("shared_tournaments", round.get("tournament"));
+    if (!resume) {
+      round.set("status", "completed");
+      round.set("progression_done", true);
+      round.set("completed_at", toPbDate(now));
+      round.set("finished_ms", finished);
+      tx.save(round);
+    }
     var key = round.get("round_key");
     betMod.settleRoundFirst(tx, round, fixtures, true);
     if (key === "qf") betMod.settleSemis(tx, t, fixtures);
@@ -897,9 +916,11 @@ function completeRound($app, roundId, now, T) {
     t.set("champion_team", champ);
     t.set("completed_at", toPbDate(finished || now));
     tx.save(t);
-    updateTeamRecord(tx, champ, { championships: 1 });
-    mgmtMod.rewardChampion(tx, champ, t.id);
-    recMod.awardChampionshipPlayers(tx, champ);
+    if (!resume) {
+      updateTeamRecord(tx, champ, { championships: 1 });
+      mgmtMod.rewardChampion(tx, champ, t.id);
+      recMod.awardChampionshipPlayers(tx, champ);
+    }
     recMod.ensureTournamentSummary(tx, t, fixtures);
     betMod.settleChampion(tx, t, champ);
     var world = one(tx, "world", "key = 'main'");
@@ -908,7 +929,7 @@ function completeRound($app, roundId, now, T) {
     tx.save(world);
     out = { champion: champ, nextStart: nextStart };
   });
-  if (out) log("round_completed", { roundId: roundId, result: out });
+  if (out) log(resume ? "legacy_round_resumed" : "round_completed", { roundId: roundId, result: out });
   return out;
 }
 
@@ -977,7 +998,7 @@ function tick($app, now) {
 
   for (var guard = 0; guard < 6; guard++) {
     var round = currentRound($app, t.id);
-    if (!round || round.get("status") === "completed") {
+    if (!round) {
       try {
         if (!repairMissingRound($app, t.id, now, T)) break;
       } catch (err3) {
@@ -991,6 +1012,17 @@ function tick($app, now) {
     if (status === "scheduled" || status === "management") {
       if (now < parsePbDate(round.get("scheduled_at"))) break;
       if (kickOff($app, round.id, now, T)) actions.push("kickoff:" + round.get("round_key"));
+      continue;
+    }
+    if (status === "completed") {
+      // Only a pre-v2 tail failure leaves a completed round as the current one.
+      var resumed = completeRound($app, round.id, now, T, true);
+      if (!resumed) break;
+      actions.push("round_resumed:" + round.get("round_key"));
+      if (resumed.champion) {
+        if (createTournament($app, resumed.nextStart)) actions.push("championship_created");
+        break;
+      }
       continue;
     }
     if (status !== "live") break;
@@ -1708,6 +1740,7 @@ if (typeof module !== "undefined") {
       return t ? currentRound($app, t.id) : null;
     },
     lastPublished: lastPublished,
+    resultOf: resultOf,
     publishedEvents: publishedEvents,
     fixtureCard: fixtureCard,
     drawHidden: drawHidden,
