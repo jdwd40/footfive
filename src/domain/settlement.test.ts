@@ -61,6 +61,10 @@ function fakeApp(failSave?: (r: Row) => boolean) {
       if (/status = "open" \|\| status = "locked"/.test(filter)) rows = rows.filter((r) => r.get("status") === "open" || r.get("status") === "locked");
       if (/id > \{:last\}/.test(filter)) rows = rows.filter((r) => r.id > p.last);
       if (/fixture = \{:f\}/.test(filter)) rows = rows.filter((r) => r.get("fixture") === p.f);
+      if (/^id = \{:id\}/.test(filter)) rows = rows.filter((r) => r.id === p.id);
+      if (/team = \{:t\}/.test(filter)) rows = rows.filter((r) => r.get("team") === p.t);
+      if (/name = \{:n\}/.test(filter)) rows = rows.filter((r) => r.get("name") === p.n);
+      if (/player = \{:p\}/.test(filter)) rows = rows.filter((r) => r.get("player") === p.p);
       if (name === "shared_bets") app.pageReads++;
       if (sort === "id") rows.sort((a, b) => (a.id < b.id ? -1 : 1));
       return rows.slice(0, limit);
@@ -172,5 +176,44 @@ describe("ledger failures propagate", () => {
     const tl = app.store.team_finance_ledger;
     expect(tl).toHaveLength(1);
     expect(tl[0].data).toMatchObject({ type: "admin_adjust", amount: -300, balance_after: 700 });
+  });
+});
+
+describe("player record failures propagate (review R2)", () => {
+  const fx = { get: (k: string) => ({ home_team: "H", away_team: "A" })[k], id: "fx1" };
+  const extra = (home: Array<Record<string, unknown>>) => ({ players: { home, away: [] }, events: [{ type: "goal", player: "Ann" }] });
+
+  it("a failed player-record save throws out of settlePlayerRecordsFromMatch (fixture transaction rolls back)", () => {
+    const rec = lib("recordsService.js");
+    const app = fakeApp((r) => r.collectionName === "global_player_records");
+    app.add("proball_players", "p1", { team: "H", name: "Ann", role: "FW" });
+    expect(() => rec.settlePlayerRecordsFromMatch(app, fx, null, extra([{ id: "p1", name: "Ann" }]))).toThrow(/injected/);
+  });
+
+  it("an unresolvable player is still skipped, not an error", () => {
+    const rec = lib("recordsService.js");
+    const app = fakeApp();
+    app.add("proball_players", "p1", { team: "H", name: "Ann", role: "FW" });
+    rec.settlePlayerRecordsFromMatch(app, fx, null, extra([{ id: "gone", name: "Nobody" }, { id: "gone2", name: "Ann" }]));
+    const rows = app.store.global_player_records;
+    expect(rows).toHaveLength(1); // Ann resolved by team + name; Nobody skipped
+    expect(rows[0].data).toMatchObject({ player: "p1", goals: 1, appearances: 1 });
+  });
+
+  it("a failed championship award throws out of awardChampionshipPlayers (completion rolls back)", () => {
+    const rec = lib("recordsService.js");
+    const app = fakeApp((r) => r.collectionName === "global_player_records");
+    app.add("global_player_records", "g1", { team: "H", championships: 0 });
+    expect(() => rec.awardChampionshipPlayers(app, "H")).toThrow(/injected/);
+  });
+
+  it("championship award increments each of the team's player records once", () => {
+    const rec = lib("recordsService.js");
+    const app = fakeApp();
+    app.add("global_player_records", "g1", { team: "H", championships: 2 });
+    app.add("global_player_records", "g2", { team: "A", championships: 0 });
+    rec.awardChampionshipPlayers(app, "H");
+    expect(app.findRecordById("global_player_records", "g1").get("championships")).toBe(3);
+    expect(app.findRecordById("global_player_records", "g2").get("championships")).toBe(0);
   });
 });

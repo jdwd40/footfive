@@ -9,6 +9,8 @@
  *   - nothing is paid twice (one ledger row per settlement key, balances reconcile).
  * Also: >1000 bets on one fixture all settle; legacy (pre-v2) partial rounds are
  * resumed; legacy stranded bets are settled by the recovery sweep exactly once;
+ * player-record and championship-award write failures roll back their fixture /
+ * completion transaction and are retried (review R2);
  * credit_ledger's unique idempotency index is collection-owned (migration 17) and
  * its duplicate preflight fails closed without modifying data.
  *
@@ -362,23 +364,52 @@ async function main() {
     ok("E: semis bet still open", num("SELECT COUNT(*) n FROM shared_bets WHERE market = 'semis' AND settled = 0") === 1);
     checkInvariants("E");
 
-    // ===== Stage F: semis settle; final completion fails at the tournament summary
+    // ===== Stage F: semis settle; final completion fails at the tournament summary.
+    // Also, once the final exists: its player-record update fails (P1, fixture stage)
+    // and every player championship award fails (P2, completion stage).
+    const finalExists = `(SELECT COUNT(*) FROM shared_rounds WHERE tournament = '${t.id}' AND round_key = 'final') > 0`;
     await write([
       ["DROP TRIGGER inj_E", []],
       [`CREATE TRIGGER inj_F BEFORE INSERT ON tournament_summaries BEGIN SELECT RAISE(ABORT, 'injected:F'); END`, []],
+      [`CREATE TRIGGER inj_P1 BEFORE UPDATE ON global_player_records WHEN NEW.appearances != OLD.appearances AND ${finalExists} BEGIN SELECT RAISE(ABORT, 'injected:P1'); END`, []],
+      [`CREATE TRIGGER inj_P2 BEFORE UPDATE ON global_player_records WHEN NEW.championships != OLD.championships BEGIN SELECT RAISE(ABORT, 'injected:P2'); END`, []],
     ]);
     await until("final created", () => !!roundOf(t.id, "final"));
     ok("F: semis bet settled once", num("SELECT COUNT(*) n FROM shared_bets WHERE market = 'semis' AND settled = 1") === 1);
     const fin = roundOf(t.id, "final");
+    const finFx = fixturesOfRound(fin.id)[0];
     const champsBefore = num("SELECT COALESCE(SUM(championships),0) n FROM global_team_records");
+    const finAppsBefore = num("SELECT COALESCE(SUM(appearances),0) n FROM global_player_records WHERE team IN (?, ?)", [finFx.home_team, finFx.away_team]);
+    await until("final engine finished", () => allEngineFinished(fin.id));
+    await sleep(1500);
+    ok(
+      "P1: final not finalised while its player-record write fails (no summary, no settle flag, records untouched)",
+      num("SELECT COUNT(*) n FROM shared_fixtures WHERE round = ? AND status = 'finished'", [fin.id]) === 0 &&
+        num("SELECT COUNT(*) n FROM match_summaries WHERE fixture_id = ?", [finFx.id]) === 0 &&
+        num("SELECT COUNT(*) n FROM match_states WHERE fixture = ? AND progression_settled = 1", [finFx.id]) === 0 &&
+        num("SELECT COALESCE(SUM(appearances),0) n FROM global_player_records WHERE team IN (?, ?)", [finFx.home_team, finFx.away_team]) === finAppsBefore,
+    );
+    checkInvariants("P1");
+    await clear("P1");
     await until("final fixture finalised", () => num("SELECT COUNT(*) n FROM shared_fixtures WHERE round = ? AND status = 'finished'", [fin.id]) === 1);
+    ok("P1: retried final records its player appearances once", num("SELECT COALESCE(SUM(appearances),0) n FROM global_player_records WHERE team IN (?, ?)", [finFx.home_team, finFx.away_team]) > finAppsBefore && num("SELECT COUNT(*) n FROM match_summaries WHERE fixture_id = ?", [finFx.id]) === 1);
     await sleep(1500);
     ok("F: tournament still active while its completion fails", one("SELECT status FROM shared_tournaments WHERE id = ?", [t.id]).status === "active");
     ok("F: champion bets open, no champion reward, no championship counted", num("SELECT COUNT(*) n FROM shared_bets WHERE market = 'champion' AND settled = 1") === 0 && num("SELECT COUNT(*) n FROM reward_settlements WHERE kind = 'champion'") === 0 && num("SELECT COALESCE(SUM(championships),0) n FROM global_team_records") === champsBefore);
     checkInvariants("F");
 
-    // ===== Stage G: fault removed — the championship completes exactly once
+    // ===== Stage P2: summary works; the player championship award still fails
+    const champTeam = one("SELECT winner_team FROM shared_fixtures WHERE round = ?", [fin.id]).winner_team;
+    const champPlayers = num("SELECT COUNT(*) n FROM global_player_records WHERE team = ?", [champTeam]);
+    const playerChampsBefore = num("SELECT COALESCE(SUM(championships),0) n FROM global_player_records");
     await clear("F");
+    await sleep(2000);
+    ok("P2: tournament not completed while player awards fail", one("SELECT status FROM shared_tournaments WHERE id = ?", [t.id]).status === "active" && num("SELECT COUNT(*) n FROM tournament_summaries WHERE tournament_id = ?", [t.id]) === 0);
+    ok("P2: nothing of the completion committed (bets, rewards, counters)", num("SELECT COUNT(*) n FROM shared_bets WHERE market = 'champion' AND settled = 1") === 0 && num("SELECT COUNT(*) n FROM reward_settlements WHERE kind = 'champion'") === 0 && num("SELECT COALESCE(SUM(championships),0) n FROM global_team_records") === champsBefore);
+    checkInvariants("P2");
+
+    // ===== Stage G: fault removed — the championship completes exactly once
+    await clear("P2");
     await until("championship #1 complete", () => one("SELECT status FROM shared_tournaments WHERE id = ?", [t.id]).status === "complete");
     await sleep(1000);
     const t1 = one("SELECT * FROM shared_tournaments WHERE id = ?", [t.id]);
@@ -386,6 +417,7 @@ async function main() {
     ok("G: champion bets all settled, exactly one winner", num("SELECT COUNT(*) n FROM shared_bets WHERE market = 'champion' AND settled = 0") === 0 && num("SELECT COUNT(*) n FROM shared_bets WHERE market = 'champion' AND status = 'won'") === 1);
     ok("G: one champion reward, one finalist reward", num("SELECT COUNT(*) n FROM reward_settlements WHERE kind = 'champion'") === 1 && num("SELECT COUNT(*) n FROM reward_settlements WHERE kind = 'finalist'") === 1);
     ok("G: championship counted once", num("SELECT COALESCE(SUM(championships),0) n FROM global_team_records") === champsBefore + 1);
+    ok("G: champion's players awarded once each", champPlayers > 0 && num("SELECT COALESCE(SUM(championships),0) n FROM global_player_records") === playerChampsBefore + champPlayers, `players=${champPlayers}`);
     ok("G: one tournament summary", num("SELECT COUNT(*) n FROM tournament_summaries WHERE tournament_id = ?", [t.id]) === 1);
     ok("G: no bet of championship #1 left open", num("SELECT COUNT(*) n FROM shared_bets WHERE tournament = ? AND settled = 0", [t.id]) === 0);
     ok("G: next championship drawn", num("SELECT COUNT(*) n FROM shared_tournaments WHERE status = 'active'") === 1);
