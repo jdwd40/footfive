@@ -558,6 +558,15 @@ function kickOff($app, roundId, now, T) {
     var timingSnap = eng.buildTiming(T.minuteSec * 1000, T.scale);
     for (var i = 0; i < fixtures.length; i++) {
       var fx = fixtures[i];
+      var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fx.id });
+      // A fixture with a persisted engine state was already started (or finished) by an
+      // earlier kick-off: keep its lineups, state, result, events and RNG/timing exactly
+      // as they are. Restarting it would collide with the retained event sequences.
+      if (ms) continue;
+      // Marked started/finished but no state row: an inconsistent mix we cannot repair
+      // safely. Fail closed — the transaction (including the slot repair above) rolls
+      // back and the round stays scheduled rather than rewriting played data.
+      if (fx.get("status") !== "scheduled") throw new Error("kickoff_fixture_mixed: " + fx.id);
       var homeRec = teams[fx.get("home_team")];
       var awayRec = teams[fx.get("away_team")];
       // Full AI and unmanaged teams use the treasury between matches (visible rules).
@@ -581,8 +590,7 @@ function kickOff($app, roundId, now, T) {
         home: home,
         away: away,
       });
-      var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fx.id });
-      if (!ms) ms = new Record(tx.findCollectionByNameOrId("match_states"));
+      ms = new Record(tx.findCollectionByNameOrId("match_states"));
       ms.set("fixture", fx.id);
       ms.set("seed", state.seed);
       ms.set("sim_version", 2);
