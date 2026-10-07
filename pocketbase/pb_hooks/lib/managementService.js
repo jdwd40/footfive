@@ -949,6 +949,7 @@ if (typeof module !== "undefined") {
     rewardFixture: rewardFixture,
     rewardElimination: rewardElimination,
     rewardChampion: rewardChampion,
+    adjustTreasury: adjustTreasury,
     aiMaintainTeam: aiMaintainTeam,
     materialisePlayerEnergy: materialisePlayerEnergy,
     requireManagerTeam: requireManagerTeam,
