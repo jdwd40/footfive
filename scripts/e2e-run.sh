@@ -100,4 +100,13 @@ if [[ "$UPG_FAIL" == "1" ]]; then
   echo "FAIL upgrade=$UPG_FAIL"
   exit 1
 fi
+
+# Settlement atomicity/idempotency/recovery (issue #15): own PB on SETTLE_PB_PORT
+# against a scratch DB, failures injected per settlement stage via SQLite triggers.
+SET_FAIL=0
+SETTLE_PB_PORT="${SETTLE_PB_PORT:-8294}" node "$ROOT/tests/integration/settlement-recovery.mjs" || SET_FAIL=1
+if [[ "$SET_FAIL" == "1" ]]; then
+  echo "FAIL settlement=$SET_FAIL"
+  exit 1
+fi
 echo "E2E OK"
