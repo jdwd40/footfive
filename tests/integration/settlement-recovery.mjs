@@ -120,29 +120,34 @@ async function stop() {
   }
   child = null;
 }
-let hold = false;
-let inflight = Promise.resolve();
+let tickGen = 0;
 async function ticker() {
+  const gen = ++tickGen;
   ticking = true;
-  while (ticking) {
-    if (!hold) {
-      inflight = fetch(`${URL}/api/footfive/health`).then(
-        () => {},
-        () => {},
-      );
-      await inflight;
+  while (ticking && gen === tickGen) {
+    try {
+      await fetch(`${URL}/api/footfive/health`);
+    } catch {
+      /* restarting */
     }
     await sleep(40);
   }
 }
-/** External writes wait for the in-flight tick (PB is otherwise never idle long enough to yield the lock). */
+/**
+ * External writes (fault triggers, legacy-state emulation, seeding) happen with
+ * PocketBase stopped: SQLite has one writer, and an outside writer racing PB's
+ * write connection is not a production condition (PB is the only writer there).
+ * World state is persisted, so ticking resumes where it left off on restart.
+ */
+let DATA_DIR = "";
 async function write(stmts) {
-  hold = true;
-  await inflight;
+  const wasTicking = ticking;
+  await stop();
   try {
     return sqlMany(stmts);
   } finally {
-    hold = false;
+    await start(DATA_DIR);
+    if (wasTicking) ticker();
   }
 }
 async function until(label, fn, ms = 90000) {
@@ -187,8 +192,12 @@ function insertBets(rows) {
       [rid15(), now, b.user, -b.stake, id + ":stake", b.user],
     ]);
   }
-  for (let i = 0; i < stmts.length; i += 3000) sqlMany(stmts.slice(i, i + 3000));
-  return rows;
+  return { rows, stmts };
+}
+async function seedBets(rows) {
+  const r = insertBets(rows);
+  await write(r.stmts);
+  return r.rows;
 }
 
 // ---- invariants (checked after every stage)
@@ -224,6 +233,7 @@ async function main() {
   const dataDir = path.join(work, "pb_data");
   mkdirSync(dataDir, { recursive: true });
   DB = path.join(dataDir, "data.db");
+  DATA_DIR = dataDir;
   try {
     await start(dataDir);
     console.log(`Settlement recovery: db=${dataDir} scale=${SCALE}`);
@@ -262,16 +272,16 @@ async function main() {
     for (let i = 0; i < 1200; i++) {
       many.push({ user: i % 2 ? u1.id : u2.id, fixture: fx[0].id, round: r16.id, tournament: t.id, market: "winner", selection: i % 2 ? "home" : "away", stake: 10, odds: 2.5, status: i % 5 ? "open" : "locked" });
     }
-    insertBets(many);
-    const legacyStyle = insertBets([
+    await seedBets(many);
+    const legacyStyle = await seedBets([
       { user: u1.id, fixture: fx[1].id, market: "", selection_team: fx[1].home_team, stake: 7, odds: 1.9, status: "locked" },
       { user: u2.id, fixture: fx[1].id, market: "", selection_team: fx[1].away_team, stake: 7, odds: 1.9, status: "locked" },
     ]);
     const teamsAll = q("SELECT id FROM proball_teams ORDER BY id").map((r) => r.id);
-    insertBets(fx.flatMap((f) => [{ user: u1.id, round: r16.id, tournament: t.id, market: "round_first", selection: f.home_team, selection_team: f.home_team, stake: 5, odds: 9 }]));
+    await seedBets(fx.flatMap((f) => [{ user: u1.id, round: r16.id, tournament: t.id, market: "round_first", selection: f.home_team, selection_team: f.home_team, stake: 5, odds: 9 }]));
     const quarters = JSON.parse(t.odds_json).quarters;
-    insertBets([{ user: u2.id, round: r16.id, tournament: t.id, market: "semis", selection: quarters.map((qq) => qq[0]).join(","), stake: 5, odds: 30 }]);
-    insertBets(teamsAll.map((id) => ({ user: u2.id, round: r16.id, tournament: t.id, market: "champion", selection: id, selection_team: id, stake: 3, odds: 12 })));
+    await seedBets([{ user: u2.id, round: r16.id, tournament: t.id, market: "semis", selection: quarters.map((qq) => qq[0]).join(","), stake: 5, odds: 30 }]);
+    await seedBets(teamsAll.map((id) => ({ user: u2.id, round: r16.id, tournament: t.id, market: "champion", selection: id, selection_team: id, stake: 3, odds: 12 })));
     const totalBets = num("SELECT COUNT(*) n FROM shared_bets");
     ok("seeded > 1000 bets on one fixture", num("SELECT COUNT(*) n FROM shared_bets WHERE fixture = ?", [fx[0].id]) === 1200, String(totalBets));
     snapshotBalances();
@@ -382,8 +392,8 @@ async function main() {
     checkInvariants("G");
 
     // ===== Legacy: stranded bets on an already-progressed fixture (pre-v2 200-cap / tail failure)
-    const oldFx = fx[2];
-    const stranded = insertBets(
+    const oldFx = one("SELECT * FROM shared_fixtures WHERE id = ?", [fx[2].id]); // finished: winner known
+    const stranded = await seedBets(
       Array.from({ length: 3 }, (_, i) => ({ user: u1.id, fixture: oldFx.id, round: r16.id, tournament: t.id, market: "", selection_team: i ? oldFx.winner_team : oldFx.home_team === oldFx.winner_team ? oldFx.away_team : oldFx.home_team, stake: 4, odds: 3, status: "locked" })),
     );
     const sweep1 = await req("/api/footfive/admin/recovery/run", "POST", adminTok);
