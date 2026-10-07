@@ -21,6 +21,9 @@
  *   S3 legacy R16 round with missing fixtures → completed at kick-off, placed teams kept
  *   S4 legacy completed round without its successor → next round built from its winners
  *   S5 legacy championship with no round → repaired with the same tournament
+ *   S6 completed R16 + empty scheduled QF (issue15 parked shape) → QF repaired and kicked off
+ *   S7 scheduled partial round with an already-live fixture → played state/events/RNG preserved
+ *   S8 scheduled partial round with a persisted v1 finished result → never restarted as v2
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -239,6 +242,65 @@ async function main() {
   );
   ok(q("select current_round from shared_tournaments where id = ?", t.id)[0].current_round === "qf", "championship advanced to qf");
   ok(played() === before, "played R16 fixtures, match states and events untouched");
+
+  console.log("S6 parked issue15 exact shape: completed R16 + empty scheduled QF");
+  await stopPb();
+  const migrationsBefore = JSON.stringify(q("select * from _migrations order by file"));
+  exec("delete from shared_fixtures where round = ?", qf.id);
+  exec("update shared_rounds set scheduled_at = ? where id = ?", PAST, qf.id);
+  await startPb();
+  await tick();
+  ok(fixturesOf(qf.id).length === 4 && q("select status from shared_rounds where id = ?", qf.id)[0].status === "live", "empty scheduled QF repaired and kicked off with all 4 fixtures");
+  ok(JSON.stringify(fixturesOf(r16.id)) === JSON.stringify(JSON.parse(before)[0]), "played R16 fixture rows untouched by empty QF repair");
+  ok(JSON.stringify(q("select * from _migrations order by file")) === migrationsBefore, "applied migration history unchanged across repair");
+
+  // Review finding R1: repair of a scheduled partial round must not reinitialise fixtures
+  // that already started or finished (reviewer extra-probe.mjs repro, kept byte-exact).
+  console.log("S7 scheduled partial round preserves an already-live fixture");
+  await stopPb();
+  const live = fixturesOf(qf.id)[0];
+  const msBefore = q("select * from match_states where fixture = ?", live.id)[0];
+  const fxBefore = q("select * from shared_fixtures where id = ?", live.id)[0];
+  const evBefore = q("select * from match_events where fixture = ? order by seq", live.id);
+  ok(evBefore.length > 0, "retained fixture has real published engine events");
+  exec("delete from match_events where fixture in (select id from shared_fixtures where round = ? and id != ?)", qf.id, live.id);
+  exec("delete from match_states where fixture in (select id from shared_fixtures where round = ? and id != ?)", qf.id, live.id);
+  exec("delete from shared_fixtures where round = ? and id != ?", qf.id, live.id);
+  exec("update shared_rounds set status = 'scheduled' where id = ?", qf.id);
+  // Freeze advancement to isolate kickoff overwrite from normal engine evolution.
+  const state = JSON.parse(msBefore.state_json); state.nextAt = Date.now() + 3600000;
+  exec("update match_states set state_json = ? where fixture = ?", JSON.stringify(state), live.id);
+  const frozenBefore = q("select * from match_states where fixture = ?", live.id)[0];
+  await startPb();
+  await tick();
+  const frozenAfter = q("select * from match_states where fixture = ?", live.id)[0];
+  console.log("PRESERVATION", JSON.stringify({fixture:live.id,beforeSeed:frozenBefore.seed,afterSeed:frozenAfter.seed,beforeState:JSON.parse(frozenBefore.state_json),afterState:JSON.parse(frozenAfter.state_json),beforeEvents:evBefore.length,afterEvents:q("select * from match_events where fixture = ?",live.id).length}));
+  ok(frozenAfter.state_json === frozenBefore.state_json && frozenAfter.id === frozenBefore.id, "played match state and RNG/timing snapshot preserved during incomplete scheduled round repair");
+  ok(JSON.stringify(q("select * from shared_fixtures where id = ?", live.id)[0]) === JSON.stringify(fxBefore), "played fixture row bytes preserved (lineups, status, result)");
+  ok(evBefore.every(e => JSON.stringify(q("select * from match_events where id = ?", e.id)[0]) === JSON.stringify(e)), "existing event IDs and bytes preserved");
+  ok(fixturesOf(qf.id).length === 4, "mixed round has all expected fixtures after retry");
+  ok(fixturesOf(qf.id).filter((f) => f.id !== live.id).every((f) => f.status === "live" && q("select count(*) c from match_states where fixture = ?", f.id)[0].c === 1), "genuinely unstarted fixtures were initialised");
+
+  // Reviewer legacy-preservation-probe.mjs repro: a persisted v1 finished result inside a
+  // scheduled partial parent must never be restarted as a fresh v2 match.
+  console.log("S8 scheduled partial round preserves a persisted v1 finished result");
+  await stopPb();
+  exec("delete from match_events where fixture in (select id from shared_fixtures where round = ? and id != ?)", qf.id, live.id);
+  exec("delete from match_states where fixture in (select id from shared_fixtures where round = ? and id != ?)", qf.id, live.id);
+  exec("delete from shared_fixtures where round = ? and id != ?", qf.id, live.id);
+  exec("update shared_rounds set status = 'scheduled' where id = ?", qf.id);
+  exec("update match_states set sim_version = 1, finalised = 1, progression_settled = 1, winner_team = ?, events_json = ? where fixture = ?", live.home_team, JSON.stringify([{seq:1,type:"goal",scoreHome:2,scoreAway:0}]), live.id);
+  exec("update shared_fixtures set status = 'finished', winner_team = home_team, score_home = 2, score_away = 0, finished_ms = ? where id = ?", Date.now()-1000, live.id);
+  const v1Before = q("select * from match_states where fixture = ?", live.id)[0];
+  const v1FxBefore = q("select * from shared_fixtures where id = ?", live.id)[0];
+  await startPb();
+  await tick();
+  const v1After = q("select * from match_states where fixture = ?", live.id)[0];
+  console.log("PRESERVATION", JSON.stringify({fixture:live.id,beforeVersion:v1Before.sim_version,afterVersion:v1After.sim_version,beforeFinalised:v1Before.finalised,afterFinalised:v1After.finalised,beforeSeed:v1Before.seed,afterSeed:v1After.seed,beforeState:JSON.parse(v1Before.state_json),afterState:JSON.parse(v1After.state_json),beforeEvents:evBefore.length,afterEvents:q("select * from match_events where fixture = ?",live.id).length}));
+  ok(v1After.state_json === v1Before.state_json && v1After.events_json === v1Before.events_json && v1After.sim_version === v1Before.sim_version && v1After.finalised === v1Before.finalised && v1After.id === v1Before.id, "persisted v1 finished result preserved (not restarted as v2)");
+  ok(JSON.stringify(q("select * from shared_fixtures where id = ?", live.id)[0]) === JSON.stringify(v1FxBefore), "finished fixture row bytes preserved (result untouched)");
+  ok(evBefore.every(e => JSON.stringify(q("select * from match_events where id = ?", e.id)[0]) === JSON.stringify(e)), "existing event IDs and bytes preserved");
+  ok(fixturesOf(qf.id).length === 4, "mixed round has all expected fixtures after retry");
 
   console.log("S5 legacy championship with no round");
   await stopPb();
