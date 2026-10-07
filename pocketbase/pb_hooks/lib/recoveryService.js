@@ -44,15 +44,21 @@ function detectStalls($app) {
   try {
     var world = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0)[0];
     var ps = world.get("processing_status");
-    if (ps && ps !== "idle" && ps !== "") {
-      var claimed = parsePbDate(world.get("updated"));
-      if (!isNaN(claimed) && now - claimed > thr) {
+    // The progression lease (worldService.tick) stores its expiry in
+    // processing_version: a "processing" row past expiry is a crashed holder.
+    if (ps === "processing") {
+      var expiry = parseInt(world.get("processing_version"), 10) || 0;
+      if (expiry > 0 && now > expiry) {
         worldIssues.push({
           type: "stale_world_lock",
           status: ps,
-          ageMs: now - claimed,
+          overdueMs: now - expiry,
         });
       }
+    } else if (ps === "error") {
+      // The last tick failed; the next tick already reclaims automatically, so
+      // this is informational for the admin dashboard.
+      worldIssues.push({ type: "world_lock_error", status: ps });
     }
   } catch (_) {}
 
@@ -60,7 +66,7 @@ function detectStalls($app) {
     var live = $app.findRecordsByFilter(
       "match_states",
       "finalised = false",
-      "",
+      "next_segment_due_at", // most overdue first: the sweep sees the real stalls even past the row cap (review B23)
       50,
       0,
     );
@@ -183,7 +189,10 @@ function recoverAll($app, opts) {
   try {
     var world = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0)[0];
     var ps = world.get("processing_status");
-    if (ps && ps !== "idle") {
+    // Only clear a lock that cannot have a live holder: expired leases and the
+    // failed-tick "error" state. Never yank an active lease mid-tick.
+    var expiry = parseInt(world.get("processing_version"), 10) || 0;
+    if (ps === "error" || (ps === "processing" && expiry > 0 && Date.now() > expiry)) {
       world.set("processing_status", "idle");
       $app.save(world);
       report.actions.push({ clear_world_lock: true, was: ps });
