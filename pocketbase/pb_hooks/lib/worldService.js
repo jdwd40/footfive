@@ -842,7 +842,10 @@ function completeRound($app, roundId, now, T, resume) {
  * ownership token; a crashed holder's lease expires and the next tick reclaims
  * it (stale-lease recovery), no separate sweep needed.
  */
-var LEASE_MS = 120000; // matches recoveryService's default stall threshold
+// A crashed holder (process killed mid-tick) orphans the lease until expiry, so
+// keep it short: a normal tick is milliseconds, and even if a slow tick is
+// reclaimed early the per-step transactions still prevent double work.
+var LEASE_MS = 30000;
 // ponytail: per-process jitter keeps same-millisecond claims from sharing a
 // token; a collision (p ≈ 1/1000 per same-ms pair) just lets two workers run
 // idempotent steps concurrently — per-step transactions still prevent doubles.
