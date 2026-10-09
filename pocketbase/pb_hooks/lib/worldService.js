@@ -722,7 +722,7 @@ function resultOf(ms, fx) {
   };
 }
 
-/** Events of a fixture already public at `now` (ascending). */
+/** Latest tail of a fixture's public events, returned ascending (settlement needs the final snapshot). */
 function publishedEvents($app, fixtureId, now, sinceSeq, limit) {
   var rows = $app.findRecordsByFilter(
     "match_events",
@@ -735,6 +735,25 @@ function publishedEvents($app, fixtureId, now, sinceSeq, limit) {
   var out = [];
   for (var i = (rows || []).length - 1; i >= 0; i--) out.push(readJson(rows[i], "data", {}));
   return out;
+}
+
+/** Lossless match-history page: earliest unread events, plus one row to detect continuation. */
+function publishedEventPage($app, fixtureId, throughMs, sinceSeq) {
+  var rows = $app.findRecordsByFilter(
+    "match_events",
+    "fixture = {:f} && at <= {:n} && seq > {:s}",
+    "seq",
+    301,
+    0,
+    { f: fixtureId, n: throughMs, s: sinceSeq },
+  ) || [];
+  var events = rows.slice(0, 300).map(function (r) { return readJson(r, "data", {}); });
+  return {
+    events: events,
+    nextSeq: events.length ? events[events.length - 1].seq : sinceSeq,
+    hasMore: rows.length > 300,
+    throughMs: throughMs,
+  };
 }
 
 function lastPublished($app, fixtureId, now) {
@@ -1396,27 +1415,31 @@ function lineupPublic(players) {
   });
 }
 
-/** Individual match view. Events after `sinceSeq`; first load returns the latest 60. Read-only (review B3). */
-function matchView($app, fixtureId, sinceSeq, userId) {
+/** Individual match view. Ascending cursor pages; hold throughMs across a finite backlog drain. Read-only (review B3). */
+function matchView($app, fixtureId, sinceSeq, userId, throughMs) {
   var now = Date.now();
+  sinceSeq = Math.max(0, sinceSeq || 0);
+  throughMs = typeof throughMs === "number" && isFinite(throughMs) && throughMs >= 0 ? Math.min(now, throughMs) : now;
   var world = ensureWorld($app);
   var T = timing(world);
   var teams = teamMap($app);
   var fx = $app.findRecordById("shared_fixtures", fixtureId);
   var round = $app.findRecordById("shared_rounds", fx.get("round"));
   if (drawHidden($app, round, now)) throw new Error("fixture not announced");
-  var card = fixtureCard($app, fx, teams, now, T);
+  var card = fixtureCard($app, fx, teams, throughMs, T);
   var managed = getManagerTeam($app, userId);
   var side = managed ? (managed.id === fx.get("home_team") ? "home" : managed.id === fx.get("away_team") ? "away" : null) : null;
   var events = [];
+  var page = { nextSeq: sinceSeq, hasMore: false, throughMs: throughMs };
   var lineups = null;
   var coach = null;
   var sentOff = [];
   if (fx.get("status") !== "scheduled") {
-    events = publishedEvents($app, fixtureId, now, sinceSeq || 0, sinceSeq ? 300 : 60);
+    page = publishedEventPage($app, fixtureId, throughMs, sinceSeq);
+    events = page.events;
     // Sent-off players from published events only (the engine state may already know a
     // red card that is a few seconds from publication).
-    var reds = $app.findRecordsByFilter("match_events", 'fixture = {:f} && type = "red_card" && at <= {:n}', "seq", 10, 0, { f: fixtureId, n: now }) || [];
+    var reds = $app.findRecordsByFilter("match_events", 'fixture = {:f} && type = "red_card" && at <= {:n}', "seq", 10, 0, { f: fixtureId, n: throughMs }) || [];
     sentOff = reds.map(function (r) {
       var d = readJson(r, "data", {});
       return { side: d.side, p: d.p };
@@ -1448,6 +1471,7 @@ function matchView($app, fixtureId, sinceSeq, userId) {
     round: { id: round.id, key: round.get("round_key"), label: round.get("label"), status: round.get("status") },
     fixture: card,
     events: events,
+    eventsPage: { nextSeq: page.nextSeq, hasMore: page.hasMore, throughMs: page.throughMs },
     lineups: lineups,
     sentOff: sentOff,
     managedSide: side,

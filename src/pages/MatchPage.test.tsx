@@ -14,6 +14,7 @@ function view(events: MatchEvent[], lineups: MatchView["lineups"], serverTimeMs:
     round: { id: "r", key: "r1", label: "Round 1", status: "live" },
     fixture: { id: "fx1", slot: "a", index: 0, home: team("Home"), away: team("Away"), status: "live", kickoffAt: 0, st, seq: 1 } as unknown as MatchView["fixture"],
     events,
+    eventsPage: { nextSeq: events.at(-1)?.seq ?? 0, hasMore: false, throughMs: serverTimeMs },
     lineups,
     sentOff: [],
     managedSide: null,

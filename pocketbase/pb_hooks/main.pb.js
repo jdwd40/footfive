@@ -368,7 +368,7 @@ routerAdd(
   $apis.requireAuth(),
 );
 
-// Individual match. Read-only. ?since=<seq> returns only newer published events.
+// Individual match. Read-only. Ascending ?since=<seq> pages; ?through=<ms> holds the publication cutoff.
 routerAdd(
   "GET",
   "/api/footfive/match/{fixtureId}",
@@ -376,11 +376,14 @@ routerAdd(
     const svc = require(`${__hooks}/lib/worldService.js`);
     const id = e.request.pathValue("fixtureId");
     let since = 0;
+    let through;
     try {
       since = parseInt(e.request.url.query().get("since") || "0", 10) || 0;
+      const cutoff = e.request.url.query().get("through");
+      if (cutoff) through = Number(cutoff);
     } catch (_) {}
     try {
-      return e.json(200, svc.matchView($app, id, since, e.auth.id));
+      return e.json(200, svc.matchView($app, id, since, e.auth.id, through));
     } catch (err) {
       console.log("[footfive] match: " + err);
       throw new NotFoundError("Match not found");
