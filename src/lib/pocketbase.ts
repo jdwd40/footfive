@@ -197,15 +197,22 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (pb.authStore.token) {
     headers.Authorization = pb.authStore.token;
   }
-  const res = await fetch(`${POCKETBASE_URL}${path}`, {
+  const request = () => fetch(`${POCKETBASE_URL}${path}`, {
     ...init,
     headers,
   });
+  let res = await request();
+  if (res.status === 429 && (init?.method || "GET") === "GET") {
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    const delay = Number.isFinite(retryAfter) ? Math.min(Math.max(retryAfter * 1000, 250), 3000) : 1000;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    res = await request();
+  }
   if (!res.ok) {
-    let msg = res.statusText;
+    let msg = res.status === 429 ? "Too many requests — retry in a moment." : res.statusText;
     try {
       const j = (await res.json()) as { message?: string };
-      msg = j.message || msg;
+      if (res.status !== 429) msg = j.message || msg;
     } catch {
       /* ignore */
     }
