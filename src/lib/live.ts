@@ -51,7 +51,7 @@ async function poll() {
 function interval() {
   const m = store.live?.mode;
   if (typeof document !== "undefined" && document.hidden) return 10000;
-  return m === "live" ? 1500 : 3000;
+  return m === "live" ? 3000 : 5000;
 }
 
 function loop() {
