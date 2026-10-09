@@ -212,7 +212,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     let msg = res.status === 429 ? "Too many requests — retry in a moment." : res.statusText;
     try {
       const j = (await res.json()) as { message?: string };
-      msg = j.message || msg;
+      if (res.status !== 429) msg = j.message || msg;
     } catch {
       /* ignore */
     }
