@@ -117,7 +117,7 @@ describe("retained match history cursor", () => {
   });
 
   it("preserves the settlement helper's latest tail and final stats beyond 2000 rows", () => {
-    const events = Array.from({ length: 2205 }, (_, i) => ({ ...event(i + 1), st: { ...state, pos: i + 1, x: [[i + 1], [0]] } }));
+    const events: MatchEvent[] = Array.from({ length: 2205 }, (_, i) => ({ ...event(i + 1), st: { ...state, pos: i + 1, x: [[i + 1], [0]] } }));
     const tail = world.publishedEvents(appFor(events), "fx1", NOW, 0, 2000);
     expect(tail).toEqual(events.slice(-2000));
     expect(tail.at(-1)?.st).toMatchObject({ pos: 2205, x: [[2205], [0]] });
