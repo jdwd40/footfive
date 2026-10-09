@@ -2,10 +2,13 @@
  * Shared records, match/tournament summaries, history APIs.
  */
 var balMod;
+var tourneyMod;
 try {
   balMod = require(__hooks + "/lib/balance.js");
+  tourneyMod = require(__hooks + "/lib/tournament.js");
 } catch (e) {
   balMod = require("./balance.js");
+  tourneyMod = require("./tournament.js");
 }
 
 function toPbDate(d) {
@@ -279,6 +282,8 @@ function recordsOverview($app) {
     if (!mostSO || row.shootout_wins > mostSO.shootout_wins) mostSO = row;
   }
 
+  // Permanent summaries are created at completion; the recent list is only a preview.
+  var completedTournaments = $app.countRecords("tournament_summaries");
   var tournaments = $app.findRecordsByFilter(
     "tournament_summaries",
     "id != ''",
@@ -300,6 +305,7 @@ function recordsOverview($app) {
         id: act[0].id,
         number: act[0].get("number"),
         round: act[0].get("current_round"),
+        roundLabel: tourneyMod.ROUND_LABELS[act[0].get("current_round")] || act[0].get("current_round"),
       };
     }
   } catch (_) {}
@@ -337,7 +343,7 @@ function recordsOverview($app) {
 
   return {
     currentTournament: current,
-    completedTournaments: (tournaments || []).length,
+    completedTournaments: completedTournaments,
     highlights: {
       mostChampionships: mostChamp,
       mostWins: mostWins,
