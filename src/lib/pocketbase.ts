@@ -136,6 +136,7 @@ export type MatchView = {
   round: { id: string; key: string; label: string; status: string };
   fixture: FixtureCard;
   events: MatchEvent[];
+  eventsPage: { nextSeq: number; hasMore: boolean; throughMs: number };
   lineups: { home: LineupPlayer[]; away: LineupPlayer[] } | null;
   sentOff: Array<{ side: Side; p: string }>;
   managedSide: Side | null;
@@ -228,7 +229,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export const footfiveApi = {
   serverTime: () => api<{ serverTime: string; serverTimeMs: number }>("/api/footfive/server-time"),
   live: () => api<LiveView>("/api/footfive/live"),
-  match: (fixtureId: string, since = 0) => api<MatchView>(`/api/footfive/match/${fixtureId}?since=${since}`),
+  match: (fixtureId: string, since = 0, throughMs?: number) => api<MatchView>(`/api/footfive/match/${fixtureId}?since=${since}${throughMs === undefined ? "" : `&through=${throughMs}`}`),
   world: () => api<WorldSnapshot>("/api/footfive/world"),
   teams: () => api<{ teams: TeamPublic[] }>("/api/footfive/teams"),
   claimTeam: (teamId: string) => api<{ team: TeamPublic }>(`/api/footfive/teams/${teamId}/claim`, { method: "POST" }),
