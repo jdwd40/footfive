@@ -89,7 +89,7 @@ export default function RecordsPage() {
             <p className="text-sm">
               Tournament #
               {(overview.currentTournament as { number?: number })?.number ?? "—"} ·{" "}
-              {(overview.currentTournament as { round?: string })?.round ?? "—"}
+              {(overview.currentTournament as { roundLabel?: string })?.roundLabel ?? "—"}
             </p>
             <p className="text-xs text-muted">
               Completed: {String(overview.completedTournaments ?? 0)}
