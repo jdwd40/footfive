@@ -187,9 +187,14 @@ function syncTeamColours($app, rec, t) {
   $app.save(rec);
 }
 
+/**
+ * Every team is saved with its players and record in one transaction. A team row left
+ * without them by a pre-transaction build (its record is saved last) gets the missing
+ * pieces; existing players and records are never touched.
+ */
 function ensureTeams($app) {
   var existing = all($app, "proball_teams", "id != ''", "sort_order", {}, 50);
-  if (existing.length >= 16) {
+  if (existing.length >= 16 && all($app, "global_team_records", "id != ''", "", {}, 50).length >= existing.length) {
     for (var s = 0; s < existing.length; s++) {
       var tmpl = teamsMod.getTeamBySlug(existing[s].get("slug"));
       if (tmpl) syncTeamColours($app, existing[s], tmpl);
@@ -203,28 +208,43 @@ function ensureTeams($app) {
     var found = one($app, "proball_teams", "slug = {:s}", "", { s: t.slug });
     if (found) {
       syncTeamColours($app, found, t);
+      if (!one($app, "global_team_records", "team = {:t}", "", { t: found.id })) {
+        $app.runInTransaction(function (tx) {
+          completeTeamSetup(tx, found, t);
+        });
+      }
       created.push(found);
       continue;
     }
-    var team = new Record($app.findCollectionByNameOrId("proball_teams"));
-    team.set("slug", t.slug);
-    team.set("name", t.name);
-    team.set("abbreviation", t.abbreviation);
-    team.set("grade", t.grade);
-    team.set("strength", BALANCE.gradeStrength[t.grade] || 60);
-    team.set("primary_color", t.primary);
-    team.set("secondary_color", t.secondary);
-    team.set("badge_key", t.badge);
-    team.set("eliminated", false);
-    team.set("sort_order", i + 1);
-    team.set("treasury", BALANCE.startingTreasury || 2500);
-    team.set("battery_count", 2);
-    team.set("overclock_ready", false);
-    $app.save(team);
-    created.push(team);
+    $app.runInTransaction(function (tx) {
+      var team = new Record(tx.findCollectionByNameOrId("proball_teams"));
+      team.set("slug", t.slug);
+      team.set("name", t.name);
+      team.set("abbreviation", t.abbreviation);
+      team.set("grade", t.grade);
+      team.set("strength", BALANCE.gradeStrength[t.grade] || 60);
+      team.set("primary_color", t.primary);
+      team.set("secondary_color", t.secondary);
+      team.set("badge_key", t.badge);
+      team.set("eliminated", false);
+      team.set("sort_order", i + 1);
+      team.set("treasury", BALANCE.startingTreasury || 2500);
+      team.set("battery_count", 2);
+      team.set("overclock_ready", false);
+      tx.save(team);
+      completeTeamSetup(tx, team, t);
+      created.push(team);
+    });
+  }
+  return created;
+}
+
+/** Add a team's template squad (only if it has no players) and its zeroed record (if missing). */
+function completeTeamSetup(tx, team, t) {
+  if (!one(tx, "proball_players", "team = {:t}", "", { t: team.id })) {
     var players = tourneyMod.defaultStarters(t.players || []);
     for (var p = 0; p < players.length; p++) {
-      var pr = new Record($app.findCollectionByNameOrId("proball_players"));
+      var pr = new Record(tx.findCollectionByNameOrId("proball_players"));
       pr.set("team", team.id);
       pr.set("name", players[p].name);
       pr.set("role", players[p].role || "util");
@@ -235,16 +255,16 @@ function ensureTeams($app) {
       pr.set("is_starter", !!players[p].is_starter);
       pr.set("intensity", "balanced");
       pr.set("sort_order", p);
-      $app.save(pr);
+      tx.save(pr);
     }
-    var tr = new Record($app.findCollectionByNameOrId("global_team_records"));
-    tr.set("team", team.id);
-    ["played", "wins", "draws", "losses", "goals_for", "goals_against", "shootout_wins", "shootout_losses", "championships"].forEach(function (f) {
-      tr.set(f, 0);
-    });
-    $app.save(tr);
   }
-  return created;
+  if (one(tx, "global_team_records", "team = {:t}", "", { t: team.id })) return;
+  var tr = new Record(tx.findCollectionByNameOrId("global_team_records"));
+  tr.set("team", team.id);
+  ["played", "wins", "draws", "losses", "goals_for", "goals_against", "shootout_wins", "shootout_losses", "championships"].forEach(function (f) {
+    tr.set(f, 0);
+  });
+  tx.save(tr);
 }
 
 function teamPublic(t, managerName) {
@@ -378,35 +398,62 @@ function createTournament($app, startAt) {
     t.set("current_round", "r16");
     t.set("starts_at", toPbDate(startAt));
     tx.save(t);
-    var ids = teams.map(function (x) {
-      return x.id;
-    });
-    var pairs = tourneyMod.drawRoundOf16(ids, eng.hashSeed(t.id + ":r16"));
-    var round = createRound(tx, t, "r16", pairs, startAt);
-    t.set("odds_json", championshipOdds(tx, round));
-    tx.save(t);
+    createFirstRound(tx, t, teams, startAt);
     created = t;
   });
   if (created) log("championship_created", { number: created.get("number"), startsAt: toPbDate(startAt), ms: Date.now() - t0 });
   return created;
 }
 
+function createFirstRound(tx, t, teams, startAt) {
+  var ids = teams.map(function (x) {
+    return x.id;
+  });
+  var round = createRound(tx, t, "r16", tourneyMod.drawRoundOf16(ids, eng.hashSeed(t.id + ":r16")), startAt);
+  t.set("odds_json", championshipOdds(tx, round));
+  tx.save(t);
+  return round;
+}
+
+/**
+ * Idempotent per tournament and round key. A still-scheduled round that already exists
+ * (e.g. left partial by a pre-transaction build) gets its missing slots; it is never redrawn.
+ */
 function createRound(tx, tournament, key, pairings, scheduledAt) {
   var idem = tournament.id + ":" + key + ":v2";
-  var existing = one(tx, "shared_rounds", "idempotency_key = {:k}", "", { k: idem });
-  if (existing) return existing;
-  var round = new Record(tx.findCollectionByNameOrId("shared_rounds"));
-  round.set("tournament", tournament.id);
-  round.set("round_key", key);
-  round.set("label", ROUND_LABELS[key] || key);
-  round.set("scheduled_at", toPbDate(scheduledAt));
-  round.set("status", "scheduled");
-  round.set("idempotency_key", idem);
-  round.set("progression_done", false);
-  tx.save(round);
+  var round = one(tx, "shared_rounds", "idempotency_key = {:k}", "", { k: idem });
+  if (!round) {
+    round = new Record(tx.findCollectionByNameOrId("shared_rounds"));
+    round.set("tournament", tournament.id);
+    round.set("round_key", key);
+    round.set("label", ROUND_LABELS[key] || key);
+    round.set("scheduled_at", toPbDate(scheduledAt));
+    round.set("status", "scheduled");
+    round.set("idempotency_key", idem);
+    round.set("progression_done", false);
+    tx.save(round);
+  } else if (round.get("status") !== "scheduled") {
+    return round;
+  } else {
+    pairings = roundPairings(tx, tournament, round);
+  }
+  addMissingFixtures(tx, tournament, round, pairings);
+  return round;
+}
+
+/** Save a fixture for every pairing whose slot the round lacks ((round, slot) is unique). */
+function addMissingFixtures(tx, tournament, round, pairings) {
+  var have = {};
+  fixturesOf(tx, round.id).forEach(function (f) {
+    have[f.get("slot")] = true;
+  });
   var teams = teamMap(tx);
+  var scheduledAt = toPbDate(parsePbDate(round.get("scheduled_at")));
+  var added = 0;
   for (var i = 0; i < pairings.length; i++) {
     var p = pairings[i];
+    if (have[p.slot]) continue;
+    if (!teams[p.homeId] || !teams[p.awayId]) throw new Error("round_setup_incomplete: " + round.get("round_key") + " " + p.slot);
     var fx = new Record(tx.findCollectionByNameOrId("shared_fixtures"));
     fx.set("tournament", tournament.id);
     fx.set("round", round.id);
@@ -416,13 +463,58 @@ function createRound(tx, tournament, key, pairings, scheduledAt) {
     fx.set("away_team", p.awayId);
     fx.set("feeds_into", p.feedsInto || "");
     fx.set("feeds_position", p.feedsPosition || "");
-    fx.set("scheduled_at", toPbDate(scheduledAt));
+    fx.set("scheduled_at", scheduledAt);
     fx.set("status", "scheduled");
     fx.set("lineups_frozen", false);
     fx.set("model_json", pairModel(engineTeam(tx, teams[p.homeId]), engineTeam(tx, teams[p.awayId])));
     tx.save(fx);
+    added++;
   }
-  return round;
+  return added;
+}
+
+/**
+ * The pairings a round should hold. Later rounds follow the previous round's winners.
+ * R16 keeps every team already placed (legacy rows used another draw seed) and pairs
+ * the remaining teams into the empty slots in this tournament's draw order.
+ */
+function roundPairings(tx, t, round) {
+  var key = round.get("round_key");
+  var idx = ROUND_ORDER.indexOf(key);
+  if (idx > 0) {
+    var prevKey = ROUND_ORDER[idx - 1];
+    var prev = one(tx, "shared_rounds", "tournament = {:t} && round_key = {:k}", "", { t: t.id, k: prevKey });
+    var winners = {};
+    if (prev) {
+      fixturesOf(tx, prev.id).forEach(function (f) {
+        winners[f.get("slot")] = f.get("winner_team");
+      });
+    }
+    return tourneyMod.buildNextRoundFixtures(prevKey, winners);
+  }
+  var placed = {};
+  var slots = {};
+  fixturesOf(tx, round.id).forEach(function (f) {
+    placed[f.get("home_team")] = true;
+    placed[f.get("away_team")] = true;
+    slots[f.get("slot")] = true;
+  });
+  var ids = all(tx, "proball_teams", "id != ''", "sort_order", {}, 50).map(function (x) {
+    return x.id;
+  });
+  var draw = tourneyMod.drawRoundOf16(ids, eng.hashSeed(t.id + ":r16"));
+  var rest = [];
+  draw.forEach(function (p) {
+    if (!placed[p.homeId]) rest.push(p.homeId);
+    if (!placed[p.awayId]) rest.push(p.awayId);
+  });
+  var next = 0;
+  return draw.map(function (p) {
+    if (slots[p.slot]) return p;
+    var q = { slot: p.slot, homeId: rest[next], awayId: rest[next + 1], feedsInto: p.feedsInto, feedsPosition: p.feedsPosition, bracketIndex: p.bracketIndex };
+    next += 2;
+    return q;
+  });
 }
 
 /** Champion and semi-finalist probabilities from the R16 draw (pairwise engine models). */
@@ -455,11 +547,26 @@ function kickOff($app, roundId, now, T) {
     if (round.get("status") !== "scheduled") return;
     var at = parsePbDate(round.get("scheduled_at"));
     if (now < at) return;
-    var teams = teamMap(tx);
     var fixtures = fixturesOf(tx, round.id);
+    // A round left partial by a pre-transaction build is completed before anything kicks off.
+    if (fixtures.length < (BRACKET[round.get("round_key")] || []).length) {
+      var tour = tx.findRecordById("shared_tournaments", round.get("tournament"));
+      addMissingFixtures(tx, tour, round, roundPairings(tx, tour, round));
+      fixtures = fixturesOf(tx, round.id);
+    }
+    var teams = teamMap(tx);
     var timingSnap = eng.buildTiming(T.minuteSec * 1000, T.scale);
     for (var i = 0; i < fixtures.length; i++) {
       var fx = fixtures[i];
+      var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fx.id });
+      // A fixture with a persisted engine state was already started (or finished) by an
+      // earlier kick-off: keep its lineups, state, result, events and RNG/timing exactly
+      // as they are. Restarting it would collide with the retained event sequences.
+      if (ms) continue;
+      // Marked started/finished but no state row: an inconsistent mix we cannot repair
+      // safely. Fail closed — the transaction (including the slot repair above) rolls
+      // back and the round stays scheduled rather than rewriting played data.
+      if (fx.get("status") !== "scheduled") throw new Error("kickoff_fixture_mixed: " + fx.id);
       var homeRec = teams[fx.get("home_team")];
       var awayRec = teams[fx.get("away_team")];
       // Full AI and unmanaged teams use the treasury between matches (visible rules).
@@ -483,8 +590,7 @@ function kickOff($app, roundId, now, T) {
         home: home,
         away: away,
       });
-      var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fx.id });
-      if (!ms) ms = new Record(tx.findCollectionByNameOrId("match_states"));
+      ms = new Record(tx.findCollectionByNameOrId("match_states"));
       ms.set("fixture", fx.id);
       ms.set("seed", state.seed);
       ms.set("sim_version", 2);
@@ -801,11 +907,7 @@ function completeRound($app, roundId, now, T, resume) {
     if (key === "qf") betMod.settleSemis(tx, t, fixtures);
     var nextKey = tourneyMod.nextRoundKey(key);
     if (nextKey) {
-      var at = Math.max(finished + T.betweenMs, now + Math.min(T.betweenMs, 30000 / T.scale));
-      createRound(tx, t, nextKey, tourneyMod.buildNextRoundFixtures(key, winners), at);
-      t.set("current_round", nextKey);
-      tx.save(t);
-      out = { next: nextKey, at: at };
+      out = scheduleNextRound(tx, t, key, winners, finished, now, T);
       return;
     }
     var champ = fixtures[0].get("winner_team");
@@ -828,6 +930,48 @@ function completeRound($app, roundId, now, T, resume) {
     out = { champion: champ, nextStart: nextStart };
   });
   if (out) log(resume ? "legacy_round_resumed" : "round_completed", { roundId: roundId, result: out });
+  return out;
+}
+
+function scheduleNextRound(tx, t, key, winners, finished, now, T) {
+  var nextKey = tourneyMod.nextRoundKey(key);
+  var at = Math.max(finished + T.betweenMs, now + Math.min(T.betweenMs, 30000 / T.scale));
+  createRound(tx, t, nextKey, tourneyMod.buildNextRoundFixtures(key, winners), at);
+  t.set("current_round", nextKey);
+  tx.save(t);
+  return { next: nextKey, at: at };
+}
+
+/**
+ * Pre-transaction builds could commit a championship without its first round, or close
+ * a round without creating the next. Create the missing round (all-or-nothing) from the
+ * draw or the closed round's winners; played rounds and fixtures are left as they are.
+ */
+function repairMissingRound($app, tournamentId, now, T) {
+  var out = null;
+  $app.runInTransaction(function (tx) {
+    var t = tx.findRecordById("shared_tournaments", tournamentId);
+    if (t.get("status") !== "active") return;
+    var last = currentRound(tx, t.id);
+    if (!last) {
+      var at = parsePbDate(t.get("starts_at"));
+      if (isNaN(at) || at < now) at = now + T.windowMs;
+      createFirstRound(tx, t, ensureTeams(tx), at);
+      out = { next: "r16", at: at };
+      return;
+    }
+    if (last.get("status") !== "completed" || !tourneyMod.nextRoundKey(last.get("round_key"))) return;
+    var fixtures = fixturesOf(tx, last.id);
+    var winners = {};
+    var finished = 0;
+    for (var i = 0; i < fixtures.length; i++) {
+      if (fixtures[i].get("status") !== "finished") return;
+      winners[fixtures[i].get("slot")] = fixtures[i].get("winner_team");
+      finished = Math.max(finished, fixtures[i].get("finished_ms") || 0);
+    }
+    out = scheduleNextRound(tx, t, last.get("round_key"), winners, finished, now, T);
+  });
+  if (out) log("round_repaired", { tournamentId: tournamentId, result: out });
   return out;
 }
 
@@ -854,7 +998,16 @@ function tick($app, now) {
 
   for (var guard = 0; guard < 6; guard++) {
     var round = currentRound($app, t.id);
-    if (!round) break;
+    if (!round) {
+      try {
+        if (!repairMissingRound($app, t.id, now, T)) break;
+      } catch (err3) {
+        log("round_repair_error", { tournamentId: t.id, message: String(err3).slice(0, 300) });
+        break;
+      }
+      actions.push("round_repaired");
+      continue;
+    }
     var status = round.get("status");
     if (status === "scheduled" || status === "management") {
       if (now < parsePbDate(round.get("scheduled_at"))) break;

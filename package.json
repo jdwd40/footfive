@@ -21,6 +21,7 @@
     "test:bootstrap": "node tests/integration/bootstrap-clean.mjs",
     "test:security": "vitest run src/domain/security.test.ts",
     "test:account-security": "node tests/integration/account-security.mjs",
+    "test:world-setup": "node tests/integration/world-setup-atomicity.mjs",
     "test:settlement": "node tests/integration/settlement-recovery.mjs",
     "test:recovery": "node scripts/restart-recovery.mjs",
     "rehearsal": "bash scripts/rehearsal.sh",
