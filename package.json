@@ -23,6 +23,7 @@
     "test:account-security": "node tests/integration/account-security.mjs",
     "test:world-setup": "node tests/integration/world-setup-atomicity.mjs",
     "test:settlement": "node tests/integration/settlement-recovery.mjs",
+    "test:progression": "node tests/integration/progression-lock.mjs",
     "test:recovery": "node scripts/restart-recovery.mjs",
     "rehearsal": "bash scripts/rehearsal.sh",
     "pb:serve": "cd pocketbase && ./pocketbase serve --http=127.0.0.1:8090",

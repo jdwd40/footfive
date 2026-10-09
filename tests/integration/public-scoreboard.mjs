@@ -235,13 +235,14 @@ async function main() {
   let lastGoalSeen = null;
   let minuteProgression = null;
 
-  // Keep the world advancing exactly like a real client does (auth /live polling).
+  // Keep the world advancing. GET /live is read-only now (issue #17): the
+  // designed-tick endpoint /api/footfive/health drives progression instead.
   let driving = false;
   let driveToken = null;
   const driver = setInterval(async () => {
     if (!driving || !driveToken) return;
     try {
-      await req("/api/footfive/live", { token: driveToken });
+      await req("/api/footfive/health", {});
     } catch {}
   }, 250);
 

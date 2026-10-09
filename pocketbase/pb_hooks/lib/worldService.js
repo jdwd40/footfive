@@ -10,7 +10,7 @@
  * re-reads its rows inside a write transaction (SQLite serialises writers), so two
  * concurrent ticks cannot double-advance a match, double-settle or double-create.
  */
-var teamsMod, tourneyMod, eng, balMod, mgmtMod, recMod, oddsMod, mkt, betMod;
+var teamsMod, tourneyMod, eng, balMod, mgmtMod, recMod, oddsMod, mkt, betMod, logger;
 try {
   teamsMod = require(__hooks + "/lib/teams.js");
   tourneyMod = require(__hooks + "/lib/tournament.js");
@@ -21,6 +21,7 @@ try {
   oddsMod = require(__hooks + "/lib/odds.js");
   mkt = require(__hooks + "/lib/markets.js");
   betMod = require(__hooks + "/lib/bettingService.js");
+  logger = require(__hooks + "/lib/logger.js");
 } catch (e) {
   teamsMod = require("./teams.js");
   tourneyMod = require("./tournament.js");
@@ -31,6 +32,7 @@ try {
   oddsMod = require("./odds.js");
   mkt = require("./markets.js");
   betMod = require("./bettingService.js");
+  logger = require("./logger.js");
 }
 
 var BALANCE = balMod.BALANCE;
@@ -86,12 +88,10 @@ function plain(v) {
   return JSON.parse(JSON.stringify(v));
 }
 
+// Structured logs go through lib/logger.js (scrubs sensitive keys); the event
+// names stay stable because ops dashboards and tests match on them (review D11).
 function log(event, fields) {
-  try {
-    var o = { ts: new Date().toISOString(), level: "info", event: event, app: "footfive" };
-    for (var k in fields || {}) o[k] = fields[k];
-    console.log("[footfive-json] " + JSON.stringify(o));
-  } catch (_) {}
+  logger.info(event, fields);
 }
 
 /** FOOTFIVE_TIME_SCALE (env) divides every duration — accelerated tests only. */
@@ -976,12 +976,72 @@ function repairMissingRound($app, tournamentId, now, T) {
 }
 
 /**
- * Bring the shared world up to `now`. Called by cron and (throttled) by reads.
+ * Bring the shared world up to `now`. Called by cron, the /health designed-tick
+ * endpoint, admin catch-up, recovery and bet placement.
+ *
+ * Single-flight: one worker holds the world progression lease at a time (review
+ * B3/O12). The lease is one atomic conditional UPDATE on the world row inside a
+ * transaction — SQLite serialises writers, so exactly one claimant transitions
+ * the row. processing_version doubles as the lease expiry (epoch ms) and the
+ * ownership token; a crashed holder's lease expires and the next tick reclaims
+ * it (stale-lease recovery), no separate sweep needed.
  */
+// A crashed holder (process killed mid-tick) orphans the lease until expiry, so
+// keep it short: a normal tick is milliseconds, and even if a slow tick is
+// reclaimed early the per-step transactions still prevent double work.
+var LEASE_MS = 30000;
+// ponytail: per-process jitter keeps same-millisecond claims from sharing a
+// token; a collision (p ≈ 1/1000 per same-ms pair) just lets two workers run
+// idempotent steps concurrently — per-step transactions still prevent doubles.
+var leaseNonce = Math.floor(Math.random() * 1000);
+
+function claimLease($app, worldId, now) {
+  var token = now + LEASE_MS + leaseNonce;
+  var claimed = false;
+  $app.runInTransaction(function (tx) {
+    tx.db()
+      .newQuery(
+        "UPDATE world SET processing_status = 'processing', processing_version = {:token} " +
+          "WHERE id = {:id} AND (processing_status IS NULL OR processing_status != 'processing' OR processing_version < {:now})",
+      )
+      .bind({ token: token, id: worldId, now: now })
+      .execute();
+    var w = tx.findRecordById("world", worldId);
+    claimed = w.get("processing_version") === token;
+  });
+  return claimed ? token : 0;
+}
+
+function releaseLease($app, worldId, token, status) {
+  try {
+    // Ownership fence: only the lease holder (matching token) changes the state,
+    // so a slow worker cannot clobber a reclaimer's fresh lease.
+    $app
+      .db()
+      .newQuery("UPDATE world SET processing_status = {:status} WHERE id = {:id} AND processing_version = {:token}")
+      .bind({ status: status, id: worldId, token: token })
+      .execute();
+  } catch (_) {}
+}
+
 function tick($app, now) {
   now = now || Date.now();
   var world = ensureWorld($app);
   if (world.get("progression_paused")) return { paused: true };
+  var token = claimLease($app, world.id, now);
+  if (!token) return { locked: true }; // another worker is progressing the world
+  var result, failed;
+  try {
+    result = tickLocked($app, world, now);
+  } catch (err) {
+    failed = err;
+  }
+  releaseLease($app, world.id, token, failed ? "error" : "idle");
+  if (failed) throw failed;
+  return result;
+}
+
+function tickLocked($app, world, now) {
   var T = timing(world);
   var actions = [];
   var t = activeTournament($app);
@@ -1079,7 +1139,7 @@ function drawHidden($app, round, now) {
   return (now || Date.now()) < drawVisibleAt(round, timing(ensureWorld($app)));
 }
 
-/** Throttled tick for read paths (one per second per process). */
+/** Throttled tick for the /health designed-tick endpoint (one per second per process). */
 function tickIfDue($app) {
   var now = Date.now();
   try {
@@ -1266,9 +1326,8 @@ function championView($app, t, teams) {
   };
 }
 
-/** Main screen state: champion → fixtures → live, all from server time. */
+/** Main screen state: champion → fixtures → live, all from server time. Read-only (review B3). */
 function liveView($app) {
-  tickIfDue($app);
   var now = Date.now();
   var world = ensureWorld($app);
   var T = timing(world);
@@ -1337,9 +1396,8 @@ function lineupPublic(players) {
   });
 }
 
-/** Individual match view. Events after `sinceSeq`; first load returns the latest 60. */
+/** Individual match view. Events after `sinceSeq`; first load returns the latest 60. Read-only (review B3). */
 function matchView($app, fixtureId, sinceSeq, userId) {
-  tickIfDue($app);
   var now = Date.now();
   var world = ensureWorld($app);
   var T = timing(world);
@@ -1652,13 +1710,18 @@ function ensureUserCredits($app, userId) {
   return user.get("credits") || 0;
 }
 
-/** Personal context: wallet, team, next fixture. */
+/** Personal context: wallet, team, next fixture. Read-only (review B3). */
 function worldSnapshot($app, userId) {
-  tickIfDue($app);
   var world = ensureWorld($app);
   var T = timing(world);
   var managed = getManagerTeam($app, userId);
-  var credits = userId ? ensureUserCredits($app, userId) : 0;
+  // Credits are set at signup/admin-creation; read them, never grant on a GET.
+  var credits = 0;
+  if (userId) {
+    var u = $app.findRecordById("users", userId);
+    var c = u.get("credits");
+    credits = c == null || c === "" ? 0 : c;
+  }
   var t = activeTournament($app);
   var round = t ? currentRound($app, t.id) : null;
   if (drawHidden($app, round)) {

@@ -281,8 +281,9 @@ onRecordUpdateRequest((e) => {
   throw new ForbiddenError("Use protected FootFive routes");
 }, "proball_teams");
 
-// The world advances on reads (throttled) and on this one-minute safety net, so the
-// championship keeps running with nobody watching.
+// The world advances on this one-minute cron, the throttled /health designed-tick
+// endpoint, admin catch-up and bet placement — never on the read views (issue #17).
+// tick() takes the single-flight world lease, so overlapping drivers are safe.
 cronAdd("footfive_catchup", "*/1 * * * *", () => {
   const log = require(`${__hooks}/lib/logger.js`);
   const health = require(`${__hooks}/lib/healthService.js`);

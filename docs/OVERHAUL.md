@@ -14,7 +14,7 @@
 
 ## Rules worth knowing
 
-- One tick (`worldService.tick`) advances the whole championship to "now". It is idempotent and runs on reads (throttled) plus a one-minute cron.
+- One tick (`worldService.tick`) advances the whole championship to "now". It is idempotent and runs from the one-minute cron, the throttled `/api/footfive/health` designed-tick endpoint, admin catch-up and bet placement — never from the world/scoreboard/match/betting GET views, which are read-only. A single-flight lease on the world row (`processing_status`/`processing_version` as expiry+token) serialises concurrent ticks; an expired lease is reclaimed by the next tick.
 - Shootout goals live only in `st.so`; they never touch the football score, goal stats or goal markets.
 - Markets close while `st.d` (danger) is set: attacks, penalties, goal celebrations and the whole shootout.
 - The next championship is drawn when the final ends but stays hidden (no fixtures, no markets) until the fixture window opens.

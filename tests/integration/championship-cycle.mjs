@@ -53,6 +53,9 @@ let prevMode = null;
 const deadline = Date.now() + CHAMPS * 6 * 60 * 1000;
 
 while (Date.now() < deadline) {
+  // GETs no longer advance the world (issue #17): drive progression through the
+  // designed-tick endpoint instead of relying on the poll itself to tick.
+  await req("/api/footfive/health");
   const v = await live();
   const mode = v.mode + ":" + (v.round ? v.round.key + "/" + v.round.status : "-");
   if (mode !== prevMode) {

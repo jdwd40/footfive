@@ -12,10 +12,13 @@ const DATA =
     ? path.join(process.env.E2E_PB_DATA, "data.db")
     : path.join(ROOT, "pocketbase", "pb_data_test", "data.db");
 
-async function json(p, body) {
+async function json(p, body, token) {
   const res = await fetch(`${PB}${p}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { ["Authorization"]: token } : {}),
+    },
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -68,18 +71,23 @@ print('ok', c.execute("select email,role,disabled from users").fetchall())
   const r = spawnSync("python3", ["-c", py], { encoding: "utf8" });
   console.log("sql seed", r.stdout || r.stderr);
 
-  const auth = await json("/api/collections/users/auth-with-password", {
-    identity: "e2e_user_a@test.local",
-    password: "testpass99",
+  // Boot the world deterministically: /api/footfive/health is the designed-tick
+  // endpoint, and catch-up is admin-only (issue #17) — the old public
+  // /api/footfive/catch-up route is gone.
+  for (let i = 0; i < 3; i++) await fetch(`${PB}/api/footfive/health`);
+  const admin = await json("/api/collections/users/auth-with-password", {
+    identity: "e2e_admin@test.local",
+    password: "adminpass99",
   });
-  if (auth.status === 200) {
-    await fetch(`${PB}/api/footfive/world`, {
-      headers: { Authorization: auth.data.token },
-    });
-    await fetch(`${PB}/api/footfive/catch-up`, {
-      method: "POST",
-      headers: { Authorization: auth.data.token },
-    });
+  if (admin.status === 200) {
+    const cu = await json(
+      "/api/footfive/admin/world/catch-up",
+      {},
+      admin.data.token,
+    );
+    console.log("admin catch-up", cu.status);
+  } else {
+    console.warn("admin login failed", admin.status);
   }
   console.log("e2e seed complete");
 }
