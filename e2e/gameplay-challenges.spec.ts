@@ -93,6 +93,7 @@ for (const scenario of cases) {
           const coords = player.getAttribute("transform")!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!;
           const kit = player.querySelector('[data-kit]')!;
           return { side: kit.getAttribute("stroke") === "#ff00cc" ? "away" : "home",
+            no: Number(player.querySelector("text")!.textContent),
             keeper: kit.getAttribute("fill") === "#c6ff00", ring: !!player.querySelector('[data-ring]'),
             distance: Math.hypot(Number(coords[1]) - b[0], Number(coords[2]) - b[1]) };
         });
@@ -103,9 +104,15 @@ for (const scenario of cases) {
       if (["home", "away"].every((side) => drawing.players.some((p) => p.side === side && !p.keeper && p.distance <= 4.5))) contested = true;
       if (shown) {
         await expect(badge).toHaveText("WON IT");
-        firstBadgeMs ??= elapsed;
-        expect(drawing.players.some((p) => p.side === scenario.side && !p.keeper && p.ring && p.distance <= 1.6), "WON IT requires the winning side in drawn contact with the ball").toBe(true);
-        if (firstBadgeMs === elapsed) await page.screenshot({ path: testInfo.outputPath("won-it.png") });
+        if (firstBadgeMs === null) {
+          firstBadgeMs = elapsed;
+          expect(drawing.players.some((p) => p.side === scenario.side && p.no === 4 && !p.keeper && p.ring && p.distance <= 1.6), "first WON IT requires named winner P3 (shirt 4) in drawn contact with the ball").toBe(true);
+          await page.screenshot({ path: testInfo.outputPath("won-it.png") });
+        } else {
+          // The brief cue latches while the winner passes onward: free flight has
+          // no carrier ring, but an opposing carrier must never accompany WON IT.
+          expect(drawing.players.some((p) => p.side !== scenario.side && p.ring), "latched WON IT must not accompany opposing possession").toBe(false);
+        }
       }
       if (elapsed === 500) await page.screenshot({ path: testInfo.outputPath("contest.png") });
       await hidden();
