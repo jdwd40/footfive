@@ -181,6 +181,14 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           </span>
         </div>
       ) : null}
+      {frame?.won && !banner ? (
+        // WON IT: a challenge cue, not a result — in the winning side's colour, under any result badge still showing.
+        <div className={`pointer-events-none absolute inset-x-0 ${flash ? "top-[4.25rem]" : "top-9"} flex justify-center`}>
+          <span className="event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg" style={{ background: frame.won === "home" ? hc : ac, color: textOn(frame.won === "home" ? hc : ac) }} data-testid="won-badge">
+            WON IT
+          </span>
+        </div>
+      ) : null}
       {hud ? (
         <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-2 rounded-md bg-black/60 px-2 py-1 font-display text-[11px] font-bold tracking-wider text-white shadow-lg sm:text-xs" data-testid="pitch-hud">
           {hud}

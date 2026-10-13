@@ -6,6 +6,7 @@ No blocker in the latest bounded pitch/ends QA; final review and human preview f
 
 ## Fixed — 2026-10-13 gameplay
 
+- #72: tackles, interceptions and turnover passes show a possession contest, the winning side keeps the ball, and a timed WON IT badge marks the win. Same-side keeper distributions retain their existing behaviour.
 - #68: dwell no longer makes a long solo run ahead of the published event path. Forward advance is bounded and long gaps retain light circulation; the next scene still starts at the drawn ball. Engine outcomes and polling are unchanged.
 
 ## Fixed — 2026-10-05 pitch/ends follow-up (independent QA PASS; not shipped)
