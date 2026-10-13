@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
+import { calmCam, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
 import { countdown, eventTime, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -218,7 +218,7 @@ export default function MatchPage() {
         const sentOff = dismissed(same && a.revealed ? scene.seq : scene.seq - 1);
         const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined, prevScene, elapsed);
         // A result event that landed late (scene already over) has the drawn ball still travelling: settle puts it on the impact this tick.
-        const frame = settle(scene, p, sysReduced ? target : smooth(jumped ? null : a.frame, target, dt), same && a.reached);
+        const frame = settle(scene, p, sysReduced ? calmCam(target) : smooth(jumped ? null : a.frame, target, dt), same && a.reached);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
         const gate = reveal(scene, p, frame.ball, same && a.reached);
         // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
