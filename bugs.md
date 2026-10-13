@@ -1,5 +1,7 @@
 # Bugs
 
+- #73: occasional cosmetic missed/blocked attempts add spectacle without altering official stats, market state or match outcomes; separate-stream and original-engine determinism guards cover 200 seeds.
+
 ## Open
 
 No blocker in the latest bounded pitch/ends QA; final review and human preview feel remain pending.

@@ -756,9 +756,21 @@ function publishedEventPage($app, fixtureId, throughMs, sinceSeq) {
   };
 }
 
+/**
+ * Latest published REAL event. Cosmetic attempts (`cos: 1`, issue #73) are match-history presentation only: the fixture card,
+ * prices and their clock anchor, quote checks ("match moved on") and coaching all stay on real play. A cosmetic run is at
+ * most three rows, so the first page almost always holds a real one.
+ */
+var REAL_LOOKBACK = 4;
 function lastPublished($app, fixtureId, now) {
-  var r = one($app, "match_events", "fixture = {:f} && at <= {:n}", "-seq", { f: fixtureId, n: now });
-  return r ? readJson(r, "data", null) : null;
+  for (var offset = 0; ; offset += REAL_LOOKBACK) {
+    var rows = $app.findRecordsByFilter("match_events", "fixture = {:f} && at <= {:n}", "-seq", REAL_LOOKBACK, offset, { f: fixtureId, n: now }) || [];
+    for (var i = 0; i < rows.length; i++) {
+      var d = readJson(rows[i], "data", null);
+      if (d && !d.cos) return d;
+    }
+    if (rows.length < REAL_LOOKBACK) return null;
+  }
 }
 
 /** Legacy-shaped event list for records/summary helpers. */

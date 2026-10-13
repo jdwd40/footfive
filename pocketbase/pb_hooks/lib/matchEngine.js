@@ -402,6 +402,7 @@ Ctx.prototype.clk = function (f) {
 
 function playMinute(st, out) {
   var ctx = new Ctx(st);
+  var first = out.length;
   ["home", "away"].forEach(function (side) {
     var team = st.teams[side];
     if (team.ai) applyStance(st, out, ctx.t0, ctx.s0, side, aiStance(st, side), "ai");
@@ -423,6 +424,7 @@ function playMinute(st, out) {
   if (rnd(st) < c.pSeq) attack(st, out, ctx, side, c);
   else midfield(st, out, ctx, side);
 
+  cosmetic(st, out, ctx, first);
   st.nextAt = ctx.t0 + ctx.dur + ctx.pause;
   if (PERIOD_END[st.phase] === ctx.m) periodEnd(st, out);
 }
@@ -734,6 +736,137 @@ function bounce(st, out, ctx, f, side, chain) {
     ball: st.ball,
     text: pick(st, ["Off the boards! " + p.name + " collects for " + abbr(st, side), "The ball rattles the " + wall + " board and " + p.name + " brings it back in"]),
     clk: ctx.clk(f),
+  });
+}
+
+// ---------------------------------------------------------------- cosmetic attempts
+
+/**
+ * Spectacle only (more shots, not more goals): now and then, in a minute's spare time after its last real event, the side
+ * in possession tries its luck from distance — blocked or wide — and the ball comes back off the boards to that side, on
+ * the spot where real play left it. Rows carry `cos: 1`, no chain, no major/tick, and the last real snapshot with their own
+ * clock. They draw only from their own stream, keyed by seed and minute (stable across reloads, nothing persisted), never
+ * rnd(st); they read the match but change nothing except the transport counters every row needs (seq, lastAt). They end
+ * before nextAt and never touch ctx.pause, so no real event moves; stats, score, danger, markets and outcomes are untouched.
+ */
+var COS = {
+  rate: 0.3, // chance per eligible minute: about 4–5 extra attempts a match at the live pace (real shots: about 16)
+  minAlong: 45, // the side in possession has the ball at least this far up the pitch (its attacking direction)
+  missShare: 0.6, // otherwise blocked
+  // Spacing in fractions of a minute, as a real move: after the last real event, to the result, back off the boards, and
+  // spare time left before the next real event. A miss also waits resultHoldMs before the ball comes back, as a real one.
+  lead: 0.14,
+  result: 0.08,
+  back: 0.06,
+  tail: 0.12,
+  minRoomMs: 2500, // never squeezed in: fast (test) paces have no room
+};
+var COS_AFTER = { pass: 1, tackle: 1, interception: 1, bounce: 1 }; // open play; never after a result, card, goal or restart
+
+function cosPick(r, list) {
+  return list[Math.floor(r() * list.length) % list.length];
+}
+
+function cosWeighted(r, list, weightFn) {
+  var total = 0;
+  for (var i = 0; i < list.length; i++) total += weightFn(list[i]);
+  var x = r() * total;
+  for (var j = 0; j < list.length; j++) {
+    x -= weightFn(list[j]);
+    if (x <= 0) return list[j];
+  }
+  return list[list.length - 1];
+}
+
+function cosmetic(st, out, ctx, first) {
+  var last = out[out.length - 1];
+  var side = st.bs;
+  if (out.length <= first || !COS_AFTER[last.t] || !side || last.side !== side || st.danger) return;
+  var home = st.ball;
+  var along = px(side, home[0]);
+  if (along < COS.minAlong) return;
+  var T = st.timing;
+  var dur = ctx.dur;
+  var room = ctx.t0 + ctx.dur + ctx.pause - st.lastAt; // spare time up to nextAt
+  var need = (COS.lead + COS.result + COS.back + COS.tail) * dur;
+  var r = mulberry32(hashSeed(st.seed + ":cos:" + st.minute));
+  if (r() >= COS.rate) return;
+  var miss = r() < COS.missShare && room >= Math.max(COS.minRoomMs, need + T.resultHoldMs);
+  if (!miss && room < Math.max(COS.minRoomMs, need)) return;
+
+  var def = OTHER[side];
+  var shooter = cosWeighted(r, outfield(st, side), function (p) {
+    return (p.attack || 50) + 10;
+  });
+  var x = clamp(along + 8 + r() * 12, M.longShotMinX, M.longShotMaxX);
+  var y = clamp(home[1] + (r() - 0.5) * 16, 14, 50);
+  var shotFrom = pos(side, x, y);
+  var t = st.lastAt + COS.lead * dur;
+  var clk = function (at) {
+    return ctx.clk((at - ctx.t0 - ctx.pause) / dur);
+  };
+  emit(st, out, t, "shot", {
+    side: side,
+    p: shooter.name,
+    from: null,
+    ball: shotFrom,
+    header: 0,
+    long: 1,
+    cos: 1,
+    text: cosPick(r, [shooter.name + " tries his luck from distance!", shooter.name + " shoots from range!", shooter.name + " lets one fly from a long way out!"]),
+    clk: clk(t),
+  });
+
+  t += COS.result * dur;
+  var res;
+  if (miss) {
+    var over = r() < 0.4;
+    var low = r() < 0.5;
+    var target = [px(side, 100), over ? 29 + r() * 6 : low ? 22 + r() * 4 : 38 + r() * 4];
+    res = emit(st, out, t, "miss", {
+      side: side,
+      p: shooter.name,
+      from: shotFrom,
+      high: over ? 1 : 0,
+      target: target,
+      ball: target,
+      cos: 1,
+      text: over
+        ? cosPick(r, [shooter.name + " fires over the bar", shooter.name + " can't keep it down"])
+        : cosPick(r, [shooter.name + " drags it wide", shooter.name + " pulls it wide of the post"]),
+      clk: clk(t),
+    });
+    t += T.resultHoldMs; // the WIDE/OVER badge is shown before play moves on — from spare time, never ctx.pause
+  } else {
+    var blocker = cosWeighted(r, outfield(st, def), function (p) {
+      return (p.defence || 50) + 10;
+    });
+    res = emit(st, out, t, "block", {
+      side: def,
+      p: blocker.name,
+      p2: shooter.name,
+      from: shotFrom,
+      ball: pos(side, Math.min(x + 5, 93), shotFrom[1]),
+      cos: 1,
+      text: blocker.name + " blocks " + shooter.name + "'s shot",
+      clk: clk(t),
+    });
+  }
+
+  // Back off the boards to the side that had it, on the spot real play left it: the next real event starts there.
+  t += COS.back * dur;
+  var rb = res.ball;
+  var wall = r() < 0.5 ? "side" : "end";
+  var hit = wall === "side" ? [clamp(rb[0] + Math.round((r() - 0.5) * 20), 2, 98), r() < 0.5 ? 0 : 64] : [px(side, 100), clamp(rb[1] + Math.round((r() - 0.5) * 24), 4, 60)];
+  var p = cosPick(r, outfield(st, side));
+  emit(st, out, t, "bounce", {
+    side: side,
+    p: p.name,
+    from: hit,
+    ball: [home[0], home[1]],
+    cos: 1,
+    text: cosPick(r, ["Off the boards! " + p.name + " collects for " + abbr(st, side), "The ball rattles the " + wall + " board and " + p.name + " brings it back in"]),
+    clk: clk(t),
   });
 }
 
