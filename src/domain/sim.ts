@@ -22,7 +22,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
  * `start − ball[0]`, the offset blending out keyframe by keyframe so the destination — which the next scene depends on — is
  * untouched and the ball never doubles back via the authored route. Points already off the pitch (a net) stay put.
- * A challenge's winning actor follows that same offset through contact, so he can collect the rerouted ball.
+ * Challenge winners and cross participants follow the same offset through contact.
  * The scene object itself stays shared and unmutated.
  */
 function fromStart(scene: Scene, start: Pt): Scene {
@@ -41,7 +41,8 @@ function fromStart(scene: Scene, start: Pt): Scene {
   const onBall = near && Math.hypot(near.path[0][0] - x0, near.path[0][1] - y0) < 3 ? near : null;
   return { ...scene, ball: blend(scene.ball), actors: scene.actors.map((a) => {
     const winner = scene.won !== undefined && a.side === scene.side && (a.id === "win" || a.id === "p");
-    return a === onBall || winner ? { ...a, path: blend(a.path) } : a;
+    const rides = a.rides && a.side === scene.side;
+    return a === onBall || winner || rides ? { ...a, path: blend(a.path) } : a;
   }) };
 }
 const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
@@ -298,7 +299,10 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   const players = target.players.map((p) => {
     const q = was.get(p.side + ":" + p.no);
     if (!q) return p;
-    const [x, y] = chase(q.x, q.y, p.x, p.y, kp, MAX_SPEED);
+    // Crosses compress a wide delivery and box arrival into the match pace.
+    // Only its involved attackers sprint; everyone else keeps the ordinary chase.
+    const crossSprint = target.type === "cross" && p.hot && p.side === target.side;
+    const [x, y] = chase(q.x, q.y, p.x, p.y, crossSprint ? k(70) : kp, crossSprint ? 120 : MAX_SPEED);
     return { ...p, x, y };
   });
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];

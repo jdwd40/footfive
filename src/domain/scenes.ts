@@ -13,6 +13,7 @@ export type Actor = {
   side: Side | "ref";
   label?: string; // shown name/number for the relevant player
   keeper?: boolean;
+  rides?: boolean; // intermediate ball contact: reroute this actor with the ball when the scene starts off its authored path
   path: Pt[]; // keyframes, evenly spaced over the scene
 };
 export type Scene = {
@@ -265,9 +266,9 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ball: [passer, recv, recv, box, box],
           ballHeight: [0, 0, 0, 0, 0, 0.9, 0.6, 0.6, 0.6], // along the ground to the winger, then the cross: highest in flight, head height at the box
           actors: [
-            { id: "p", side: atk, label: short(e.p), path: feederRuns ? [fwd(passer, -1), lerp(passer, box, 0.35), lerp(passer, box, 0.7), box, box] : [fwd(passer, -1), fwd(passer, 1), fwd(passer, 3), fwd(passer, 4), fwd(passer, 4)] },
-            { id: "r", side: atk, label: short(e.p2), path: [fwd(recv, -4), recv, recv, fwd(recv, 1), fwd(recv, 1)] },
-            ...(feederRuns ? [] : [{ id: "h", side: atk, label: hLabel, path: [hStart, hStart, lerp(hStart, box, 0.4), box, box] } as Actor]),
+            { id: "p", side: atk, label: short(e.p), rides: true, path: feederRuns ? [fwd(passer, -1), lerp(passer, box, 0.35), lerp(passer, box, 0.7), box, box] : [fwd(passer, -1), fwd(passer, 1), fwd(passer, 3), fwd(passer, 4), fwd(passer, 4)] },
+            { id: "r", side: atk, label: short(e.p2), rides: true, path: [fwd(recv, -4), recv, recv, fwd(recv, 1), fwd(recv, 1)] },
+            ...(feederRuns ? [] : [{ id: "h", side: atk, label: hLabel, rides: true, path: [hStart, hStart, lerp(hStart, box, 0.4), box, box] } as Actor]),
             { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.5), lerp(markerStart, recv, 0.65), lerp(markerStart, recv, 0.65)] },
           ],
         };
