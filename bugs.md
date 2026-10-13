@@ -4,6 +4,10 @@
 
 No blocker in the latest bounded pitch/ends QA; final review and human preview feel remain pending.
 
+## Fixed — 2026-10-13 gameplay
+
+- #68: dwell no longer makes a long solo run ahead of the published event path. Forward advance is bounded and long gaps retain light circulation; the next scene still starts at the drawn ball. Engine outcomes and polling are unchanged.
+
 ## Fixed — 2026-10-05 pitch/ends follow-up (independent QA PASS; not shipped)
 
 - Actual ticker/shootout chrome clipped the pitch/commentary; completed winner/auto-return added a further clipping case — compacted that chrome without shrinking the enlarged pitch. Normal, setup and completed scenes pass at 320x568, 390x844, 768x1024, 1280x720 and 1440x900 for the tested actual-engine inputs, not every arbitrary text/browser combination.

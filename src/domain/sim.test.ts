@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_MAX_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
+import { DWELL_ADVANCE, DWELL_LINE, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -20,13 +20,13 @@ function lineup(players: EnginePlayer[]): LineupPlayer[] {
   return players.map((p, i) => ({ name: p.name, no: i + 1, role: p.role, starter: p.is_starter }));
 }
 
-/** Ten full simulated matches with their frozen lineups. */
-function matches(n = 10) {
+/** Ten full simulated matches with their frozen lineups (`minuteMs`: the engine's pace, for real gaps between events). */
+function matches(n = 10, minuteMs = 1000) {
   const out: Array<{ events: MatchEvent[]; lineups: { home: LineupPlayer[]; away: LineupPlayer[] } }> = [];
   for (let i = 0; i < n; i++) {
     const home = team(i % 16);
     const away = team((i * 7 + 3) % 16);
-    const st = eng.createMatch({ fixtureId: "f" + i, seed: 1000 + i, kickoffAt: 0, home, away, timing: eng.buildTiming(1000, 1) });
+    const st = eng.createMatch({ fixtureId: "f" + i, seed: 1000 + i, kickoffAt: 0, home, away, timing: eng.buildTiming(minuteMs, 1) });
     out.push({ events: eng.advanceTo(st, 1e12), lineups: { home: lineup(home.players), away: lineup(away.players) } });
   }
   return out;
@@ -174,14 +174,16 @@ describe("frameAt", () => {
 
   it("dwells after a routine scene: two teammates jog on passing the ball between them, an opponent closes down; result scenes hold", () => {
     const m = ms[0];
-    const pass = m.events.find((e) => e.t === "pass")!;
+    // A midfield pass: the whole bounded advance fits before the line.
+    const pass = m.events.find((e) => e.t === "pass" && e.ball && (e.side === "home" ? e.ball[0] : 100 - e.ball[0]) <= DWELL_LINE - DWELL_ADVANCE)!;
     const s = sceneFor(pass, [50, 32], 15000)!;
     const end = frameAt(s, 1, m.lineups);
+    const fwd = (f: Frame) => (pass.side === "home" ? 1 : -1) * (f.ball[0] - end.ball[0]);
+    // A jog on from the scene end (4.5 u/s as it starts) that eases off: forward only, and never past the bounded advance.
+    expect(fwd(frameAt(s, 1 + 1000 / s.ms, m.lineups))).toBeGreaterThan(2);
     const later = frameAt(s, 1 + 2000 / s.ms, m.lineups);
-    const d = Math.hypot(later.ball[0] - end.ball[0], later.ball[1] - end.ball[1]);
-    expect(d).toBeGreaterThan(6); // 4.5 u/s: a jog, quicker than the old 3
-    expect(d).toBeLessThan(12);
-    expect(Math.sign(later.ball[0] - end.ball[0])).toBe(pass.side === "home" ? 1 : -1);
+    expect(fwd(later)).toBeGreaterThan(3.5);
+    expect(fwd(later)).toBeLessThan(DWELL_ADVANCE);
     // Carrier on the ball, a teammate within reach in the other lane; ball never leaves the pitch.
     const carrier = later.players.filter((p) => p.side === pass.side && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 1.5);
     expect(carrier).toHaveLength(1);
@@ -207,45 +209,108 @@ describe("frameAt", () => {
       const b = frameAt(s, 1 + (t + 50) / s.ms, m.lineups);
       expect(Math.hypot(a.ball[0] - b.ball[0], a.ball[1] - b.ball[1])).toBeLessThan(2); // the lay-off travels, it doesn't jump
     }
-    // A long gap (stale server): the dwell runs ~6 s and then holds — no end-to-end runs back and forth with no passing.
-    const xs: number[] = [];
+    // A long gap (stale server): the advance is spent but the lay-offs go on, past the old 6 s freeze, without drifting any further.
+    const owners = new Set<number>();
     for (let sec = 2; sec <= 60; sec += 2) {
       const f = frameAt(s, 1 + (sec * 1000 + 200) / s.ms, m.lineups); // +200: never inside a lay-off's 450 ms
-      xs.push(f.ball[0]);
-      expect(f.ball[0]).toBeGreaterThanOrEqual(Math.min(12, end.ball[0]));
-      expect(f.ball[0]).toBeLessThanOrEqual(Math.max(88, end.ball[0]));
-      expect(f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5)).toHaveLength(1);
+      expect(fwd(f)).toBeGreaterThan(-1);
+      expect(fwd(f)).toBeLessThanOrEqual(DWELL_ADVANCE + 0.6);
+      const on = f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5);
+      expect(on).toHaveLength(1);
+      if (sec > 6) owners.add(on[0].no);
     }
-    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan((4.5 * DWELL_MAX_MS) / 1000 + 2);
+    expect(owners.size).toBe(2);
     // A goal keeps its final frame (plus breathing only).
     const goal = m.events.find((e) => e.t === "goal")!;
     const g = sceneFor(goal, [80, 30], 15000)!;
     expect(frameAt(g, 1 + 2000 / g.ms, m.lineups).ball).toEqual(frameAt(g, 1, m.lineups).ball);
   });
 
-  it("caps the dwell: deep into a stale gap the carrier holds near the scene end instead of running back and forth", () => {
+  it("bounds the dwell for both sides: however late the next event, the ball is carried on at most the advance, never past x70, and keeps circulating", () => {
+    const sides = new Set<string>();
     for (const m of ms) {
-      for (const pass of m.events.filter((e) => e.t === "pass" || e.t === "dribble" || e.t === "build_up").slice(0, 6)) {
-        const s = sceneFor(pass, [50, 32], 15000);
-        if (!s || s.flash) continue;
+      for (const e of m.events.filter((x) => x.t === "pass" || x.t === "dribble" || x.t === "build_up" || x.t === "tackle").slice(0, 8)) {
+        const s = sceneFor(e, [50, 32], 15000);
+        if (!s || s.flash || !s.side) continue;
+        sides.add(s.side);
+        const att = (x: number) => (s.side === "home" ? x : 100 - x);
         const end = frameAt(s, 1, m.lineups).ball;
-        const xs = [];
-        for (let ms2 = 0; ms2 <= 60000; ms2 += 250) xs.push(frameAt(s, 1 + ms2 / s.ms, m.lineups).ball[0]);
-        // Direction reversals over a minute of dwell: at most one turn (near a turning line), never a shuttle.
-        let turns = 0;
-        let dir = 0;
-        for (let i = 1; i < xs.length; i++) {
-          const d = Math.sign(Math.round((xs[i] - xs[i - 1]) * 100));
-          if (d && dir && d !== dir && Math.abs(xs[i] - xs[i - 1]) > 0.5) turns++;
-          if (d) dir = d;
+        const line = Math.max(DWELL_LINE, att(end[0])) + 0.6; // a lay-off's receiver is 0.6 ahead of the carrier
+        let prev: Pt | null = null;
+        let still = 0;
+        for (let t = 0; t <= 60000; t += 100) {
+          const b = frameAt(s, 1 + t / s.ms, m.lineups).ball;
+          const fwd = att(b[0]) - att(end[0]);
+          expect(fwd, `${e.seq} @${t}`).toBeGreaterThanOrEqual(-0.6 - 1e-3); // never carried back (1e-3: sample() stops a hair short of the last keyframe)
+          expect(fwd, `${e.seq} @${t}`).toBeLessThanOrEqual(DWELL_ADVANCE + 0.6 + 1e-3); // never accumulates
+          expect(att(b[0]), `${e.seq} @${t}`).toBeLessThanOrEqual(line + 1e-3); // never on into the box
+          expect(Math.abs(b[1] - end[1])).toBeLessThanOrEqual(6 + 1.2 + 1e-3); // the other lane plus the weave
+          still = prev && Math.hypot(b[0] - prev[0], b[1] - prev[1]) < 1e-6 ? still + 100 : 0;
+          expect(still, `${e.seq} @${t}: frozen`).toBeLessThan(1000); // light circulation, not a freeze
+          prev = b;
         }
-        expect(turns).toBeLessThanOrEqual(1);
-        // From 20 s on, frozen and within the capped run of the scene end.
-        const deep = frameAt(s, 1 + 20000 / s.ms, m.lineups);
-        expect(frameAt(s, 1 + 45000 / s.ms, m.lineups).ball).toEqual(deep.ball);
-        expect(Math.abs(deep.ball[0] - end[0])).toBeLessThanOrEqual((4.5 * DWELL_MAX_MS) / 1000 + 2);
       }
     }
+    expect([...sides].sort()).toEqual(["away", "home"]);
+  });
+
+  it("a ball already past the line (a through ball into the final third) is laid off where it is: carried neither on into the box nor back", () => {
+    const m = ms[0];
+    for (const side of ["home", "away"] as const) {
+      const x = side === "home" ? 80 : 20;
+      const s: Scene = { key: `deep-${side}`, seq: 9100, type: "through_ball", side, ms: 1500, ball: [[100 - x, 30], [50, 30], [x, 30]], actors: [], caption: "" };
+      const ys: number[] = [];
+      for (let t = 0; t <= 30000; t += 100) {
+        const b = frameAt(s, 1 + t / s.ms, m.lineups).ball;
+        expect(Math.abs(b[0] - x), `${side} @${t}`).toBeLessThanOrEqual(0.6 + 1e-3); // sample() stops a hair short of the last keyframe
+        ys.push(b[1]);
+      }
+      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(5); // still laid off across the lanes
+    }
+  });
+
+  it("hands over to the next event from exactly where the dwell left the ball, with only the bounded advance to give back — for real and stale gaps", () => {
+    const LIMIT = Math.hypot(DWELL_ADVANCE + 0.6, 6 + 1.2);
+    const ROUTINE = new Set(["pass", "build_up", "dribble", "through_ball", "cross", "tackle", "interception"]);
+    const sides = new Set<string>();
+    let checked = 0;
+    let longGaps = 0;
+    for (const m of matches(4, 15000)) {
+      let prev: Pt = [50, 32];
+      const scenes = m.events.map((e) => {
+        const s = sceneFor(e, prev, 15000) ?? idle(e, prev);
+        prev = s.ball[s.ball.length - 1];
+        return s;
+      });
+      for (let k = 0; k + 1 < scenes.length; k++) {
+        const s = scenes[k];
+        const next = scenes[k + 1];
+        if (!s.ms || s.flash || !s.side || !ROUTINE.has(s.type)) continue;
+        for (const late of [0, 4000, 20000]) {
+          const gap = m.events[k + 1].at - m.events[k].at + late;
+          if (gap <= s.ms) continue;
+          if (gap - s.ms > 6000) longGaps++;
+          const left = frameAt(s, gap / s.ms, m.lineups).ball;
+          const first = frameAt(next, 0, m.lineups, undefined, 0, left).ball;
+          expect(Math.hypot(first[0] - left[0], first[1] - left[1])).toBeLessThan(1e-9); // no jump at the boundary itself
+          const from = next.ball[0]; // where the engine has the next event start: this scene's end
+          const back = (s.side === "home" ? 1 : -1) * (left[0] - from[0]);
+          expect(back, `${s.seq}+${late}`).toBeLessThanOrEqual(DWELL_ADVANCE + 0.6 + 1e-3); // 1e-3: sample() stops a hair short of a scene's last keyframe
+          expect(Math.hypot(left[0] - from[0], left[1] - from[1]), `${s.seq}+${late}`).toBeLessThanOrEqual(LIMIT + 1e-3);
+          // A routine next scene keeps its authored destination, however the dwell left the ball (idle and break scenes hold or walk from the drawn ball by design).
+          if (ROUTINE.has(next.type)) {
+            const a = frameAt(next, 1, m.lineups, undefined, 0, left).ball;
+            const b = frameAt(next, 1, m.lineups).ball;
+            expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(1e-3);
+          }
+          sides.add(s.side);
+          checked++;
+        }
+      }
+    }
+    expect([...sides].sort()).toEqual(["away", "home"]);
+    expect(checked).toBeGreaterThan(500);
+    expect(longGaps).toBeGreaterThan(50); // past the old 6 s cap
   });
 
   it("the next scene starts from the dwell endpoint, not its authored first keyframe", () => {
