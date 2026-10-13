@@ -273,6 +273,24 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ],
         };
       }
+      if (e.t === "pass" && toward(atk, recv[0] - passer[0]) < -5) {
+        // A backward midfield pass is built on, not a retreat: it is laid off to a teammate a few yards behind the engine's spot, who
+        // takes a touch and releases it forward into the named receiver there. Same endpoints and labels; the extra man is unlabelled.
+        const lat = recv[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch
+        const at = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(atk, along), p[1] + lat * across]);
+        const lay = at(recv, -5, 4);
+        return {
+          ...base,
+          ms: d(2000),
+          ball: [passer, lay, lay, recv],
+          actors: [
+            { id: "p", side: atk, label: short(e.p), path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
+            { id: "l", side: atk, rides: true, path: [at(lay, -2, 0), lay, lay, at(lay, 2, 0)] },
+            { id: "r", side: atk, label: short(e.p2), path: [at(recv, -3, -3), at(recv, -3, -3), at(recv, -1.5, -1.5), recv] },
+            { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
+          ],
+        };
+      }
       const lift = [0, 0, 0];
       return {
         ...base,

@@ -22,7 +22,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
  * `start − ball[0]`, the offset blending out keyframe by keyframe so the destination — which the next scene depends on — is
  * untouched and the ball never doubles back via the authored route. Points already off the pitch (a net) stay put.
- * Challenge winners and cross participants follow the same offset through contact.
+ * Challenge winners and intermediate ball participants follow the same offset through contact.
  * The scene object itself stays shared and unmutated.
  */
 function fromStart(scene: Scene, start: Pt): Scene {
@@ -91,6 +91,7 @@ function carrierActor(scene: Scene, t: number): string | null {
       const lost = scene.actors.find(a => a.id === "lost"); // turnover contest: the old side's holder (a keeper only plays it out), then the winner
       const w = scene.won ?? 1;
       if (lost) return t >= 0.97 ? "r" : t >= w && t <= w + 0.22 ? "p" : t <= (lost.keeper ? 0.04 : w - 0.04) ? "lost" : null;
+      if (scene.actors.some(a => a.id === "l")) return t <= 0.08 ? "p" : t >= 1 / 3 && t <= 0.64 ? "l" : t >= 0.97 ? "r" : null; // lay-off, touch, forward release
       if (scene.type === "cross") return t <= 0.04 ? "p" : t >= 0.25 && t <= 0.5 ? "r" : t >= 0.75 ? (scene.actors.some(a => a.id === "h") ? "h" : "p") : null; // feeder, winger, the arriving runner
       return scene.type === "dribble" ? "p" : t <= 0.08 ? "p" : t >= 0.97 ? "r" : null;
     }
