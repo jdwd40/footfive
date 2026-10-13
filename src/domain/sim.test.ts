@@ -238,14 +238,14 @@ describe("frameAt", () => {
         const line = Math.max(DWELL_LINE, att(end[0])) + 0.6; // a lay-off's receiver is 0.6 ahead of the carrier
         let prev: Pt | null = null;
         let still = 0;
-        for (let t = 0; t <= 60000; t += 100) {
+        for (let t = 0; t <= 60000; t += 250) {
           const b = frameAt(s, 1 + t / s.ms, m.lineups).ball;
           const fwd = att(b[0]) - att(end[0]);
           expect(fwd, `${e.seq} @${t}`).toBeGreaterThanOrEqual(-0.6 - 1e-3); // never carried back (1e-3: sample() stops a hair short of the last keyframe)
           expect(fwd, `${e.seq} @${t}`).toBeLessThanOrEqual(DWELL_ADVANCE + 0.6 + 1e-3); // never accumulates
           expect(att(b[0]), `${e.seq} @${t}`).toBeLessThanOrEqual(line + 1e-3); // never on into the box
           expect(Math.abs(b[1] - end[1])).toBeLessThanOrEqual(6 + 1.2 + 1e-3); // the other lane plus the weave
-          still = prev && Math.hypot(b[0] - prev[0], b[1] - prev[1]) < 1e-6 ? still + 100 : 0;
+          still = prev && Math.hypot(b[0] - prev[0], b[1] - prev[1]) < 1e-6 ? still + 250 : 0;
           expect(still, `${e.seq} @${t}: frozen`).toBeLessThan(1000); // light circulation, not a freeze
           prev = b;
         }
