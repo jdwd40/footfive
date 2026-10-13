@@ -5,7 +5,7 @@ import { injectAuth } from "./helpers";
 // API-mocked actual MatchPage: rendered challenges, possession and result boundaries.
 const START = Date.UTC(2030, 0, 1);
 const team = (id: string): TeamPublic => ({ id, name: id, abbreviation: id.slice(0, 3).toUpperCase(), grade: "A",
-  primary_color: "#00e5ff", secondary_color: "#ff00cc", badge_key: "test" });
+  primary_color: id === "Away" ? "#ff00cc" : "#00e5ff", secondary_color: "#ff00cc", badge_key: "test" });
 const state: PubState = { sc: [0, 0], so: null, ph: "first_half", clk: { s: 60, run: 1 }, pos: 50,
   x: [Array(7).fill(0), Array(7).fill(0)], d: 0, win: null, by: null };
 const futureState: PubState = { ...state, sc: [1, 0] };
