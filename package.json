@@ -31,7 +31,8 @@
     "backup:local": "bash scripts/backup-local.sh",
     "deploy:check": "npm run test && npm run typecheck && npm run build",
     "perf:sample": "node scripts/perf-sample.mjs",
-    "pw:libs": "bash scripts/ensure-playwright-libs.sh"
+    "pw:libs": "bash scripts/ensure-playwright-libs.sh",
+    "test:live-latency": "node tests/integration/live-latency.mjs"
   },
   "dependencies": {
     "pocketbase": "^0.26.2",

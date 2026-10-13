@@ -74,6 +74,9 @@ const DWELL_SPEED = 4.5; // units per second (≈ a jog on a 40 m pitch)
 const DWELL_CYCLE = 3000; // ms between lay-offs
 const DWELL_PASS = 450; // ms the lay-off takes
 const DWELL_LANE = 6; // lateral gap between the two lanes
+/** Dwell only bridges the normal 1.6–3.3 s gap between events. If the next event is late (stale server, slow poll) the
+ * play holds still after this long instead of jogging end to end — a long dwell read as a carrier running back and forth with no passing. */
+export const DWELL_MAX_MS = 6000;
 
 /** Possession choreography, separate from hot (actor binding). Ground passes are free flight too.
  * These windows only nominate an actor; Pitch checks the smoothed ball is actually at that player.
@@ -111,8 +114,9 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   const actor = scene.actors.find(a => a.id === carrierActor(scene, t));
   const owner = actor && players.find(p => p.side === actor.side && (actor.keeper ? p.gk : actor.label ? short(p.name) === actor.label : p.side + ":" + p.no === bind[actor.id]));
   let carrier = owner ? owner.side + ":" + owner.no : null;
-  const over = Math.max(0, t - 1) * scene.ms;
-  if (over > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
+  const rawOver = Math.max(0, t - 1) * scene.ms;
+  if (rawOver > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
+    const over = Math.min(rawOver, DWELL_MAX_MS); // capped: past it everyone holds where the dwell left them
     // Dwell: two lanes advance at DWELL_SPEED until the next event, turning 12 short of either goal line (never retreating
     // to the own line). The ball is laid off between the lanes every DWELL_CYCLE, so the two nearest teammates keep passing
     // instead of one of them carrying forever; the nearest opponent closes to three in front of whoever has it.

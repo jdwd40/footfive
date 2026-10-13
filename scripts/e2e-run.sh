@@ -109,4 +109,12 @@ if [[ "$SET_FAIL" == "1" ]]; then
   echo "FAIL settlement=$SET_FAIL"
   exit 1
 fi
+# Live event latency (live carrier dribbling back and forth): own PB on LIVE_PB_PORT at
+# normal pace; the cron alone must publish live events in near real time.
+LIVE_FAIL=0
+LIVE_PB_PORT="${LIVE_PB_PORT:-8297}" node "$ROOT/tests/integration/live-latency.mjs" || LIVE_FAIL=1
+if [[ "$LIVE_FAIL" == "1" ]]; then
+  echo "FAIL live-latency=$LIVE_FAIL"
+  exit 1
+fi
 echo "E2E OK"
