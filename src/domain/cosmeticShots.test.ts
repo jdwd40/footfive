@@ -112,7 +112,8 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
 
   it("an old saved state (legacy timing, no new fields) resumes with the identical stream, cosmetics included", () => {
     expect(Object.keys(match(1000))).toEqual(["v", "fx", "seed", "rc", "seq", "timing", "teams", "phase", "minute", "nextAt", "score", "so", "stats", "possMin", "ball", "bs", "counter", "pending", "danger", "winner", "by", "finishedAt"]);
-    const st = match(1000);
+    const seed = runs.find(({ events }) => events.some((e) => cosmetic(e) && e.min > 31))!.seed; // an attempt after the reload
+    const st = match(seed);
     eng.advanceTo(st, 30 * LIVE.minuteMs);
     const twin = JSON.parse(JSON.stringify(st));
     const legacy = JSON.parse(JSON.stringify(st));
@@ -175,7 +176,7 @@ describe("cosmetic rows (issue #73)", () => {
     }
   });
 
-  it("each attempt sits in the minute's spare time after open play and leaves room for the next real event; a miss is held", () => {
+  it("each attempt sits in the minute's spare time after open play and leaves room for the next real event; a miss or block is held", () => {
     const hold = LIVE.resultHoldMs;
     for (const { before, rows, after } of attempts) {
       const [shot, result, back] = rows;
@@ -183,7 +184,7 @@ describe("cosmetic rows (issue #73)", () => {
       for (const e of rows) expect(e.min).toBe(before.min);
       expect(shot.at - before.at, `#${shot.seq}`).toBeGreaterThanOrEqual(0.1 * LIVE.minuteMs);
       expect(after.at - back.at, `#${back.seq}`).toBeGreaterThanOrEqual(0.1 * LIVE.minuteMs);
-      if (result.t === "miss") expect(back.at - result.at).toBeGreaterThanOrEqual(hold);
+      expect(back.at - result.at, `${result.t} #${result.seq} is shown before the ball comes back`).toBeGreaterThanOrEqual(hold);
       // The next real event starts the next minute (or closes the period): the attempt never splits a real move.
       expect(after.min > before.min || ["half_time", "end_of_normal_time", "et_half_time", "shootout_start", "match_end"].includes(after.t), `#${after.seq} ${after.t}`).toBe(true);
     }
@@ -223,11 +224,11 @@ describe("cosmetic rows (issue #73)", () => {
     }
   });
 
-  it("spectacle stays moderate: about four or five extra attempts a match at the live pace; none at a 1 s test pace", () => {
+  it("spectacle stays moderate: two or three extra attempts a match at the live pace (real shots: about 16); none at a 1 s test pace", () => {
     const per = all.map((events) => events.filter((e) => cosmetic(e) && e.t === "shot").length);
     const mean = per.reduce((a, b) => a + b, 0) / per.length;
-    expect(mean).toBeGreaterThan(3);
-    expect(mean).toBeLessThan(6);
+    expect(mean).toBeGreaterThan(2);
+    expect(mean).toBeLessThan(4);
     expect(Math.max(...per)).toBeLessThanOrEqual(15);
     for (let seed = 1000; seed < 1050; seed++) expect((eng.advanceTo(match(seed, eng.buildTiming(1000, 1)), 1e13) as Ev[]).some(cosmetic)).toBe(false);
   });

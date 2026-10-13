@@ -1,12 +1,12 @@
 # Bugs
 
-- #73: occasional cosmetic missed/blocked attempts add spectacle without altering official stats, market state or match outcomes; separate-stream and original-engine determinism guards cover 200 seeds.
-
 ## Open
 
 No blocker in the latest bounded pitch/ends QA; final review and human preview feel remain pending.
 
 ## Fixed — 2026-10-13 gameplay
+
+- #73: occasional cosmetic missed/blocked attempts add spectacle without altering official stats, market state or match outcomes; separate-stream and original-engine determinism guards cover 200 seeds.
 
 - #69: backward midfield passing now shows a lay-off, controlled touch and forward release rather than a single retreat; game outcomes and the next event's authored starting position are preserved.
 - #71: crosses show a wide winger and a separate arriving player, with the published header shooter receiving the delivery when that next event is available.

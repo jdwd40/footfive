@@ -750,11 +750,12 @@ function bounce(st, out, ctx, f, side, chain) {
  * before nextAt and never touch ctx.pause, so no real event moves; stats, score, danger, markets and outcomes are untouched.
  */
 var COS = {
-  rate: 0.3, // chance per eligible minute: about 4–5 extra attempts a match at the live pace (real shots: about 16)
+  rate: 0.3, // chance per eligible minute: two or three extra attempts a match at the live pace (real shots: about 16)
   minAlong: 45, // the side in possession has the ball at least this far up the pitch (its attacking direction)
   missShare: 0.6, // otherwise blocked
   // Spacing in fractions of a minute, as a real move: after the last real event, to the result, back off the boards, and
-  // spare time left before the next real event. A miss also waits resultHoldMs before the ball comes back, as a real one.
+  // spare time left before the next real event. The result, missed or blocked, also waits resultHoldMs before the ball comes
+  // back, so its WIDE/OVER/BLOCKED scene has time to play.
   lead: 0.14,
   result: 0.08,
   back: 0.06,
@@ -788,11 +789,11 @@ function cosmetic(st, out, ctx, first) {
   var T = st.timing;
   var dur = ctx.dur;
   var room = ctx.t0 + ctx.dur + ctx.pause - st.lastAt; // spare time up to nextAt
-  var need = (COS.lead + COS.result + COS.back + COS.tail) * dur;
+  var need = Math.max(COS.minRoomMs, (COS.lead + COS.result + COS.back + COS.tail) * dur + T.resultHoldMs);
+  if (room < need) return; // not enough spare time for the whole attempt: nothing is drawn or emitted
   var r = mulberry32(hashSeed(st.seed + ":cos:" + st.minute));
   if (r() >= COS.rate) return;
-  var miss = r() < COS.missShare && room >= Math.max(COS.minRoomMs, need + T.resultHoldMs);
-  if (!miss && room < Math.max(COS.minRoomMs, need)) return;
+  var miss = r() < COS.missShare;
 
   var def = OTHER[side];
   var shooter = cosWeighted(r, outfield(st, side), function (p) {
@@ -836,7 +837,6 @@ function cosmetic(st, out, ctx, first) {
         : cosPick(r, [shooter.name + " drags it wide", shooter.name + " pulls it wide of the post"]),
       clk: clk(t),
     });
-    t += T.resultHoldMs; // the WIDE/OVER badge is shown before play moves on — from spare time, never ctx.pause
   } else {
     var blocker = cosWeighted(r, outfield(st, def), function (p) {
       return (p.defence || 50) + 10;
@@ -852,6 +852,7 @@ function cosmetic(st, out, ctx, first) {
       clk: clk(t),
     });
   }
+  t += T.resultHoldMs; // the WIDE/OVER/BLOCKED scene plays before the ball comes back — from spare time, never ctx.pause
 
   // Back off the boards to the side that had it, on the spot real play left it: the next real event starts there.
   t += COS.back * dur;
