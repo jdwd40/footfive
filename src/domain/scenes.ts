@@ -227,7 +227,26 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           ],
         };
       }
-      const lift = e.t === "cross" ? [0, 0.9, 0] : e.t === "through_ball" ? [0, 0.15, 0] : [0, 0, 0];
+      if (e.t === "through_ball") {
+        // Played into space: the runner starts behind the marker (the defensive line), well short of where the ball is going, and runs
+        // onto it there; the marker steps up, turns late and is left trailing. Same endpoints and labels, a ground ball with a touch of lift.
+        const run = Math.max(6, Math.min(14, toward(atk, recv[0] - passer[0]) - 2));
+        const wide = recv[1] > GOAL_Y ? 1 : -1; // he comes in from the touchline side
+        const rStart = clampPt([recv[0] - toward(atk, run), recv[1] + wide * 5]);
+        const mStart = clampPt([rStart[0] + toward(atk, 3), rStart[1] - wide * 2]);
+        return {
+          ...base,
+          ms: d(1500),
+          ball: [passer, lerp(passer, recv, 0.5), recv],
+          ballHeight: [0, 0.15, 0],
+          actors: [
+            { id: "p", side: atk, label: short(e.p), path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
+            { id: "r", side: atk, label: short(e.p2), path: [rStart, lerp(rStart, recv, 0.45), recv] },
+            { id: "m", side: def, path: [mStart, clampPt([mStart[0] - toward(atk, 1), mStart[1]]), clampPt([recv[0] - toward(atk, 3), recv[1] + wide * 2.5])] },
+          ],
+        };
+      }
+      const lift = e.t === "cross" ? [0, 0.9, 0] : [0, 0, 0];
       return {
         ...base,
         ms: d(run ? 2000 : e.t === "cross" ? 2000 : 1500),
