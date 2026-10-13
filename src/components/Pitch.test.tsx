@@ -97,6 +97,19 @@ describe("Pitch kits and numbers", () => {
     expect(badge("miss", false)).toBeNull();
     expect(document.body.textContent).not.toContain("NO GOAL");
   });
+  it("WON IT shows while the frame carries the winner, in his side's colour, and stays clear of a result badge", () => {
+    const { rerender } = render(<Pitch frame={frame({ type: "tackle", side: "home", won: "home" })} home={home} away={away} revealed />);
+    const badge = screen.getByTestId("won-badge");
+    expect(badge.textContent).toBe("WON IT");
+    expect(badge.style.background).toBe("rgb(0, 240, 255)");
+    rerender(<Pitch frame={frame({ type: "interception", side: "away", won: "away" })} home={home} away={away} revealed />);
+    expect(screen.getByTestId("won-badge").style.background).toBe("rgb(255, 45, 149)");
+    rerender(<Pitch frame={frame({ type: "pass", side: "away", won: "away", flash: "save" })} home={home} away={away} revealed />);
+    expect(screen.getByText("SAVED!")).toBeTruthy(); // a lingering result keeps its slot; WON IT sits under it
+    expect(screen.getByTestId("won-badge").parentElement!.className).toContain("top-[4.25rem]");
+    rerender(<Pitch frame={frame({ type: "tackle", side: "home", won: null })} home={home} away={away} revealed />);
+    expect(screen.queryByTestId("won-badge")).toBeNull();
+  });
   it("pins the HUD to the pitch's top-left corner and keeps the replay chip out of its way", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed replay hud={<span>HOM 1–0 AWY</span>} />);
     const hud = screen.getByTestId("pitch-hud");

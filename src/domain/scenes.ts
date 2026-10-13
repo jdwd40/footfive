@@ -36,6 +36,7 @@ export type Scene = {
   cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
   flashAt?: number; // progress at which the result badge may show (default 0.62)
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
+  won?: number; // challenge scenes: progress at which the winner (`side`) has the ball — a WON IT cue, not a result (no reveal gate, no hold)
 };
 export type Cam = [number, number, number, number];
 export const FULL_CAM: Cam = [-4, -3, 108, 77]; // bottom margin reaches the tunnel at y=70
@@ -155,14 +156,54 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
       const recv = ball;
       const run = e.t === "dribble";
       const markerStart = clampPt([recv[0] + toward(atk, 6) + jit(s, 2, 3), recv[1] + jit(s, 3, 7)]);
-      // The ball was left deep in a box and nobody in the passer's shirt is on it: the engine leaves it with the keeper (or
-      // blocker) after a failed attack. Either the other team took it there (`turn`, the opponent on it launches it clear) or
-      // the passer's own keeper is holding it (same side regains, `from` inside his own box) and distributes. The named passer
-      // collects it in midfield and moves it on. Same engine positions, no teleport, no attacker in the keeper's hands.
-      const backward = !!e.turn && toward(atk, recv[0] - passer[0]) < -12;
+      // A turnover (`turn`: the other side had the ball) is a contest for it, never a clearance: their player is on the ball where
+      // the engine left it and the named player wins it (`won`: WON IT), then moves it on to the engine's spot. An outfielder is
+      // challenged where he stands; a keeper (or blocker) holding it deep in his box after a failed attack plays it out and the
+      // pass is cut out in midfield. Same engine positions, no teleport, no attacker in the keeper's hands.
+      if (e.turn && (e.t === "pass" || e.t === "build_up")) {
+        const lat = passer[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch
+        const off = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(def, along), p[1] + lat * across]); // `along`: the old side's attacking direction
+        const r: Actor = { id: "r", side: atk, label: short(e.p2), path: [] };
+        const m: Actor = { id: "m", side: def, path: [] };
+        if (toward(atk, passer[0] - goalX(atk)) >= -15) {
+          const mid = lerp(passer, recv, 0.55);
+          r.path = [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv];
+          m.path = [markerStart, markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)];
+          return {
+            ...base,
+            ms: d(1900),
+            won: 0.5,
+            ball: [passer, lerp(passer, mid, 0.5), mid, mid, recv],
+            ballHeight: [0, 0.25, 0, 0, 0],
+            actors: [
+              { id: "lost", side: def, keeper: true, path: [passer, passer, off(passer, 2, 0), off(passer, 3, 0), off(passer, 3, 0)] },
+              { id: "tgt", side: def, path: [off(mid, 9, -3), off(mid, 6.5, -2), off(mid, 4, -1.5), off(mid, 3.5, -1.5), off(mid, 3.5, -1.5)] }, // the pass he meant
+              { id: "p", side: atk, label: short(e.p), path: [off(mid, -2, 5), off(mid, -1, 2.5), mid, mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
+              r,
+              m,
+            ],
+          };
+        }
+        const c = off(passer, 1.5, 0); // the holder takes a touch on
+        r.path = [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv];
+        m.path = [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)];
+        return {
+          ...base,
+          ms: d(1500),
+          won: 1 / 3,
+          ball: [passer, c, c, recv],
+          actors: [
+            { id: "lost", side: def, path: [off(passer, -0.8, 0), off(c, -0.8, 0), off(c, 1.5, -2.2), off(c, 2.5, -2.8)] },
+            { id: "p", side: atk, label: short(e.p), path: [off(c, 6, 3), c, c, clampPt([c[0] + toward(atk, 1.5), c[1]])] },
+            r,
+            m,
+          ],
+        };
+      }
+      // The ball was left deep in the passer's own box with his keeper (same side regains, `from` inside his own box after a failed
+      // attack): the keeper distributes and the named passer collects it in midfield and moves it on.
       const ownBox = !e.turn && toward(atk, passer[0] - goalX(def)) <= 15;
-      if (backward || ownBox) {
-        const inBox = ownBox || toward(atk, passer[0] - goalX(atk)) >= -15;
+      if (ownBox) {
         const mid = lerp(passer, recv, 0.55);
         // A short distribution would start the collector in the keeper's hands: place him
         // beside the collection point instead (exactly 4 units off the keeper's spot).
@@ -179,7 +220,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           ball: [passer, lerp(passer, mid, 0.5), mid, recv],
           ballHeight: [0, 0.7, 0, 0],
           actors: [
-            { id: "clear", side: ownBox ? atk : def, keeper: inBox, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
+            { id: "clear", side: atk, keeper: true, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
             { id: "p", side: atk, label: short(e.p), path: [pStart, clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
             { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] },
             { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
@@ -203,15 +244,23 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
     }
     case "tackle":
     case "interception": {
+      // A visible challenge: the loser has the ball at `from` and takes it on (tackle) or plays it (interception) towards `ball`;
+      // the winner closes from goal-side and has it there halfway through (`won`: WON IT), then keeps it. Engine spots unchanged.
       const at = from;
       const end = ball;
+      const lat = at[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch
+      const off = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(def, along), p[1] + lat * across]); // `along`: the loser's attacking direction
+      const near = lerp(at, end, 0.6);
+      const tackle = e.t === "tackle";
       return {
         ...base,
         ms: d(1600),
-        ball: [at, lerp(at, end, 0.3), end],
+        won: 0.5,
+        ball: [at, near, end, end, end],
         actors: [
-          { id: "lost", side: def, label: short(e.p2), path: [clampPt([at[0] - toward(def, 2), at[1]]), at, clampPt([at[0] - toward(def, 1), at[1] + 2])] },
-          { id: "win", side, label: short(e.p), path: [clampPt([at[0] + toward(side, -5), at[1] + 4]), at, end] },
+          { id: "lost", side: def, label: short(e.p2), path: tackle ? [off(at, -0.8, 0), off(near, -0.8, 0), off(end, -1.2, 0), off(end, 2, -2), off(end, 3, -2.5)] : [off(at, -0.8, 0), off(at, 1, 0), off(at, 2, 0), off(at, 2, 0), off(at, 2, 0)] },
+          ...(tackle ? [] : [{ id: "tgt", side: def, path: [off(end, 9, -3), off(end, 6.5, -2), off(end, 4.5, -1.5), off(end, 4, -1.5), off(end, 4, -1.5)] as Pt[] }]), // the pass he meant
+          { id: "win", side, label: short(e.p), path: [off(end, 7, 3.5), off(end, 4, 2), end, end, end] },
         ],
       };
     }

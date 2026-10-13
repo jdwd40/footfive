@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_ADVANCE, DWELL_LINE, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
+import { DWELL_ADVANCE, DWELL_LINE, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -311,6 +311,52 @@ describe("frameAt", () => {
     expect([...sides].sort()).toEqual(["away", "home"]);
     expect(checked).toBeGreaterThan(500);
     expect(longGaps).toBeGreaterThan(50); // past the old 6 s cap
+  });
+
+  it("a won challenge shows who has the ball: the loser before the contest, the winner from `won` with WON IT for WON_MS into his dwell — no result gate", () => {
+    const m = ms[0];
+    const st = m.events[0].st;
+    const out = (side: "home" | "away", k: number) => m.lineups[side].filter((p) => p.starter && p.role !== "gk")[k].name;
+    const ev = (t: string, side: "home" | "away", from: Pt, ball: Pt, turn?: number): MatchEvent => ({ seq: 9300, at: 0, t, min: 1, side, p: out(side, 1), p2: t === "pass" ? out(side, 2) : t === "build_up" ? undefined : out(side === "home" ? "away" : "home", 2), from, ball, turn, text: "", st });
+    const cases: Array<[string, MatchEvent]> = [
+      ["home tackle", ev("tackle", "home", [50, 32], [54, 32])],
+      ["away tackle", ev("tackle", "away", [50, 32], [46, 32])],
+      ["away interception", ev("interception", "away", [50, 32], [46, 32])],
+      ["home interception", ev("interception", "home", [50, 32], [54, 32])],
+      ["home turnover pass", ev("pass", "home", [75, 32], [45, 32], 1)],
+      ["away turnover pass", ev("pass", "away", [25, 32], [55, 32], 1)],
+      ["home turnover off the keeper", ev("build_up", "home", [93, 30], [30, 30], 1)],
+      ["away turnover off the keeper", ev("build_up", "away", [7, 34], [70, 34], 1)],
+    ];
+    for (const [name, e] of cases) {
+      const s = sceneFor(e, e.from as Pt, 15000)!;
+      const w = s.won!;
+      const loser = e.side === "home" ? "away" : "home";
+      const owner = (t: number) => {
+        const f = frameAt(s, t, m.lineups);
+        return f.players.find((p) => p.side + ":" + p.no === f.carrier && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) <= 1.6); // the ring: carrier in contact
+      };
+      expect(owner(0.02)?.side, `${name}: before the contest`).toBe(loser);
+      expect(owner(w + 0.02)?.name, `${name}: the named winner has it`).toBe(e.p);
+      expect(owner(1)?.side, `${name}: still theirs at the end`).toBe(e.side);
+      const at = (ms: number) => frameAt(s, w + ms / s.ms, m.lineups);
+      expect(frameAt(s, w - 0.02, m.lineups).won ?? null, name).toBeNull(); // never before he has it
+      expect(at(20).won, name).toBe(e.side);
+      expect(at(WON_MS - 50).won, name).toBe(e.side); // into the dwell when the scene is short
+      expect(at(WON_MS + 50).won ?? null, name).toBeNull();
+      expect(at(WON_MS - 50).flash ?? null).toBeNull(); // a cue, not a result: nothing to reveal, nothing held
+      expect(reveal(s, 0.6, frameAt(s, 0.6, m.lineups).ball, false).revealed).toBe(true);
+      const end = frameAt(s, 1, m.lineups).ball;
+      const later = frameAt(s, 1 + 1500 / s.ms, m.lineups).ball;
+      expect(Math.hypot(later[0] - end[0], later[1] - end[1]), `${name}: the winner's dwell runs on`).toBeGreaterThan(1);
+      // Reduced motion (and a replay's held last frame) keep t at 1: the cue still times off the real elapsed ms, so it stays brief.
+      const held = (elapsed: number) => frameAt(s, 1, m.lineups, undefined, 0, undefined, undefined, elapsed).won ?? null;
+      expect(held(w * s.ms - 20), `${name}: held, before the win`).toBeNull();
+      expect(held(w * s.ms + 20), `${name}: held, just won`).toBe(e.side);
+      expect(held(w * s.ms + WON_MS + 50), `${name}: held, expired`).toBeNull();
+      expect(held(60000), `${name}: held through a long gap`).toBeNull();
+      expect(held(s.ms + 900), `${name}: a replay's 900 ms end hold`).toBe(s.ms + 900 - w * s.ms < WON_MS ? e.side : null);
+    }
   });
 
   it("the next scene starts from the dwell endpoint, not its authored first keyframe", () => {

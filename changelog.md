@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — Visible tackles and interceptions (#72)
+
+- Challenges now show the old holder losing the ball and the named winner collecting it. Turnovers show a contest or a keeper distribution intercepted in midfield rather than a clearance alone.
+- A brief team-coloured WON IT cue waits for rendered winning-side contact. Its timer uses elapsed scene time, including reduced motion and replay holds; result reveal gates and continued dwell are unchanged.
+- Engine events, outcomes, scorelines, polling and rate-limit settings are unchanged.
+
 ## 2026-10-13 — Carrier dwell continuity (#68)
 
 - Bounded the presentation-only dwell advance to eight pitch units, easing near the attacking x70 line instead of running into the box and retreating at the next event.

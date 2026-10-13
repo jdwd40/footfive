@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -57,6 +57,8 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
 
 /** Result badges that outlive their scene: SAVED!, WOODWORK, WIDE/OVER/BLOCKED and every shootout reveal stay 2.5 s (real ms, however short the new scene) into the next one. Match goals have the banner, cards their own type-specific text. */
 const LINGER_MS = 2500;
+/** WON IT stays this long (real ms, into the winner's dwell) from the moment the challenge winner has the ball. */
+export const WON_MS = 1500;
 const LINGERING = new Set(["save", "wood", "miss", "over", "block"]);
 function lingers(prev: Scene | undefined, scene: Scene, t: number) {
   return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || LINGERING.has(prev.flash));
@@ -79,10 +81,14 @@ export const DWELL_LINE = 70;
  */
 function carrierActor(scene: Scene, t: number): string | null {
   switch (scene.type) {
-    case "build_up": case "pass": case "through_ball": case "cross": case "dribble":
+    case "build_up": case "pass": case "through_ball": case "cross": case "dribble": {
       if (scene.actors.some(a => a.id === "clear")) return t <= 0.02 ? "clear" : t >= 0.97 ? "r" : t >= 0.64 && t <= 0.7 ? "p" : null;
+      const lost = scene.actors.find(a => a.id === "lost"); // turnover contest: the old side's holder (a keeper only plays it out), then the winner
+      const w = scene.won ?? 1;
+      if (lost) return t >= 0.97 ? "r" : t >= w && t <= w + 0.22 ? "p" : t <= (lost.keeper ? 0.04 : w - 0.04) ? "lost" : null;
       return scene.type === "dribble" ? "p" : t <= 0.08 ? "p" : t >= 0.97 ? "r" : null;
-    case "tackle": case "interception": return t >= 0.5 ? "win" : t <= 0.08 ? "lost" : null;
+    }
+    case "tackle": case "interception": return t >= (scene.won ?? 0.5) ? "win" : t <= (scene.type === "tackle" ? 0.45 : 0.08) ? "lost" : null;
     case "save": return t >= 2 / 3 ? "gk" : null;
     case "block": return t >= 0.5 ? "b" : null;
     case "woodwork": return t >= 0.97 ? "gk" : null;
@@ -98,8 +104,9 @@ function carrierActor(scene: Scene, t: number): string | null {
 /**
  * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
  * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 2.5 s.
+ * `elapsedMs`: real ms since the scene began, when `t` stops tracking it (reduced motion holds t = 1, a replay holds its last frame); WON IT times off it.
  */
-export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene): Frame {
+export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene, elapsedMs?: number): Frame {
   const { ball: b, players, unlabelled, ref } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
   const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
   const bind = binding(scene, lineups, sentOff);
@@ -151,6 +158,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     }
   }
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
+  const sinceWon = scene.won !== undefined ? (elapsedMs ?? t * scene.ms) - scene.won * scene.ms : -1;
+  const won = scene.side && sinceWon >= 0 && sinceWon < WON_MS ? scene.side : null;
   // No ref actor: he trails play — ten behind the ball, and on the half of the pitch the ball is not on, sliding smoothly
   // through the middle (no side flip when the ball crosses the centre line) — so he is always on the pitch and only ever jogs (smooth) into a scene.
   const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(32 + (32 - ball[1]) * 0.6, 0, 64)];
@@ -182,7 +191,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPt = [86, 19]; // beside the box, where setupScene / penaltyScene keep him (penRefSpot("home"))
     if (t < 0.7) cam = FULL_CAM;
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */

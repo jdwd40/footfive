@@ -29,7 +29,6 @@ function events(n = 120): MatchEvent[][] {
 
 const inMouth = (y: number) => y >= 27.5 && y <= 36.5;
 const end = (s: Scene): Pt => s.ball[s.ball.length - 1];
-const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 /** Penalty camera at the x=100 end: 56 wide at the full-pitch aspect, centred on y=32, pushed left to the right-hand margin (104). */
 const PEN_HOME: Cam = [48, 32 - (56 * 77) / 108 / 2, 56, (56 * 77) / 108];
 
@@ -365,9 +364,10 @@ describe("highlight scenes agree with the simulation", () => {
     expect(n).toBeGreaterThan(100);
   });
 
-  it("a turnover that starts deep in the other team's half is shown as a clearance collected in midfield, never an attacker standing in the keeper's hands", () => {
+  it("every turnover is a contest for the ball, never a clearance: the old side is on it where it was left (a keeper deep in his box plays it out), the named player wins it, and it ends on the engine's spot", () => {
     let n = 0;
-    let plain = 0;
+    let keeper = 0;
+    const d = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
     for (const m of matches) {
       let bs: string | null = "home";
       for (const e of m) {
@@ -379,27 +379,56 @@ describe("highlight scenes agree with the simulation", () => {
         if (["kickoff"].includes(e.t)) bs = "home";
         if (["second_half", "extra_time", "et_second_half"].includes(e.t)) bs = null;
         if (!s || !e.turn) continue;
-        const dx = (e.side === "home" ? 1 : -1) * (e.ball![0] - e.from![0]);
-        const clear = s.actors.find((a) => a.id === "clear");
-        if (dx >= -12) {
-          expect(clear).toBeUndefined();
-          plain++;
-          continue;
-        }
         n++;
-        expect(clear, `${e.t} #${e.seq}`).toBeTruthy();
-        expect(clear!.side).not.toBe(e.side);
-        expect(clear!.path[0]).toEqual(e.from); // the opponent is on the ball where it was left
+        expect(s.actors.find((a) => a.id === "clear"), `${e.t} #${e.seq}`).toBeUndefined(); // no clearance exit
+        expect(Math.max(...(s.ballHeight ?? [0]))).toBeLessThanOrEqual(0.3); // played or carried, never lofted clear
+        const lost = s.actors.find((a) => a.id === "lost")!;
+        expect(lost.side).not.toBe(e.side);
+        expect(d(lost.path[0], e.from as Pt), `${e.t} #${e.seq}`).toBeLessThanOrEqual(0.8 + 1e-9); // the old side is on the ball where it was left
         const inBox = e.side === "home" ? e.from![0] >= 85 : e.from![0] <= 15;
-        expect(!!clear!.keeper).toBe(inBox);
+        expect(!!lost.keeper).toBe(inBox);
+        if (inBox) keeper++;
         const p = s.actors.find((a) => a.id === "p")!;
-        expect(Math.hypot(...(sample(p.path, 1).map((v, i) => v - lerp(e.from!, e.ball!, 0.55)[i]) as [number, number]))).toBeLessThan(3); // the passer collects in midfield
-        expect(sampleN(s.ballHeight, 0.3)).toBeGreaterThan(0.3); // the clearance is lofted
+        expect(p.side).toBe(e.side);
+        expect(s.won).toBeGreaterThan(0);
+        expect(s.won).toBeLessThan(1);
+        expect(d(sample(p.path, 0), s.ball[0]), `${e.t} #${e.seq}`).toBeGreaterThan(4); // he closes in to win it...
+        expect(d(sample(p.path, s.won!), sample(s.ball, s.won!)), `${e.t} #${e.seq}`).toBeLessThan(1.5); // ...and has it at `won`
+        expect(s.ball[0]).toEqual(e.from);
         expect(end(s)).toEqual(e.ball);
       }
     }
-    expect(n).toBeGreaterThan(50);
-    expect(plain).toBeGreaterThan(50);
+    expect(n).toBeGreaterThan(100);
+    expect(keeper).toBeGreaterThan(20);
+    expect(n - keeper).toBeGreaterThan(50);
+  });
+
+  it("tackles and interceptions are a visible contest: the loser has the ball, the winner closes from goal-side, has it at `won` and keeps it — on the engine's spots", () => {
+    const sides = new Set<string>();
+    let n = 0;
+    const d = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    for (const e of all) {
+      if (e.t !== "tackle" && e.t !== "interception") continue;
+      const s = sceneFor(e, e.from as Pt, 15000)!;
+      const lost = s.actors.find((a) => a.id === "lost")!;
+      const win = s.actors.find((a) => a.id === "win")!;
+      expect(lost.side).not.toBe(e.side);
+      expect(win.side).toBe(e.side);
+      expect(d(sample(lost.path, 0), s.ball[0]), `${e.t} #${e.seq}`).toBeLessThan(1.5); // the loser is on the ball as the scene opens
+      expect(d(sample(win.path, 0), s.ball[0]), `${e.t} #${e.seq}`).toBeGreaterThan(2); // the winner has to win it:
+      expect(d(sample(win.path, 0), end(s)), `${e.t} #${e.seq}`).toBeGreaterThan(6); // a run in to the contest
+      const ownGoal = e.side === "home" ? 0 : 100; // goal-side: he comes in from the side of his own goal
+      expect(Math.abs(sample(win.path, 0)[0] - ownGoal)).toBeLessThanOrEqual(Math.abs(end(s)[0] - ownGoal) + 1e-9);
+      expect(s.won).toBe(0.5);
+      for (const t of [0.5, 0.75, 1]) expect(d(sample(win.path, t), sample(s.ball, t)), `${e.t} #${e.seq} t=${t}`).toBeLessThan(1.5);
+      expect(s.flash ?? null).toBeNull(); // a cue, not a result
+      expect(s.ball[0]).toEqual(e.from);
+      expect(end(s)).toEqual(e.ball);
+      sides.add(e.side!);
+      n++;
+    }
+    expect([...sides].sort()).toEqual(["away", "home"]);
+    expect(n).toBeGreaterThan(200);
   });
 
   it("the saving side's own distribution starts from the keeper's hands: his keeper launches it, never an outfielder standing on him", () => {
