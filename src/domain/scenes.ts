@@ -13,6 +13,7 @@ export type Actor = {
   side: Side | "ref";
   label?: string; // shown name/number for the relevant player
   keeper?: boolean;
+  rides?: boolean; // intermediate ball contact: reroute this actor with the ball when the scene starts off its authored path
   path: Pt[]; // keyframes, evenly spaced over the scene
 };
 export type Scene = {
@@ -107,10 +108,11 @@ function head(e: MatchEvent) {
 
 /**
  * Build the scene for one event. `prevBall` is where the previous scene ended, so movement
- * connects across scene boundaries.
+ * connects across scene boundaries. `next`: the following published event, if already fetched — only a cross reads it,
+ * and only to put its own header's runner on his box point (see the cross scene); nothing of it reaches the scene's metadata.
  */
-export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
-  const s = build(e, prevBall, minuteMs);
+export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
+  const s = build(e, prevBall, minuteMs, next);
   // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.
   if (s && (s.ball[0][0] !== prevBall[0] || s.ball[0][1] !== prevBall[1])) {
     s.ball = [prevBall, ...s.ball];
@@ -119,7 +121,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene |
   return s;
 }
 
-function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
+function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
   const d = pace(minuteMs);
   const side = (e.side || "home") as Side;
   const atk = side;
@@ -246,10 +248,35 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
           ],
         };
       }
-      const lift = e.t === "cross" ? [0, 0.9, 0] : [0, 0, 0];
+      if (e.t === "cross") {
+        // Wide delivery: the feeder plays it along the ground to the winger, who holds his wide line and crosses; a runner attacks the
+        // box and meets the lifted ball there. Runner and box point come from the next published event when it is this cross's own
+        // header (a shot with `header`, same side and chain, the very next seq): the player who heads it is the one who arrives — the
+        // feeder himself carries on into the box when he is the one. Otherwise an unlabelled runner attacks the far post: no named
+        // outcome is invented. Nothing else is read from `next`; the scene's metadata is this event's.
+        const header = next && next.t === "shot" && !!next.header && next.side === e.side && next.chain === e.chain && next.seq === e.seq + 1 && next.ball ? next : null;
+        const box: Pt = header ? (header.ball as Pt) : [goalX(atk) - toward(atk, 13), recv[1] < GOAL_Y ? GOAL_Y + 4 : GOAL_Y - 4];
+        const hLabel = header && short(header.p) !== short(e.p2) ? short(header.p) : undefined;
+        const feederRuns = !!hLabel && hLabel === short(e.p);
+        const fwd = (p: Pt, k: number): Pt => clampPt([p[0] + toward(atk, k), p[1]]);
+        const hStart = clampPt([box[0] - toward(atk, 11), GOAL_Y + (GOAL_Y - box[1]) * 0.5]); // from the far side of the goal's centre line
+        return {
+          ...base,
+          ms: d(2000),
+          ball: [passer, recv, recv, box, box],
+          ballHeight: [0, 0, 0, 0, 0, 0.9, 0.6, 0.6, 0.6], // along the ground to the winger, then the cross: highest in flight, head height at the box
+          actors: [
+            { id: "p", side: atk, label: short(e.p), rides: true, path: feederRuns ? [fwd(passer, -1), lerp(passer, box, 0.35), lerp(passer, box, 0.7), box, box] : [fwd(passer, -1), fwd(passer, 1), fwd(passer, 3), fwd(passer, 4), fwd(passer, 4)] },
+            { id: "r", side: atk, label: short(e.p2), rides: true, path: [fwd(recv, -4), recv, recv, fwd(recv, 1), fwd(recv, 1)] },
+            ...(feederRuns ? [] : [{ id: "h", side: atk, label: hLabel, rides: true, path: [hStart, hStart, lerp(hStart, box, 0.4), box, box] } as Actor]),
+            { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.5), lerp(markerStart, recv, 0.65), lerp(markerStart, recv, 0.65)] },
+          ],
+        };
+      }
+      const lift = [0, 0, 0];
       return {
         ...base,
-        ms: d(run ? 2000 : e.t === "cross" ? 2000 : 1500),
+        ms: d(run ? 2000 : 1500),
         ball: [passer, lerp(passer, recv, 0.5), recv],
         ballHeight: lift,
         actors: [
@@ -289,9 +316,9 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number): Scene | null {
         ...base,
         ms: d(1300),
         ball: [prevBall, shotFrom, shotFrom],
-        ballHeight: e.header ? [0.9, 0.6, 0.6] : [0, 0, 0],
+        ballHeight: e.header ? [0.6, 0.6, 0.6] : [0, 0, 0], // a header: the cross scene brought it to his head at the box point
         actors: [
-          { id: "s", side: atk, label: short(e.p), path: [clampPt([shotFrom[0] - toward(atk, 3), shotFrom[1] + 1]), shotFrom, shotFrom] },
+          { id: "s", side: atk, label: short(e.p), path: e.header ? [shotFrom, shotFrom, shotFrom] : [clampPt([shotFrom[0] - toward(atk, 3), shotFrom[1] + 1]), shotFrom, shotFrom] },
           { id: "gk", side: def, keeper: true, path: [keeperSpot(def), [keeperSpot(def)[0] + toward(atk, -1.5), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.15], [keeperSpot(def)[0] + toward(atk, -2), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.2]] },
           { id: "d", side: def, path: [clampPt([shotFrom[0] + toward(atk, 6), shotFrom[1] + 5]), clampPt([shotFrom[0] + toward(atk, 4), shotFrom[1] + 2]), clampPt([shotFrom[0] + toward(atk, 3), shotFrom[1] + 1])] },
         ],

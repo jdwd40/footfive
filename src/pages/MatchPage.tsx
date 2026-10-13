@@ -162,8 +162,8 @@ export default function MatchPage() {
   const scenes = useMemo(() => {
     const m = new Map<number, Scene>();
     let prev: Pt = [50, 32];
-    for (const e of events) {
-      const s = sceneFor(e, prev, minuteMs) ?? idleScene(e, prev);
+    for (const [i, e] of events.entries()) {
+      const s = sceneFor(e, prev, minuteMs, events[i + 1]) ?? idleScene(e, prev); // a cross reads its own already-fetched header
       prev = s.ball[s.ball.length - 1];
       m.set(e.seq, s);
     }
