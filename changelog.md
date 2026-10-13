@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-13 — Through-ball runs (#70)
+
+- Through balls use a distinct receiver sprint from behind the defensive line into forward space. The marker steps up, turns late and finishes behind the receiving player.
+- Published endpoints, player identities, pace, scores and engine randomness are preserved; ordinary passes and the previous dwell/challenge fixes keep their existing behaviour.
+
 ## 2026-10-13 — Visible tackles and interceptions (#72)
 
 - Challenges now show the old holder losing the ball and the named winner collecting it. Turnovers show a contest or a keeper distribution intercepted in midfield rather than a clearance alone.
