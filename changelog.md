@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-13 — Cross delivery and arriving headers (#71)
+
+- Crosses show the ground feed to a winger who stays wide, then an elevated delivery to a runner attacking the box. The next published header identifies the arriving player and contact point; if the feeder heads it, one actor carries both phases.
+- Without that published header, an unnamed runner attacks a stable far-post point. Scene metadata stays with the current event, and header handovers keep the ball at head height. Engine outcomes and polling are unchanged.
+
 ## 2026-10-13 — Through-ball runs (#70)
 
 - Through balls use a distinct receiver sprint from behind the defensive line into forward space. The marker steps up, turns late and finishes behind the receiving player.
