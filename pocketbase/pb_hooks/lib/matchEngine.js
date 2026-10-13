@@ -446,7 +446,7 @@ function midfield(st, out, ctx, side) {
       from: from,
       ball: st.ball,
       turn: i === 0 && turn ? 1 : undefined,
-      text: pick(st, [last.name + " to " + recv.name, last.name + " knocks it to " + recv.name, recv.name + " takes it off " + last.name]),
+      text: pick(st, [last.name + " to " + recv.name, last.name + " knocks it to " + recv.name, recv.name + " collects from " + last.name]),
       clk: ctx.clk(f),
     });
     last = recv;
