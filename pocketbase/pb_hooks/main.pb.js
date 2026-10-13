@@ -281,7 +281,8 @@ onRecordUpdateRequest((e) => {
   throw new ForbiddenError("Use protected FootFive routes");
 }, "proball_teams");
 
-// The world advances on this one-minute cron, the throttled /health designed-tick
+// The world advances on this one-minute cron (which, while a round is live, keeps
+// pumping the lease-guarded tick ~1/s for the rest of its minute), the throttled /health designed-tick
 // endpoint, admin catch-up and bet placement — never on the read views (issue #17).
 // tick() takes the single-flight world lease, so overlapping drivers are safe.
 cronAdd("footfive_catchup", "*/1 * * * *", () => {
@@ -303,6 +304,13 @@ cronAdd("footfive_catchup", "*/1 * * * *", () => {
     try {
       health.recordCatchUp($app, {}, Date.now() - t0, String(err).slice(0, 200));
     } catch (_) {}
+  }
+  // Live pump: while a round is live, keep ticking ~1/s (same lease) for the rest of this
+  // minute so match events are published in near real time, not in 60 s batches.
+  try {
+    if (svc.isSchemaReady($app) && svc.livePumpWanted($app, Date.now())) svc.pumpLive($app, 57000 - (Date.now() - t0));
+  } catch (err) {
+    log.error("live_pump_error", { message: String(err).slice(0, 200) });
   }
 });
 

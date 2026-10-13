@@ -343,6 +343,23 @@ describe("MatchPage retained history and fixture ticker", () => {
     expect(screen.getByTestId("commentary")).toHaveTextContent("History 601");
   });
 
+  it("a late batch from a stale server is fast-forwarded through, not snapped over", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); // real rAF and poll interval, frozen server clock
+    const now = Date.now();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    match.mockResolvedValueOnce(page([ev(1, now - 30000, "Old pass")], now));
+    // Published late: all three are already in the past when they arrive.
+    match.mockResolvedValue(page([ev(2, now - 8000, "Late one"), ev(3, now - 6000, "Late two"), ev(4, now - 4000, "Late three")], now));
+    await mount();
+    expect(screen.getByTestId("commentary")).toHaveTextContent("Old pass");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 1300)));
+    expect(screen.getByTestId("commentary")).toHaveTextContent("Late one"); // not straight to the newest
+    await act(() => new Promise((resolve) => setTimeout(resolve, 2500)));
+    expect(screen.getByTestId("commentary")).toHaveTextContent("Late three"); // caught up within a few seconds
+    vi.useRealTimers();
+  });
+
   it("keeps the current timeline during a multi-page missed backlog and commits no partial cursor on failure", async () => {
     vi.useFakeTimers();
     const now = Date.now();

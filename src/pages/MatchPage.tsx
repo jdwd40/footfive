@@ -25,6 +25,22 @@ const PREF_KEY = "ff_highlights";
 type Pref = "full" | "off";
 const LAG_MS = 1500; // ponytail: fixed latency buffer; make adaptive if poll jitter shows
 const RETURN_MS = 20000;
+/** A delayed batch of events (stale server) is played through fast rather than skipped: the pitch clock runs at least this
+ * much faster than real time until it is back on `now - LAG_MS`, so a big backlog still clears in a few seconds. */
+const CATCHUP_RATE = 4;
+const CATCHUP_TARGET_MS = 5000;
+/** Further behind than this (reconnect after an outage, a long missed backlog) the clock snaps to live instead of fast-forwarding. */
+const CATCHUP_MAX_MS = 30000;
+
+/** Advance the pitch clock by `dt` real ms towards `target`; rewinds to `rewindTo` (first unshown event) when a late batch would be skipped.
+ * A clock that itself leapt (resumed tab, server-time correction) still snaps: that is history, not a late batch. */
+function advanceClock(clock: number | null, target: number, prevTarget: number | null, dt: number, rewindTo: number | null): number {
+  if (clock === null || prevTarget === null || dt > 1000 || target - prevTarget > dt + 1000) return target;
+  const c = rewindTo !== null && rewindTo < clock ? rewindTo : clock;
+  const behind = target - c;
+  if (behind <= 0 || behind > CATCHUP_MAX_MS) return target;
+  return Math.min(target, c + dt * (behind > 250 ? 1 + Math.max(CATCHUP_RATE - 1, behind / CATCHUP_TARGET_MS) : 1));
+}
 
 /** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
@@ -46,7 +62,7 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
-type Anim = { now: number; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */ };
+type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */ };
 
 /** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
 function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
@@ -66,8 +82,9 @@ export default function MatchPage() {
   const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
   const [stay, setStay] = useState(false);
   const refreshMatch = useRef<(() => Promise<void>) | null>(null);
+  const clockRef = useRef<{ clock: number | null; target: number | null; seq: number | null }>({ clock: null, target: null, seq: null });
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -77,7 +94,8 @@ export default function MatchPage() {
     setError("");
     setLastOk(0);
     setStay(false);
-    setAnim({ now: serverNow(), frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() });
+    clockRef.current = { clock: null, target: null, seq: null };
+    setAnim({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() });
   }, [fixtureId]);
   useEffect(() => {
     setAnim((a) => ({ ...a, frame: null })); // replay start/end jumps the timeline: no chase across it
@@ -166,7 +184,15 @@ export default function MatchPage() {
       last = t0;
       const now = serverNow();
       if (replay && (t0 - replay.startedAt) / replay.scene.ms >= 1 + 900 / replay.scene.ms) return setReplay(null);
-      const ph = playhead(events, now - LAG_MS);
+      // Pitch clock: normally now − LAG_MS. If a batch arrived late with events after the one on the pitch already in the
+      // past, rewind to the first of them and fast-forward, so the real passes are shown instead of snapped over.
+      const ck = clockRef.current;
+      const next = ck.seq === null || replay ? undefined : events.find((e) => e.seq > ck.seq!);
+      const clock = advanceClock(ck.clock, now - LAG_MS, ck.target, dt, next ? next.at : null);
+      ck.clock = clock;
+      ck.target = now - LAG_MS;
+      const ph = playhead(events, clock);
+      ck.seq = ph ? ph.cur.seq : ck.seq;
       // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
       // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
       const liveScene = ph ? scenes.get(ph.cur.seq) : null;
@@ -175,7 +201,7 @@ export default function MatchPage() {
       const scene = replay ? replay.scene : liveScene;
       const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
       setAnim((a) => {
-        if (!scene) return { now, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() };
+        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() };
         const same = a.frame?.seq === scene.seq;
         // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
         const jumped = !!a.frame && !same && Math.abs(scene.seq - a.frame.seq) > 1;
@@ -192,14 +218,14 @@ export default function MatchPage() {
         const liveRevealed = replay ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
         // The line-ups follow the live playhead: a replay of something older than a red card must not un-strike the player.
         const liveSentOff = replay && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
-        return { now, frame, startBall, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed };
+        return { now, clock, frame, startBall, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed };
       });
     };
     step();
     return () => cancelAnimationFrame(id);
   }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
   const { now, frame, revealed, liveSentOff } = anim;
-  const ph = playhead(events, now - LAG_MS);
+  const ph = playhead(events, anim.clock);
   // A newly fetched playhead must not inherit the previous scene's reveal verdict:
   // the ticker retains shown/queued items even after a later render removes them.
   const liveRevealed = !!ph && anim.liveSeq === ph.cur.seq && anim.liveRevealed;

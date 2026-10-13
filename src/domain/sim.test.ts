@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
+import { DWELL_MAX_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -207,10 +207,7 @@ describe("frameAt", () => {
       const b = frameAt(s, 1 + (t + 50) / s.ms, m.lineups);
       expect(Math.hypot(a.ball[0] - b.ball[0], a.ball[1] - b.ball[1])).toBeLessThan(2); // the lay-off travels, it doesn't jump
     }
-    // A long gap: still jogging (never a wall-hug), turning 12 short of EITHER goal line, so possession never retreats to the own line.
-    const far = frameAt(s, 1 + 60000 / s.ms, m.lineups);
-    const farther = frameAt(s, 1 + 61000 / s.ms, m.lineups);
-    expect(Math.hypot(farther.ball[0] - far.ball[0], farther.ball[1] - far.ball[1])).toBeGreaterThan(1);
+    // A long gap (stale server): the dwell runs ~6 s and then holds — no end-to-end runs back and forth with no passing.
     const xs: number[] = [];
     for (let sec = 2; sec <= 60; sec += 2) {
       const f = frameAt(s, 1 + (sec * 1000 + 200) / s.ms, m.lineups); // +200: never inside a lay-off's 450 ms
@@ -219,12 +216,36 @@ describe("frameAt", () => {
       expect(f.ball[0]).toBeLessThanOrEqual(Math.max(88, end.ball[0]));
       expect(f.players.filter((p) => p.side === pass.side && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) < 1.5)).toHaveLength(1);
     }
-    expect(Math.min(...xs)).toBeLessThan(20); // 60 s at 4.5 u/s covers the pitch: they reached both turning lines
-    expect(Math.max(...xs)).toBeGreaterThan(80);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan((4.5 * DWELL_MAX_MS) / 1000 + 2);
     // A goal keeps its final frame (plus breathing only).
     const goal = m.events.find((e) => e.t === "goal")!;
     const g = sceneFor(goal, [80, 30], 15000)!;
     expect(frameAt(g, 1 + 2000 / g.ms, m.lineups).ball).toEqual(frameAt(g, 1, m.lineups).ball);
+  });
+
+  it("caps the dwell: deep into a stale gap the carrier holds near the scene end instead of running back and forth", () => {
+    for (const m of ms) {
+      for (const pass of m.events.filter((e) => e.t === "pass" || e.t === "dribble" || e.t === "build_up").slice(0, 6)) {
+        const s = sceneFor(pass, [50, 32], 15000);
+        if (!s || s.flash) continue;
+        const end = frameAt(s, 1, m.lineups).ball;
+        const xs = [];
+        for (let ms2 = 0; ms2 <= 60000; ms2 += 250) xs.push(frameAt(s, 1 + ms2 / s.ms, m.lineups).ball[0]);
+        // Direction reversals over a minute of dwell: at most one turn (near a turning line), never a shuttle.
+        let turns = 0;
+        let dir = 0;
+        for (let i = 1; i < xs.length; i++) {
+          const d = Math.sign(Math.round((xs[i] - xs[i - 1]) * 100));
+          if (d && dir && d !== dir && Math.abs(xs[i] - xs[i - 1]) > 0.5) turns++;
+          if (d) dir = d;
+        }
+        expect(turns).toBeLessThanOrEqual(1);
+        // From 20 s on, frozen and within the capped run of the scene end.
+        const deep = frameAt(s, 1 + 20000 / s.ms, m.lineups);
+        expect(frameAt(s, 1 + 45000 / s.ms, m.lineups).ball).toEqual(deep.ball);
+        expect(Math.abs(deep.ball[0] - end[0])).toBeLessThanOrEqual((4.5 * DWELL_MAX_MS) / 1000 + 2);
+      }
+    }
   });
 
   it("the next scene starts from the dwell endpoint, not its authored first keyframe", () => {

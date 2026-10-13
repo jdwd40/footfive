@@ -1173,6 +1173,59 @@ function tickIfDue($app) {
   }
 }
 
+/**
+ * Live pump (bug: live carrier dribbling back and forth). Since #38 moved progression
+ * off the GET routes, a live match only advanced on the one-minute cron, so its events
+ * reached the DB in ~60 s batches and the pitch had nothing new to play. The pump keeps
+ * the minute's cron invocation alive and runs the SAME lease-guarded tick() about once a
+ * second while a round is live (or about to kick off), so events are published in near
+ * real time. Reads stay read-only; every write still goes through tick()'s single-flight
+ * lease and per-step transactions, so overlapping drivers (the next minute's pump,
+ * /health, admin catch-up, bets) remain safe.
+ */
+var PUMP_STORE_KEY = "ff_live_pump_until";
+
+/** Read-only: is there live play (or a kick-off within ~a minute) worth pumping? */
+function livePumpWanted($app, now) {
+  var t = activeTournament($app);
+  if (!t) return false;
+  var r = currentRound($app, t.id);
+  if (!r) return false;
+  var status = r.get("status");
+  if (status === "live") return true;
+  if (status === "scheduled" || status === "management") return parsePbDate(r.get("scheduled_at")) - now < 65000;
+  return false;
+}
+
+/** Tick ~1/s (faster under FOOTFIVE_TIME_SCALE) for up to `budgetMs` while live play is on. One pump per process. */
+function pumpLive($app, budgetMs) {
+  var start = Date.now();
+  var until = start + budgetMs;
+  try {
+    if (($app.store().get(PUMP_STORE_KEY) || 0) > start) return { skipped: "running" };
+    $app.store().set(PUMP_STORE_KEY, until);
+  } catch (_) {}
+  var interval = Math.max(250, Math.round(1000 / timeScale()));
+  var ticks = 0;
+  try {
+    while (Date.now() + interval < until) {
+      if (!livePumpWanted($app, Date.now())) break;
+      sleep(interval); // PocketBase JSVM global; cron jobs run on their own goroutine
+      try {
+        var r = tick($app, Date.now());
+        if (r && !r.locked && !r.paused) ticks++;
+      } catch (err) {
+        log("live_pump_tick_error", { message: String(err).slice(0, 300) });
+      }
+    }
+  } finally {
+    try {
+      $app.store().set(PUMP_STORE_KEY, 0);
+    } catch (_) {}
+  }
+  return { ticks: ticks, ms: Date.now() - start };
+}
+
 // ------------------------------------------------------------------ projections
 
 function fixtureTeams(fx, teams) {
@@ -1802,6 +1855,8 @@ if (typeof module !== "undefined") {
     ensureTeams: ensureTeams,
     tick: tick,
     tickIfDue: tickIfDue,
+    livePumpWanted: livePumpWanted,
+    pumpLive: pumpLive,
     catchUpWorld: function ($app) {
       return tick($app, Date.now());
     },
