@@ -11,6 +11,10 @@ import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from
 import { countdown, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
+import { startPolling } from "../lib/polling";
+
+/** Match feed cadence; a backlog is still drained in one poll via eventsPage. */
+const MATCH_POLL_MS = 2500;
 
 const STAT_ROWS: Array<[string, number]> = [
   ["Shots", 0],
@@ -81,7 +85,7 @@ export default function MatchPage() {
   const [pref, setPref, sysReduced] = usePref();
   const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
   const [stay, setStay] = useState(false);
-  const refreshMatch = useRef<(() => Promise<void>) | null>(null);
+  const refreshMatch = useRef<(() => Promise<unknown>) | null>(null);
   const clockRef = useRef<{ clock: number | null; target: number | null; seq: number | null }>({ clock: null, target: null, seq: null });
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
   const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
@@ -137,18 +141,20 @@ export default function MatchPage() {
           const seen = new Set(old.map((e) => e.seq));
           return [...old, ...fresh.filter((e) => !seen.has(e.seq))];
         });
+        return true;
       } catch (err) {
         if (cancelled) return;
         reportConnectionFail(err);
         setError(err instanceof Error ? err.message : "Match unavailable");
+        return false;
       } finally {
         inflight = false;
       }
     };
     refreshMatch.current = poll;
     void poll();
-    const id = setInterval(poll, 1200);
-    return () => { cancelled = true; refreshMatch.current = null; clearInterval(id); };
+    const stop = startPolling(poll, MATCH_POLL_MS);
+    return () => { cancelled = true; refreshMatch.current = null; stop(); };
   }, [fixtureId]);
 
   // Scene per event, chained so the ball carries over between scenes, lengths scaled to the match pace.

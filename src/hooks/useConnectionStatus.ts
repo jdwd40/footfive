@@ -2,6 +2,7 @@
  * Shared connection health: ignore aborts/nav/tab-hide; threshold before warning.
  */
 import { useSyncExternalStore } from "react";
+import { isRateLimited } from "../lib/pocketbase";
 
 export type ConnState = "connected" | "reconnecting" | "offline" | "auth";
 
@@ -49,6 +50,8 @@ export function reportConnectionOk() {
 export function reportConnectionFail(err: unknown) {
   if (typeof document !== "undefined" && document.hidden) return;
   if (isAbort(err)) return;
+  // 429 means the server answered (busy), not that we're offline: leave the state alone.
+  if (isRateLimited(err)) return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     store = {
       ...store,

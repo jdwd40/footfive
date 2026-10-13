@@ -5,6 +5,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { footfiveApi, type Bet } from "../lib/pocketbase";
+import { startPolling } from "../lib/polling";
 import { useAuth } from "../lib/auth";
 import { credits } from "../lib/live";
 
@@ -64,15 +65,17 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
           if (fresh) setLastWin(fresh);
         }
         seen.current = new Set(settledWins.map((b) => b.id));
+        return true;
       } catch {
         /* the live store reports connection problems */
+        return false;
       }
     }
     void poll();
-    const id = setInterval(poll, 6000);
+    const stop = startPolling(poll, 6000);
     return () => {
       alive = false;
-      clearInterval(id);
+      stop();
     };
   }, [placed, userId]);
 

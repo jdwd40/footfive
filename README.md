@@ -193,6 +193,10 @@ Admin reset with “must change” → user must complete `/change-password` bef
   120 requests/min per IP on the password-login surfaces above and on the `*:auth` endpoint
   class (429 beyond that, verified on both login surfaces; headroom for NAT/shared IPs,
   bcrypt cost bounds per-IP throughput), plus a general 300 requests/10s per-IP `/api/` budget.
+  The real client IP comes from nginx's `X-Real-IP` via PocketBase's trusted-proxy setting
+  (`pb_migrations/1750000018_trusted_proxy.js`; see `deploy/DEPLOY.md`). On a 429 the client
+  backs off (honouring `Retry-After`), does not count it towards Reconnecting/Offline, and
+  keeps showing the last good data.
   A 429 is throttling, not an auth failure: the frontend preserves a healthy session on 429
   (on `/me` and on auth-refresh alike) and clears it only on definitive rejections —
   auth-refresh 400, `/me` 401, or disabled 403.

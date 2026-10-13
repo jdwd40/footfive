@@ -3,6 +3,9 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatchEvent, MatchView } from "../lib/pocketbase";
 
+/** Mirrors MatchPage MATCH_POLL_MS (the page is imported dynamically after mocks). */
+const MATCH_POLL_MS = 2500;
+
 const team = (n: string) => ({ id: n, slug: n, name: n, abbreviation: n.slice(0, 3).toUpperCase(), primary_color: "#fff" }) as unknown as MatchView["fixture"]["home"];
 const names = (p: string) => Array.from({ length: 5 }, (_, i) => ({ name: `${p} P${i}`, no: i + 1, role: i === 0 ? "gk" : "util", starter: true }));
 const st = { ph: "first_half", sc: [0, 0], pos: 50, x: [[0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0]] } as unknown as MatchView["fixture"]["st"];
@@ -307,7 +310,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     expect(ticker().getByTestId("ticker-current")).toHaveTextContent("Historical goal ticker");
     fireEvent.click(ticker().getByTestId("ticker-toggle"));
     expect(ticker().getByTestId("ticker-feed")).toHaveTextContent("Historical goal ticker");
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(match.mock.calls.at(-1)).toEqual(["fx1", 651, undefined]);
     expect(screen.getByTestId("event-feed").querySelectorAll("li")).toHaveLength(eligible.length);
     cleanup();
@@ -334,7 +337,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     expect(screen.queryByTestId("match-score")).toBeNull();
     expect(screen.queryByTestId("event-feed")).toBeNull();
     expect(screen.getByRole("alert")).toHaveTextContent("Temporary page failure");
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(screen.queryByTestId("match-score")).toBeNull();
     expect(screen.queryByTestId("event-feed")).toBeNull();
     expect(match.mock.calls.map((args) => args[1])).toEqual([0, 300, 0, 300, 600]);
@@ -353,12 +356,12 @@ describe("MatchPage retained history and fixture ticker", () => {
     match.mockResolvedValue(page([ev(2, now - 8000, "Late one"), ev(3, now - 6000, "Late two"), ev(4, now - 4000, "Late three")], now));
     await mount();
     expect(screen.getByTestId("commentary")).toHaveTextContent("Old pass");
-    await act(() => new Promise((resolve) => setTimeout(resolve, 1300)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, MATCH_POLL_MS + 100)));
     expect(screen.getByTestId("commentary")).toHaveTextContent("Late one"); // not straight to the newest
     await act(() => new Promise((resolve) => setTimeout(resolve, 2500)));
     expect(screen.getByTestId("commentary")).toHaveTextContent("Late three"); // caught up within a few seconds
     vi.useRealTimers();
-  });
+  }, 10000);
 
   it("keeps the current timeline during a multi-page missed backlog and commits no partial cursor on failure", async () => {
     vi.useFakeTimers();
@@ -375,12 +378,12 @@ describe("MatchPage retained history and fixture ticker", () => {
     match.mockResolvedValueOnce(page(events.slice(602), now));
     await mount();
     expect(screen.getByTestId("commentary")).toHaveTextContent("History 2");
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(screen.getByTestId("commentary")).toHaveTextContent("History 2");
     expect(screen.getByTestId("event-feed").querySelectorAll("li")).toHaveLength(2);
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(screen.getByTestId("commentary")).toHaveTextContent("History 2");
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(match).toHaveBeenCalledTimes(5); // slow drain is single-flight
     await act(async () => resolvePage(page(events.slice(302, 602), now, true)));
     expect(match.mock.calls.map((args) => args[1])).toEqual([0, 2, 302, 2, 302, 602]);
@@ -446,7 +449,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     await mount();
     fireEvent.click(ticker().getByTestId("ticker-toggle"));
     // A normal incremental poll delivers the result; publication is ahead of the drawn pitch.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 1250)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, MATCH_POLL_MS + 50)));
     vi.setSystemTime(now + 1000 + 1500 + 0.8 * 3800);
     await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
     expect(ticker().queryByTestId("ticker-current")).toBeNull();
@@ -487,7 +490,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     await mount();
     expect(match).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("event-feed")).toBeNull();
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(match).toHaveBeenCalledTimes(2);
   });
 
@@ -531,7 +534,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     await act(async () => oldPage(page([{ ...ev(2, now - 30000, "Old continuation goal"), t: "goal", major: 1 }], now)));
     expect(screen.getByTestId("match-loading")).toBeTruthy();
     expect(screen.queryByText("Old continuation goal")).toBeNull();
-    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
     expect(match).toHaveBeenCalledTimes(4);
     await act(async () => newVisit(page([{ ...ev(1, now - 30000, "New visit goal"), t: "goal", major: 1 }], now)));
     expect(ticker().getByTestId("ticker-current")).toHaveTextContent("New visit goal");

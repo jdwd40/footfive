@@ -5,6 +5,7 @@ import { useSlip } from "../components/BetSlip";
 import { Kit } from "../components/Team";
 import { countdown, credits, ukTime, useLive } from "../lib/live";
 import { footfiveApi, type Bet, type FixtureCard, type MyBets, type WideMarkets } from "../lib/pocketbase";
+import { startPolling } from "../lib/polling";
 
 const STATUS: Record<Bet["status"], { label: string; cls: string }> = {
   open: { label: "Pending", cls: "chip-amber" },
@@ -27,15 +28,16 @@ export default function BettingPage() {
       setMine(m);
       setWide(w);
       setBalance(m.credits);
+      return true;
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Could not load bets");
+      return false;
     }
   }, [setBalance]);
 
   useEffect(() => {
     void load();
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
+    return startPolling(load, 5000);
   }, [load, placed]);
 
   async function topUp() {

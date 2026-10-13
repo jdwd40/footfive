@@ -78,6 +78,32 @@ node scripts/footfive-admin.mjs ensure-admin --username admin --confirm
 
 Forces `must_change_password=true` on bootstrap.
 
+### Trusted proxy (rate limits)
+
+PocketBase rate limits (`1750000015_rate_limits.js`) are per client IP. Behind nginx
+PocketBase only sees `127.0.0.1` unless it trusts a forwarding header, so every player
+would share one budget (playtest symptom: "Too many requests", Offline banner, bet panel gone).
+
+- nginx must send `proxy_set_header X-Real-IP $remote_addr;` on the `/api/` locations
+  (`deploy/nginx.example.conf`). PocketBase is configured to trust exactly that header.
+- New and existing servers get it from `pb_migrations/1750000018_trusted_proxy.js` on the
+  next deploy. To check or set it by hand: Admin UI → Settings → Trusted proxy → headers
+  `X-Real-IP` ("Use leftmost IP" off; it only applies to `X-Forwarded-For`).
+- If you change the nginx header (e.g. to `X-Forwarded-For`), change the PocketBase setting
+  to match. Only trust a header nginx overwrites, or clients can spoof their IP.
+- PocketBase must only listen on localhost (`127.0.0.1:8090`) so the header can't be forged
+  by bypassing nginx.
+
+### Playtest bots and load tests
+
+Never point bots or load tests at the live server: they spend the same per-IP budget as
+real players (and, before the trusted-proxy fix, the same single bucket). Run them against
+a local isolated instance instead — `npm run test:e2e` already starts its own PocketBase on
+`127.0.0.1:8091` with a scratch `pb_data_test` (binary via `scripts/setup-local.sh`). If
+bots need more headroom there, raise the limits on that instance only (Admin UI → Settings →
+Rate limits), not in a migration. Note the account-security e2e step deliberately exhausts
+the login 429 budget, so it runs last.
+
 ## CI/CD (GitHub Actions → VPS)
 
 Repo: https://github.com/jdwd40/footfive  

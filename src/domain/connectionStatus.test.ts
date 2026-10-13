@@ -45,3 +45,26 @@ describe("connection status thresholds", () => {
     expect(getConnectionSnapshot().state).toBe("connected");
   });
 });
+
+describe("connection status on 429", () => {
+  beforeEach(() => {
+    reportConnectionOk();
+  });
+
+  it("does not count rate-limit errors towards reconnecting/offline", () => {
+    for (let i = 0; i < 5; i++) {
+      const err = Object.assign(new Error("Too many requests — retry in a moment."), { status: 429, rateLimited: true });
+      reportConnectionFail(err);
+    }
+    const s = getConnectionSnapshot();
+    expect(s.state).toBe("connected");
+    expect(s.failCount).toBe(0);
+  });
+
+  it("a 429 between real failures leaves the count untouched", () => {
+    reportConnectionFail(new Error("a"));
+    reportConnectionFail(Object.assign(new Error("busy"), { status: 429 }));
+    expect(getConnectionSnapshot().failCount).toBe(1);
+    expect(getConnectionSnapshot().state).toBe("connected");
+  });
+});
