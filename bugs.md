@@ -6,6 +6,7 @@ No blocker in the latest bounded pitch/ends QA; final review and human preview f
 
 ## Fixed — 2026-10-13 gameplay
 
+- #69: backward midfield passing now shows a lay-off, controlled touch and forward release rather than a single retreat; game outcomes and the next event's authored starting position are preserved.
 - #71: crosses show a wide winger and a separate arriving player, with the published header shooter receiving the delivery when that next event is available.
 - #70: through balls show a runner beating a late marker and meeting the ball in space, rather than reusing the short-pass receiver path.
 - #72: tackles, interceptions and turnover passes show a possession contest, the winning side keeps the ball, and a timed WON IT badge marks the win. Same-side keeper distributions retain their existing behaviour.

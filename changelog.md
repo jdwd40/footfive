@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-13 — Constructive midfield lay-offs (#69)
+
+- Backward midfield passes use a receiving touch and hold followed by a forward release into the named receiver. The final ball position remains the published engine endpoint; ordinary forward passes and specialist scenes are unchanged.
+- Intermediate receiving paths follow the ball when rerouted from a previous dwell, preserving contact without adding engine events, randomness or statistics.
+
 ## 2026-10-13 — Cross delivery and arriving headers (#71)
 
 - Crosses show the ground feed to a winger who stays wide, then an elevated delivery to a runner attacking the box. The next published header identifies the arriving player and contact point; if the feeder heads it, one actor carries both phases.
