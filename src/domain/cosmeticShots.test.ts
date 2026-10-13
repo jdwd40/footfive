@@ -64,6 +64,9 @@ function project(events: Ev[], st: State) {
     const c = structuredClone(e); // key order kept: values are replaced in place
     c.seq = renumber.get(e.seq)!;
     if (c.chain !== undefined) c.chain = renumber.get(e.chain!)!;
+    // #74 renamed the same-side pass caption "X takes it off Y" -> "X collects from Y" (text only, same pick() draw);
+    // map it back so the pinned hash still proves every other byte is the original engine's.
+    if (c.t === "pass" && typeof c.text === "string") c.text = c.text.replace(" collects from ", " takes it off ");
     return c;
   });
   const final = structuredClone(st);
