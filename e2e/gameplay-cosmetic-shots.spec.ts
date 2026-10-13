@@ -4,7 +4,8 @@ import type { FixtureCard, LineupPlayer, LiveView, MatchEvent, MatchView, TeamPu
 import { injectAuth } from "./helpers";
 
 // API-mocked actual MatchPage fed with cosmetic attempts the actual engine generates (FF-73): a visible long-range shot, its
-// WIDE/OVER/BLOCKED result shown only at drawn contact, the ball back on the spot real play left it with the side that had it,
+// WIDE/OVER at the goal line and BLOCKED with the named blocker meeting the grounded ball while the result is current, the ball
+// back on the spot real play left it with the side that had it,
 // official score and stats untouched, no ticker leak, and no markets request beyond the panel's own 5 s poll while the
 // fixture's canonical seq stays on the last real event. Rows are published only once their time has come (after the mounted
 // bootstrap), and the fake clock is sampled every 16 ms.
@@ -129,6 +130,12 @@ for (const key of KEYS) {
     const samples: Array<Record<string, unknown>> = [];
     let shotContact = false;
     let badgeFirst: { text: string; dx: number; contact: boolean; elevation: number } | null = null;
+    let badgeFirstAt = 0;
+    // A block's reveal is keyed on the drawn ball (the native gate); the named blocker must meet it while BLOCKED and the block
+    // caption are current — before the bounce takes over — and soon after the badge, with nobody from the shooting side on it.
+    const blockerNo = cResult.t === "block" ? run.lineups[cResult.side as "home" | "away"].find((q) => q.name === cResult.p)!.no : null;
+    let blockerContact: { now: number; elevation: number } | null = null;
+    let opposingRingDuringResult = false;
     let badgeBeforeCaption = false;
     let returned = false;
     let opposingRingDuringReturn = false;
@@ -148,7 +155,8 @@ for (const key of KEYS) {
           const x = Number(c[1]);
           const y = Number(c[2]);
           return { side: kit.getAttribute("stroke") === "#ff00cc" ? "away" : "home", keeper: kit.getAttribute("fill") === "#c6ff00",
-            ring: !!player.querySelector("[data-ring]"), x: flipped ? 100 - x : x, y, distance: Math.hypot(x - bx, y - by) };
+            no: Number(player.querySelector("text")!.textContent), ring: !!player.querySelector("[data-ring]"), x: flipped ? 100 - x : x, y,
+            distance: Math.hypot(x - bx, y - by) };
         });
         return { ball: [flipped ? 100 - bx : bx, by], elevation: by - Number(ballEl.getAttribute("cy")), players,
           badges: Array.from(pitch.querySelectorAll("span")).map((s) => s.textContent ?? "") };
@@ -167,8 +175,17 @@ for (const key of KEYS) {
         const blockerSide = cResult.side!;
         badgeFirst = { text: badgeWord, dx: Math.abs(d.ball[0] - goalLine), elevation: d.elevation,
           contact: d.players.some((p) => p.side === blockerSide && !p.keeper && p.distance <= 1.6) };
+        badgeFirstAt = now;
         if (!caption.includes(cResult.text)) badgeBeforeCaption = true;
         await page.screenshot({ path: testInfo.outputPath("cosmetic-result.png") });
+      }
+      if (blockerNo !== null && badge && caption.includes(cResult.text)) {
+        const named = d.players.find((p) => p.side === cResult.side && p.no === blockerNo);
+        if (!blockerContact && named?.ring && named.distance <= 1.6) {
+          blockerContact = { now, elevation: d.elevation };
+          await page.screenshot({ path: testInfo.outputPath("cosmetic-blocker-contact.png") });
+        }
+        if (d.players.some((p) => p.side === shooting && p.ring)) opposingRingDuringResult = true;
       }
       if (caption.includes(cBounce.text)) {
         const back = Math.hypot(d.ball[0] - origin[0], d.ball[1] - origin[1]) <= 2.5;
@@ -195,8 +212,11 @@ for (const key of KEYS) {
     expect(badgeFirst, `${badgeWord} appears`).not.toBeNull();
     expect(badgeBeforeCaption, "badge and result caption are revealed together").toBe(false);
     if (cResult.t === "block") {
-      expect(badgeFirst!.contact, "BLOCKED only with the blocker in drawn contact").toBe(true);
-      expect(badgeFirst!.elevation, "a block is grounded").toBeLessThan(0.3);
+      expect(blockerContact, "the named blocker meets the ball while BLOCKED and the block caption are current, before the bounce").not.toBeNull();
+      expect(blockerContact!.now - badgeFirstAt, "named blocker contact within 200 ms of the first BLOCKED").toBeLessThanOrEqual(200);
+      expect(badgeFirst!.elevation, "a block is grounded when BLOCKED appears").toBeLessThan(0.3);
+      expect(blockerContact!.elevation, "and when the blocker meets it").toBeLessThan(0.3);
+      expect(opposingRingDuringResult, "nobody from the shooting side has the ball while BLOCKED is current").toBe(false);
     } else expect(badgeFirst!.dx, `${badgeWord} only once the drawn ball reaches the goal line`).toBeLessThanOrEqual(3);
     expect(returned, "ball back on the original spot with the side that had it").toBe(true);
     expect(opposingRingDuringReturn, "possession never passes to the other side on the way back").toBe(false);
@@ -218,7 +238,8 @@ for (const key of KEYS) {
     expect(window.length).toBeLessThanOrEqual(Math.floor((next.at - cShot.at) / 5000) + 1);
     await testInfo.attach("cosmetic-summary", { contentType: "application/json", body: JSON.stringify({
       key, seed: run.seed, phase: prev.st.ph, minute: prev.min, result: badgeWord, rows: run.cos.map((e) => `${e.t}@${e.at - run.prev.at}`),
-      nextReal: `${next.t}@${next.at - prev.at}`, badgeFirst, handover, marketRequestsInRun: window.length, runMs: next.at - cShot.at,
+      nextReal: `${next.t}@${next.at - prev.at}`, badgeFirst,
+      blockerContactGapMs: blockerContact ? blockerContact.now - badgeFirstAt : null, handover, marketRequestsInRun: window.length, runMs: next.at - cShot.at,
       marketRequestsTotal: markets.length, samples: samples.length }) });
     expect(cosmeticInBootstrap, "cosmetic rows arrive only after the mounted bootstrap").toBe(false);
     expect(unexpectedApi).toEqual([]);
