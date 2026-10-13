@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { footfiveApi, type FixtureMarkets, type Market } from "../lib/pocketbase";
+import { startPolling } from "../lib/polling";
 import { useSlip } from "./BetSlip";
 
 /** Live/pre-match markets for one fixture. Re-fetches when the published sequence moves. */
@@ -7,13 +8,25 @@ export default function MarketsPanel({ fixtureId, seq, fixtureLabel, compact = f
   const [data, setData] = useState<FixtureMarkets | null>(null);
   const [error, setError] = useState("");
   const { pick, setPick } = useSlip();
+  const inflight = useRef(false);
+
+  useEffect(() => {
+    setData(null);
+    setError("");
+  }, [fixtureId]);
 
   const load = useCallback(async () => {
+    if (inflight.current) return true;
+    inflight.current = true;
     try {
       setData(await footfiveApi.fixtureMarkets(fixtureId));
       setError("");
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Markets unavailable");
+      return false;
+    } finally {
+      inflight.current = false;
     }
   }, [fixtureId]);
 
@@ -21,12 +34,10 @@ export default function MarketsPanel({ fixtureId, seq, fixtureLabel, compact = f
     void load();
   }, [load, seq]);
 
-  useEffect(() => {
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-  }, [load]);
+  useEffect(() => startPolling(load, 5000), [load]);
 
-  if (error) return <p className="text-sm text-amber">{error}</p>;
+  // Keep the last good markets on a failed refresh; only a never-loaded panel shows the bare error.
+  if (error && !data) return <p className="text-sm text-amber">{error}</p>;
   if (!data) return <p className="text-sm text-muted">Loading markets…</p>;
   if (data.blocked)
     return (
@@ -40,6 +51,11 @@ export default function MarketsPanel({ fixtureId, seq, fixtureLabel, compact = f
   const list = compact ? data.markets.filter((m) => m.key === "winner" || m.key === "next_goal") : data.markets;
   return (
     <div className="space-y-3" data-testid="markets">
+      {error ? (
+        <p className="text-xs text-amber" role="status" data-testid="markets-stale">
+          Couldn't refresh — retrying…
+        </p>
+      ) : null}
       {suspended ? (
         <p className="chip chip-amber" data-testid="markets-suspended">
           {suspended}

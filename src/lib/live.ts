@@ -4,6 +4,7 @@
  */
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { footfiveApi, type LiveView, type PubState } from "./pocketbase";
+import { HIDDEN_POLL_MS, nextPollDelay } from "./polling";
 import { reportConnectionFail, reportConnectionOk, useConnectionStatus } from "../hooks/useConnectionStatus";
 
 /** A client that hasn't heard from the server for this long stops claiming to be live. */
@@ -15,6 +16,7 @@ const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let subs = 0;
 let inflight = false;
+let fails = 0;
 
 function set(p: Partial<Store>) {
   store = { ...store, ...p };
@@ -39,9 +41,11 @@ async function poll() {
     const live = await footfiveApi.live();
     noteServerTime(live.serverTimeMs);
     reportConnectionOk();
+    fails = 0;
     set({ live, error: "", lastOkAt: Date.now() });
   } catch (err) {
     reportConnectionFail(err);
+    fails += 1;
     set({ error: err instanceof Error ? err.message : "Live feed unavailable" });
   } finally {
     inflight = false;
@@ -50,12 +54,18 @@ async function poll() {
 
 function interval() {
   const m = store.live?.mode;
-  if (typeof document !== "undefined" && document.hidden) return 10000;
-  return m === "live" ? 3000 : 5000;
+  if (typeof document !== "undefined" && document.hidden) return HIDDEN_POLL_MS;
+  return nextPollDelay(m === "live" ? 3000 : 5000, fails);
 }
 
 function loop() {
+  if (timer) clearTimeout(timer);
   timer = setTimeout(async () => {
+    timer = null;
+    if (typeof document !== "undefined" && document.hidden) {
+      if (subs > 0) loop(); // paused: skip the request while the tab is hidden
+      return;
+    }
     await poll();
     if (subs > 0) loop();
   }, interval());
@@ -84,7 +94,11 @@ function subscribe(fn: () => void) {
 
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && subs > 0) void poll();
+    // One refresh on return, then the normal cadence (restart the loop, no double poll).
+    if (!document.hidden && subs > 0) {
+      void poll();
+      loop();
+    }
   });
 }
 

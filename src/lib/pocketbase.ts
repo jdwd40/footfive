@@ -190,6 +190,41 @@ export type WorldSnapshot = {
 
 export type BetRequest = { market: string; fixtureId?: string; selection: string; stake: number; odds: number; requestId: string };
 
+export type ApiError = Error & { status?: number; rateLimited?: boolean; retryAfterMs?: number };
+
+/** True for a 429 from the API: the server is busy, not unreachable. */
+export function isRateLimited(err: unknown): boolean {
+  const e = err as ApiError | null;
+  return !!e && typeof e === "object" && (e.rateLimited === true || e.status === 429);
+}
+
+/**
+ * Back-off after a 429: honour Retry-After (seconds or HTTP date, capped at 60 s),
+ * otherwise 3 s doubling per attempt (capped at 20 s), plus up to 1 s jitter.
+ */
+export function rateLimitDelayMs(retryAfter: string | null, attempt = 0, now = Date.now(), rand = Math.random): number {
+  const jitter = Math.floor(rand() * 1000);
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    const ms = Number.isFinite(secs) ? secs * 1000 : Date.parse(retryAfter) - now;
+    if (Number.isFinite(ms) && ms >= 0) return Math.min(ms, 60000) + jitter;
+  }
+  return Math.min(3000 * 2 ** attempt, 20000) + jitter;
+}
+
+let rateLimitedUntil = 0;
+export function noteRateLimited(retryAfter: string | null, attempt = 0) {
+  rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + rateLimitDelayMs(retryAfter, attempt));
+}
+/** Milliseconds left in the shared 429 cooldown (0 when clear). */
+export function rateLimitRemainingMs() {
+  return Math.max(0, rateLimitedUntil - Date.now());
+}
+export function resetRateLimitForTests() {
+  rateLimitedUntil = 0;
+}
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -202,12 +237,17 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers,
   });
+  const isGet = (init?.method || "GET") === "GET";
+  // Share one cooldown across every poller so a 429 slows the whole tab down.
+  if (isGet && rateLimitRemainingMs() > 0) await sleep(rateLimitRemainingMs());
   let res = await request();
-  if (res.status === 429 && (init?.method || "GET") === "GET") {
-    const retryAfter = Number(res.headers.get("Retry-After"));
-    const delay = Number.isFinite(retryAfter) ? Math.min(Math.max(retryAfter * 1000, 250), 3000) : 1000;
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    res = await request();
+  if (res.status === 429) {
+    noteRateLimited(res.headers.get("Retry-After"), 0);
+    if (isGet) {
+      await sleep(rateLimitRemainingMs());
+      res = await request();
+      if (res.status === 429) noteRateLimited(res.headers.get("Retry-After"), 1);
+    }
   }
   if (!res.ok) {
     let msg = res.status === 429 ? "Too many requests — retry in a moment." : res.statusText;
@@ -219,8 +259,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     // Preserve the HTTP status so callers can distinguish a definitive auth
     // rejection (4xx) from offline/network failures (review F4).
-    const err = new Error(msg || `Request failed (${res.status})`) as Error & { status?: number };
+    const err = new Error(msg || `Request failed (${res.status})`) as ApiError;
     err.status = res.status;
+    if (res.status === 429) {
+      err.rateLimited = true;
+      err.retryAfterMs = rateLimitRemainingMs();
+    }
     throw err;
   }
   return res.json() as Promise<T>;
