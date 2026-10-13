@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-13 — Carrier dwell continuity (#68)
+
+- Bounded the presentation-only dwell advance to eight pitch units, easing near the attacking x70 line instead of running into the box and retreating at the next event.
+- Long gaps keep small passing and marking movements rather than freezing after six seconds. Authored event destinations, engine events, scores and RNG are unchanged.
+
 ## 2026-10-05 — Pitch/ends follow-up (implemented; not shipped)
 
 - Modestly larger responsive pitch from 360px upwards; tiny compact pitch retained. Compact actual ticker/scoreboard and completed winner/auto-return chrome keep the pitch, critical HUD and commentary usable in tested scenes without shrinking the enlargement. Below 360px, only after the shown winner, the duplicate external score row is omitted; normal score, FT and PENS remain in the pitch HUD. Detailed shootout board may still require scrolling.

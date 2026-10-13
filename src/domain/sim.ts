@@ -18,13 +18,6 @@ const ANCHORS: Pt[] = [
   [42, 40],
 ];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-/** Reflect `v` into [lo, hi]: a runner who turns at both ends (triangle wave). */
-function fold(v: number, lo: number, hi: number) {
-  const w = hi - lo;
-  if (w <= 0) return lo;
-  const m = (((v - lo) % (2 * w)) + 2 * w) % (2 * w);
-  return lo + (m > w ? 2 * w - m : m);
-}
 /**
  * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
  * `start − ball[0]`, the offset blending out keyframe by keyframe so the destination — which the next scene depends on — is
@@ -69,14 +62,17 @@ function lingers(prev: Scene | undefined, scene: Scene, t: number) {
   return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || LINGERING.has(prev.flash));
 }
 
-/** Dwell choreography: the carrier jogs on at this pace and lays the ball off to a mate every cycle, so a wait between events reads as passing, not a long solo carry. */
-const DWELL_SPEED = 4.5; // units per second (≈ a jog on a 40 m pitch)
+/** Dwell choreography: the carrier jogs on and lays the ball off to a mate every cycle, so a wait between events reads as passing, not a long solo carry. */
+const DWELL_SPEED = 4.5; // units per second as the dwell starts (≈ a jog on a 40 m pitch), easing off as the advance runs out
 const DWELL_CYCLE = 3000; // ms between lay-offs
 const DWELL_PASS = 450; // ms the lay-off takes
 const DWELL_LANE = 6; // lateral gap between the two lanes
-/** Dwell only bridges the normal 1.6–3.3 s gap between events. If the next event is late (stale server, slow poll) the
- * play holds still after this long instead of jogging end to end — a long dwell read as a carrier running back and forth with no passing. */
-export const DWELL_MAX_MS = 6000;
+/** The next event starts where this scene left the ball, so whatever ground the dwell gains is given back at the transition.
+ * The advance is therefore bounded, not timed: at most DWELL_ADVANCE (approached, never passed) and never beyond the attacking
+ * side's DWELL_LINE (x70 for home, x30 for away), so nobody runs into the box ahead of a midfield or build-up event. After that the
+ * two lanes keep laying the ball off where they are, however late the next event is: a long gap circulates, it neither shuttles nor freezes. */
+export const DWELL_ADVANCE = 8;
+export const DWELL_LINE = 70;
 
 /** Possession choreography, separate from hot (actor binding). Ground passes are free flight too.
  * These windows only nominate an actor; Pitch checks the smoothed ball is actually at that player.
@@ -116,15 +112,14 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   let carrier = owner ? owner.side + ":" + owner.no : null;
   const rawOver = Math.max(0, t - 1) * scene.ms;
   if (rawOver > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
-    const over = Math.min(rawOver, DWELL_MAX_MS); // capped: past it everyone holds where the dwell left them
-    // Dwell: two lanes advance at DWELL_SPEED until the next event, turning 12 short of either goal line (never retreating
-    // to the own line). The ball is laid off between the lanes every DWELL_CYCLE, so the two nearest teammates keep passing
-    // instead of one of them carrying forever; the nearest opponent closes to three in front of whoever has it.
+    const over = rawOver;
+    // Dwell: two lanes jog on from the scene end at DWELL_SPEED, easing to a stop within the bounded advance (never turning
+    // back, never past the line). The ball is laid off between the lanes every DWELL_CYCLE, so the two nearest teammates keep
+    // passing instead of one of them carrying forever; the nearest opponent closes to four in front of whoever has it.
     const dir = scene.side === "home" ? 1 : -1;
-    const lo = Math.min(12, b[0]);
-    const hi = Math.max(88, b[0]);
-    const x = fold(b[0] + (dir * DWELL_SPEED * over) / 1000, lo, hi);
-    const mdir = Math.sign(fold(b[0] + (dir * DWELL_SPEED * (over + 1)) / 1000, lo, hi) - x) || dir; // which way they're running right now
+    const room = clamp(DWELL_LINE - (dir > 0 ? b[0] : 100 - b[0]), 0, DWELL_ADVANCE); // a ball already past the line is carried neither on nor back
+    const x = b[0] + (room ? dir * room * (1 - Math.exp(-(DWELL_SPEED * over) / 1000 / room)) : 0);
+    const mdir = dir; // the way they face: the advance only ever goes forward
     const laneY = clamp(b[1] + (b[1] > 32 ? -DWELL_LANE : DWELL_LANE), 2, 62); // second lane, towards the middle of the pitch
     const cyc = over % DWELL_CYCLE;
     const n = Math.floor(over / DWELL_CYCLE);
