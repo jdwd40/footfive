@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — More attempts, unchanged outcomes (#73)
+
+- Added occasional cosmetic long-range shots ending wide, over or blocked, followed by a return off the boards to the original possession and ball spot. They use a separate seed/minute stream and carry `cos: 1`; official shots, shots on target, danger, scoring chances and outcomes stay unchanged.
+- Cosmetic runs occupy spare time after completed open play, without moving real event times or changing match clock pauses; missed and blocked results each have time to reveal before the return. Fixture cards, pricing and quote validation retain the last real event and clock anchor.
+- Determinism guards pin all real event fields and final state across 200 seeds to the original engine; only integer transport sequence and chain references are normalised after removing cosmetic rows. At the live eight-second pace the baseline adds 2.39 attempts per match.
+
 ## 2026-10-13 — Constructive midfield lay-offs (#69)
 
 - Backward midfield passes use a receiving touch and hold followed by a forward release into the named receiver. The final ball position remains the published engine endpoint; ordinary forward passes and specialist scenes are unchanged.

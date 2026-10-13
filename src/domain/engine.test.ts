@@ -311,11 +311,14 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
   const BASE_SHA256 = "eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b";
   const liveTiming = eng.buildTiming(8000, 1);
   type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
+  // Issue #73 transport projection: cosmetic rows (`cos: 1`) are dropped and the real rows' integer transport `seq` is
+  // renumbered 1..n in order — exactly the original sequence, since cosmetic rows only ever sit between real ones. Nothing
+  // else is normalised; cosmeticShots.test.ts pins the full payload and final state under the same projection.
   const run = (seed: number) => {
     const st = eng.createMatch({ fixtureId: "f" + seed, seed, kickoffAt: 0, home: team(seed % 16), away: team((seed * 7 + 3) % 16), timing: liveTiming });
-    const events = eng.advanceTo(st, 1e13) as Array<Ev & { p?: string; p2?: string }>;
+    const events = (eng.advanceTo(st, 1e13) as Array<Ev & { p?: string; p2?: string; cos?: number }>).filter((x) => !x.cos);
     const final: Final = { score: st.score, winner: st.winner, by: st.by, so: st.so, rc: st.rc };
-    return { tuples: events.map((x) => [x.seq, x.at, x.t, x.p, x.p2, x.st.sc, x.st.so]), final };
+    return { tuples: events.map((x, i) => [i + 1, x.at, x.t, x.p, x.p2, x.st.sc, x.st.so]), final };
   };
 
   it("200 seeds: identical event tuples, final state and RNG draw count", () => {
