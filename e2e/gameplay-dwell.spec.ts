@@ -54,6 +54,12 @@ test("long carrier dwell stays moving and bounded, then enters midfield continuo
   });
   await page.goto("/match/ff68-dwell");
   const ball = page.getByTestId("pitch").locator('svg circle[stroke="#111"]');
+  // Auth/bootstrap and the initial animation frame also use scheduled work. Advance
+  // the paused clock until the real pitch mounts, then keep sampling deterministically.
+  await expect.poll(async () => {
+    await page.clock.runFor(50);
+    return ball.count();
+  }).toBe(1);
   await expect(ball).toBeVisible();
   await expect(page.getByTestId("commentary")).toContainText(events[0].text);
   const position = async () => ball.evaluate((node) => [Number(node.getAttribute("cx")), Number(node.getAttribute("cy"))]);
@@ -61,7 +67,7 @@ test("long carrier dwell stays moving and bounded, then enters midfield continuo
     await expect(page.getByTestId("match-score")).toHaveText("0–0");
     await expect(page.getByTestId("hud-score")).toContainText("0–0");
     await expect(page.getByTestId("commentary")).not.toContainText(events[2].text);
-    await expect(page.getByTestId("event-feed")).not.toContainText(events[2].text);
+    await expect(page.getByTestId("event-feed").filter({ hasText: events[2].text })).toHaveCount(0);
     await expect(page.getByTestId("goal-banner")).toHaveCount(0);
   };
   const dwell: number[][] = [];
