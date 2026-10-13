@@ -3,7 +3,7 @@
  * One poller per tab; the UI never advances matches, it only renders published state.
  */
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { footfiveApi, type LiveView, type PubState } from "./pocketbase";
+import { footfiveApi, type LiveView, type MatchEvent, type PubState } from "./pocketbase";
 import { HIDDEN_POLL_MS, nextPollDelay } from "./polling";
 import { reportConnectionFail, reportConnectionOk, useConnectionStatus } from "../hooks/useConnectionStatus";
 
@@ -139,6 +139,13 @@ export function clockText(sec: number | null) {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** The event's time on the same mm:ss clock the pitch shows (its published clock), so the two read alike. Shootout kicks: "P". */
+export function eventTime(e: MatchEvent): string {
+  if (e.t.startsWith("shootout")) return "P";
+  const s = e.st?.clk?.s;
+  return s == null ? `${e.min}′` : clockText(Math.max(0, Math.floor(s)));
 }
 
 /** Short broadcast label + tone for a public phase. */
