@@ -27,7 +27,7 @@ function icon(t: string) {
  * Round-wide recent-events ticker. Each new item holds for a readable time; when several
  * arrive together they queue (bounded) and the expandable feed lets users catch up.
  */
-export default function Ticker({ items, label = "Round events" }: { items: TickerItem[]; label?: string }) {
+export default function Ticker({ items, label = "Round events", badge = "Live feed", empty = "Goals, penalties, red cards and results from every match appear here." }: { items: TickerItem[]; label?: string; badge?: string; empty?: string }) {
   const [shown, setShown] = useState<TickerItem | null>(items[0] || null);
   const [open, setOpen] = useState(false);
   const queue = useRef<TickerItem[]>([]);
@@ -56,7 +56,7 @@ export default function Ticker({ items, label = "Round events" }: { items: Ticke
   return (
     <section className="panel overflow-hidden" aria-label={label} data-testid="ticker">
       <div className="flex items-stretch">
-        <div className="flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white">Live feed</div>
+        <div className="flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white" data-testid="ticker-badge">{badge}</div>
         <div className="min-w-0 flex-1 px-3 py-2.5" aria-live="polite">
           {shown ? (
             <Link key={shown.id} to={`/match/${shown.fixtureId}`} className={`event-enter flex items-center gap-2 font-semibold ${tone(shown.t)}`} data-testid="ticker-current">
@@ -64,7 +64,7 @@ export default function Ticker({ items, label = "Round events" }: { items: Ticke
               <span className="truncate">{shown.text}</span>
             </Link>
           ) : (
-            <span className="text-sm text-muted">Goals, penalties, red cards and results from every match appear here.</span>
+            <span className="text-sm text-muted">{empty}</span>
           )}
         </div>
         <button type="button" className="shrink-0 border-l border-line px-3 text-xs text-muted hover:text-white" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="ticker-toggle">

@@ -8,7 +8,7 @@ import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
-import { countdown, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
+import { countdown, eventTime, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
 import { startPolling } from "../lib/polling";
@@ -307,8 +307,8 @@ export default function MatchPage() {
           </Link>
         ))}
       </div>
-      <Ticker key={fx.id} items={recent} label="Match events" />
-      {otherTicker.length ? <Ticker items={otherTicker} label="Other matches" /> : null}
+      <Ticker key={fx.id} items={recent} label="Match events" badge="This match" empty="Goals, cards and penalties from this match appear here." />
+      {otherTicker.length ? <Ticker items={otherTicker} label="Other matches" badge="Around the grounds" empty="Goals, penalties, red cards and results from the other matches appear here." /> : null}
 
       <Scoreboard view={shown} now={now} stale={stale} />
       {finished && !stay ? (
@@ -344,7 +344,10 @@ export default function MatchPage() {
           {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={shown} events={seen} /> : null}
 
           <section className="panel p-3">
-            <h2 className="panel-title mb-2">Match events</h2>
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <h2 className="panel-title">Match events</h2>
+              <span className="text-xs text-muted">Times are the match clock</span>
+            </div>
             <EventFeed
               events={seen}
               view={view}
@@ -586,7 +589,7 @@ const REPLAYABLE = new Set(["goal", "penalty_goal", "save", "woodwork", "miss", 
 
 function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: MatchView; onReplay: (e: MatchEvent) => void }) {
   const list = events.filter((e) => FEED_TYPES.has(e.t)).reverse();
-  if (!list.length) return <p className="text-sm text-muted">{view.fixture.status === "scheduled" ? "The match hasn't started." : "Waiting for the first action…"}</p>;
+  if (!list.length) return <p className="text-sm text-muted">{view.fixture.status === "scheduled" ? "Not kicked off yet. Goals, cards, chances and every key moment will be listed here from kick-off." : "Waiting for the first action…"}</p>;
   return (
     <ol className="max-h-80 space-y-1 overflow-y-auto pr-1 text-sm" data-testid="event-feed">
       {list.map((e) => {
@@ -594,7 +597,7 @@ function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: Mat
         const big = e.t === "goal" || e.t === "penalty_goal" || e.t === "red_card" || e.t === "match_end" || e.t === "shootout_end";
         return (
           <li key={e.seq} className={`flex items-start gap-2 rounded px-1 py-0.5 ${big ? "bg-lime/10" : ""}`}>
-            <span className="w-9 shrink-0 tabular text-xs text-muted">{e.t.startsWith("shootout") ? "P" : `${e.min}′`}</span>
+            <span className="w-11 shrink-0 tabular text-xs text-muted" data-testid="event-time">{eventTime(e)}</span>
             {side ? <Abbr team={side} away={e.side === "away"} /> : <span className="w-[2.6rem] shrink-0" />}
             <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>{e.text}</span>
             {REPLAYABLE.has(e.t) ? (

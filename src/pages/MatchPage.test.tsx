@@ -585,3 +585,33 @@ describe("MatchPage auto-return after full time", () => {
     expect(screen.queryByTestId("auto-return")).toBeNull();
   });
 });
+
+describe("MatchPage labels and timing (#78)", () => {
+  afterEach(() => {
+    h.live = null;
+  });
+  it("this match's ticker and the other matches' ticker carry distinct visible labels, neither 'Live feed'", async () => {
+    const now = Date.now();
+    h.live = { mode: "live", fixtures: [], ticker: [{ id: "t1", fixtureId: "fx2", t: "goal", text: "Elsewhere: GOAL" }] };
+    await mount(view([ev(1, now - 30000, "Pass")], null, now));
+    const badges = screen.getAllByTestId("ticker-badge").map((b) => b.textContent);
+    expect(badges).toEqual(["This match", "Around the grounds"]);
+    expect(screen.queryByText("Live feed")).toBeNull();
+    expect(within(screen.getByRole("region", { name: "Other matches" })).getByTestId("ticker-badge")).toHaveTextContent("Around the grounds");
+  });
+  it("event times use the pitch clock's mm:ss and the list says so", async () => {
+    const now = Date.now();
+    const at = (s: number) => ({ ...st!, clk: { s, run: 1 as const } });
+    await mount(view([{ ...ev(1, now - 30000, "Early"), t: "shot", min: 13, st: at(754.6) }], null, now));
+    expect(screen.getByTestId("event-time").textContent).toBe("12:34");
+    expect(screen.getByText("Times are the match clock")).toBeTruthy();
+  });
+  it("before kick-off Match events explains what will appear", async () => {
+    const now = Date.now();
+    const v = view([], null, now);
+    v.fixture = { ...v.fixture, status: "scheduled", st: null } as unknown as MatchView["fixture"];
+    await mount(v);
+    expect(screen.queryByText("The match hasn't started.")).toBeNull();
+    expect(screen.getByText(/Not kicked off yet/)).toBeTruthy();
+  });
+});
