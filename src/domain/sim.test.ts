@@ -359,6 +359,46 @@ describe("frameAt", () => {
     }
   });
 
+  it.each(["home", "away"] as const)("%s turnover after 13s of opposing dwell gives the named winner contact before the receiver at 16ms", (side) => {
+    const opposing = side === "home" ? "away" : "home";
+    const lineups = {
+      home: Array.from({ length: 5 }, (_, i) => ({ name: `Home P${i}`, no: i + 1, role: i === 0 ? "gk" : "util", starter: true })),
+      away: Array.from({ length: 5 }, (_, i) => ({ name: `Away P${i}`, no: i + 1, role: i === 0 ? "gk" : "util", starter: true })),
+    };
+    const label = (s: "home" | "away", n: number) => `${s === "home" ? "Home" : "Away"} P${n}`;
+    const point = (x: number): Pt => [side === "home" ? x : 100 - x, 32];
+    const previous: MatchEvent = { seq: 9400, at: 0, t: "pass", min: 1, side: opposing,
+      p: label(opposing, 3), p2: label(opposing, 4), from: point(60), ball: point(75), text: "prior pass", st: ms[0].events[0].st };
+    const pass = sceneFor(previous, point(60), 15000)!;
+    let drawn: Frame | null = null;
+    const dwellEnd = pass.ms + 13000;
+    for (let elapsed = 0; elapsed < dwellEnd; elapsed += 16) {
+      drawn = smooth(drawn, frameAt(pass, elapsed / pass.ms, lineups), 16);
+    }
+    drawn = smooth(drawn, frameAt(pass, dwellEnd / pass.ms, lineups), dwellEnd % 16);
+    const startBall: Pt = [...drawn.ball];
+    expect(Math.hypot(startBall[0] - point(75)[0], startBall[1] - 32)).toBeGreaterThan(6);
+    const event: MatchEvent = { ...previous, seq: 9401, at: dwellEnd, side, turn: 1,
+      p: label(side, 3), p2: label(side, 4), from: point(75), ball: point(45), text: "turnover" };
+    const scene = sceneFor(event, point(75), 15000)!;
+    const authored = JSON.stringify(scene);
+    const won = frameAt(scene, scene.won!, lineups, undefined, 0, startBall);
+    const named = won.players.find((p) => p.side === side && p.name === event.p)!;
+    expect(Math.hypot(named.x - won.ball[0], named.y - won.ball[1]), "named winner follows the rerouted challenge contact").toBeLessThanOrEqual(1.6);
+    const contacts: string[] = [];
+    for (let elapsed = 0; elapsed <= scene.ms + 1000; elapsed += 16) {
+      drawn = smooth(drawn, frameAt(scene, elapsed / scene.ms, lineups, undefined, 0, startBall), 16);
+      const holder = drawn.players.find((p) => p.side === side && drawn!.carrier === `${side}:${p.no}` && drawn!.lift < 0.05 && Math.hypot(p.x - drawn!.ball[0], p.y - drawn!.ball[1]) <= 1.6);
+      if (holder && contacts.at(-1) !== holder.name) contacts.push(holder.name);
+    }
+    expect(contacts[0], "the first winning-side ring belongs to the named challenge winner").toBe(event.p);
+    expect(contacts).toContain(event.p2);
+    const end = frameAt(scene, 1, lineups, undefined, 0, startBall).ball;
+    expect(end[0]).toBeCloseTo(point(45)[0], 4);
+    expect(end[1]).toBeCloseTo(point(45)[1], 4);
+    expect(JSON.stringify(scene)).toBe(authored);
+  });
+
   it("the next scene starts from the dwell endpoint, not its authored first keyframe", () => {
     const m = ms[0];
     const i = m.events.findIndex((e, k) => e.t === "pass" && !!sceneFor(m.events[k + 1], [50, 32], 15000));

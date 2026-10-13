@@ -22,6 +22,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
  * `start − ball[0]`, the offset blending out keyframe by keyframe so the destination — which the next scene depends on — is
  * untouched and the ball never doubles back via the authored route. Points already off the pitch (a net) stay put.
+ * A challenge's winning actor follows that same offset through contact, so he can collect the rerouted ball.
  * The scene object itself stays shared and unmutated.
  */
 function fromStart(scene: Scene, start: Pt): Scene {
@@ -38,7 +39,10 @@ function fromStart(scene: Scene, start: Pt): Scene {
   };
   const near = scene.actors.filter((a) => a.side !== "ref" && !a.keeper).sort((a, b) => Math.hypot(a.path[0][0] - x0, a.path[0][1] - y0) - Math.hypot(b.path[0][0] - x0, b.path[0][1] - y0))[0];
   const onBall = near && Math.hypot(near.path[0][0] - x0, near.path[0][1] - y0) < 3 ? near : null;
-  return { ...scene, ball: blend(scene.ball), actors: scene.actors.map((a) => (a === onBall ? { ...a, path: blend(a.path) } : a)) };
+  return { ...scene, ball: blend(scene.ball), actors: scene.actors.map((a) => {
+    const winner = scene.won !== undefined && a.side === scene.side && (a.id === "win" || a.id === "p");
+    return a === onBall || winner ? { ...a, path: blend(a.path) } : a;
+  }) };
 }
 const other = (s?: Side | null): Side => (s === "home" ? "away" : "home");
 const PEN_ARC = new Set(["penalty_setup", "shootout_setup", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
