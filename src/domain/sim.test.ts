@@ -1,8 +1,8 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_ADVANCE, DWELL_LINE, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
+import { FULL_CAM, sample, sceneFor, short, type Pt, type Scene } from "./scenes";
+import { DWELL_ADVANCE, DWELL_LINE, WON_MS, calmCam, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -635,5 +635,24 @@ describe("playhead", () => {
     expect(after.cur).toBe(before.cur);
     expect(after.elapsed).toBe(1250);
     expect(before.elapsed).toBe(1250);
+  });
+});
+
+describe("final-third camera (#81)", () => {
+  const shot = { key: "1", seq: 1, type: "shot", ms: 1000, ball: [[80, 30], [85, 32]] as Pt[], actors: [], caption: "", side: "home", cam: [40, 5, 64, (64 * 77) / 108] } as Scene;
+  it("eases into the zoom and back out rather than cutting", () => {
+    const zoom = frameAt(shot, 0.5, null);
+    const wide = { ...zoom, cam: FULL_CAM };
+    const step = smooth(wide, zoom, 16);
+    expect(step.cam[2]).toBeLessThan(FULL_CAM[2]);
+    expect(step.cam[2]).toBeGreaterThan(zoom.cam[2]);
+    const back = smooth(zoom, { ...zoom, type: "pass", cam: FULL_CAM }, 16);
+    expect(back.cam[2]).toBeGreaterThan(zoom.cam[2]);
+    expect(back.cam[2]).toBeLessThan(FULL_CAM[2]);
+  });
+  it("reduced motion holds the full pitch for a zoomed moment", () => {
+    const f = frameAt(shot, 1, null);
+    expect(calmCam(f).cam).toEqual(FULL_CAM);
+    expect(calmCam({ ...f, type: "penalty_setup" }).cam).toEqual(f.cam);
   });
 });

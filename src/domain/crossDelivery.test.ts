@@ -7,7 +7,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sample, sampleN, sceneFor, short, type Actor, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, sample, sampleN, sceneFor, short, type Actor, type Pt, type Scene } from "./scenes";
 import { frameAt, type Frame, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
@@ -180,7 +180,8 @@ describe("crosses are a wide delivery with a separate runner attacking the box (
         key: `${c.seq}`, seq: c.seq, type: "cross", side: c.side, who: c.p, caption: c.text, score: c.st.sc, phase: c.st.ph,
       });
       expect(s.flash ?? null).toBeNull();
-      for (const k of ["impact", "won", "focus", "cam"] as const) expect(s[k], k).toBeUndefined();
+      for (const k of ["impact", "won", "focus"] as const) expect(s[k], k).toBeUndefined();
+      expect(s.cam === undefined || s.cam[2] < FULL_CAM[2], "cam: final-third zoom (#81) or full pitch").toBe(true);
       expect(s.ms).toBe(2000);
     }
     expect(scene(c, n, 8000).ms).toBe(Math.round(2000 * (8000 / 15000)));
