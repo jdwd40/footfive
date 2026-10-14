@@ -1,0 +1,340 @@
+/**
+ * Issue 18: actual authenticated actions against disposable PocketBase 0.28.4.
+ * node tests/integration/command-charge-atomicity.mjs
+ * COMMAND_CHARGE_PB_PORT=8299; COMMAND_CHARGE_HOOKS optionally selects baseline hooks.
+ * Only temporary hooks/data are changed. External SQLite fixture writes happen
+ * with our PB stopped. Faults/delays wrap persistence, never replace action logic.
+ */
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import { createServer } from "node:net";
+import path from "node:path";
+import { fileURLToPath, URL as NodeURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+
+const ROOT = fileURLToPath(new NodeURL("../../", import.meta.url));
+const PORT = Number(process.env.COMMAND_CHARGE_PB_PORT || 8299);
+assert(Number.isInteger(PORT) && PORT > 1024 && PORT <= 65535, "invalid disposable PB port");
+const BASE = `http://127.0.0.1:${PORT}`;
+const HOOKS_SOURCE = process.env.COMMAND_CHARGE_HOOKS || path.join(ROOT, "pocketbase/pb_hooks");
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "ff-command-charge-"));
+const DATA = path.join(TMP, "pb_data");
+const HOOKS = path.join(TMP, "pb_hooks");
+const FAULT = path.join(TMP, "fault.json");
+const LOG = path.join(TMP, "pb.log");
+const results = [];
+let child;
+let user;
+let freshUser;
+let team;
+let ownFixture;
+let foreignFixture;
+let players;
+let foreignPlayer;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const faultHooks = `
+onRecordCreate(function(e) {
+  var spec = null;
+  try { spec = JSON.parse(toString($os.readFile($os.getenv("FF_CHARGE_FAULT")))); } catch (_) {}
+  if (spec && spec.op === "create" && spec.collection === e.record.collection().name) {
+    console.log("ff18-injected:" + spec.id);
+    throw new Error("injected-command-charge:" + spec.id);
+  }
+  e.next();
+});
+onRecordUpdate(function(e) {
+  var spec = null;
+  try { spec = JSON.parse(toString($os.readFile($os.getenv("FF_CHARGE_FAULT")))); } catch (_) {}
+  if (spec && spec.op === "update" && spec.collection === e.record.collection().name && (!spec.record || spec.record === e.record.id)) {
+    if (spec.delayMs) {
+      var until = Date.now() + spec.delayMs;
+      while (Date.now() < until) {}
+    } else {
+      console.log("ff18-injected:" + spec.id);
+      throw new Error("injected-command-charge:" + spec.id);
+    }
+  }
+  e.next();
+});
+`;
+
+function query(sql, ...params) {
+  const db = new DatabaseSync(path.join(DATA, "data.db"), { readOnly: true });
+  try { return db.prepare(sql).all(...params).map((row) => ({ ...row })); }
+  finally { db.close(); }
+}
+function execute(statements) {
+  assert(!child, "fixture writes require stopped PocketBase");
+  const db = new DatabaseSync(path.join(DATA, "data.db"));
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    for (const [sql, params = []] of statements) db.prepare(sql).run(...params);
+    db.exec("COMMIT");
+  } finally { db.close(); }
+}
+async function request(route, token, body) {
+  const response = await fetch(BASE + route, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { ...(token ? { Authorization: token } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const data = await response.json();
+  return { status: response.status, data };
+}
+const spend = (body, actor = user) => request("/api/footfive/command-charge/spend", actor.token, body);
+const charge = (actor = user) => query("SELECT * FROM command_charge WHERE user = ?", actor.id);
+const points = (actor = user) => charge(actor)[0]?.points;
+function state() {
+  return Object.fromEntries(["command_charge", "proball_players", "proball_teams", "tactical_scans"]
+    .map((table) => [table, query(`SELECT * FROM ${table} ORDER BY id`)]));
+}
+function disarm() { fs.rmSync(FAULT, { force: true }); }
+function arm(spec) { fs.writeFileSync(FAULT, JSON.stringify(spec)); }
+async function start() {
+  await new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen({ port: PORT, host: "127.0.0.1", exclusive: true }, () => probe.close(resolve));
+  });
+  child = spawn(path.join(ROOT, "pocketbase/pocketbase"), ["serve", `--http=127.0.0.1:${PORT}`, `--dir=${DATA}`, `--hooksDir=${HOOKS}`, `--migrationsDir=${path.join(ROOT, "pocketbase/pb_migrations")}`], {
+    env: { ...process.env, FOOTFIVE_TIME_SCALE: "1", FF_CHARGE_FAULT: FAULT }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let failure;
+  child.on("error", (error) => { failure = error; });
+  child.stdout.on("data", (data) => fs.appendFileSync(LOG, data));
+  child.stderr.on("data", (data) => fs.appendFileSync(LOG, data));
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (failure) throw failure;
+    assert.equal(child.exitCode, null, "owned PB exited before readiness (port may be occupied)");
+    try {
+      const response = await fetch(BASE + "/api/health", { signal: AbortSignal.timeout(500) });
+      if (response.ok) {
+        // Identify our temp directory through its real migrated DB, not a foreign service.
+        if (fs.existsSync(path.join(DATA, "data.db"))) {
+          query("SELECT id FROM world LIMIT 1"); // Schema ready; the designed health tick below ensures world data.
+          return;
+        }
+      }
+    } catch { /* Wait for this owned process's bootstrap. */ }
+    await sleep(50);
+  }
+  throw new Error("owned PocketBase readiness timeout");
+}
+async function stop() {
+  if (!child) return;
+  const current = child;
+  if (current.exitCode === null && current.signalCode === null) {
+    const done = once(current, "close");
+    current.kill("SIGTERM");
+    const timer = setTimeout(() => current.kill("SIGKILL"), 3000);
+    try { await done; } finally { clearTimeout(timer); }
+  }
+  child = undefined;
+}
+async function configure(extra = [], balance = 5, lastAt = new Date(Date.now() + 3600_000).toISOString()) {
+  disarm();
+  await stop();
+  execute([
+    ["UPDATE world SET progression_paused = 1, pace = 'normal' WHERE key = 'main'"],
+    ["UPDATE command_charge SET points = ?, last_regen_at = ? WHERE user = ?", [balance, lastAt, user.id]],
+    ["UPDATE proball_players SET condition = 40, energy = 40, energy_updated_at = ? WHERE team = ?", [new Date(Date.now() + 3600_000).toISOString(), team.id]],
+    ["UPDATE proball_teams SET overclock_ready = 0, overclock_fixture = '' WHERE id = ?", [team.id]],
+    ["DELETE FROM tactical_scans"],
+    ...extra,
+  ]);
+  await start();
+}
+async function test(name, fn) {
+  try {
+    await fn();
+    results.push({ name, status: "PASS" });
+    console.log("PASS", name);
+  } catch (error) {
+    results.push({ name, status: "FAIL", error: error.stack || String(error) });
+    console.error("FAIL", name, error.message);
+  } finally { disarm(); }
+}
+function rejected(response) {
+  assert.equal(response.status, 400, JSON.stringify(response.data));
+  assert.equal(typeof response.data.message, "string");
+  assert(response.data.message.length > 0);
+}
+async function register(email) {
+  const created = await request("/api/collections/users/records", null, { email, password: "testpass99", passwordConfirm: "testpass99", display_name: "Charge tester" });
+  assert.equal(created.status, 200, JSON.stringify(created.data));
+  const login = await request("/api/collections/users/auth-with-password", null, { identity: email, password: "testpass99" });
+  assert.equal(login.status, 200, JSON.stringify(login.data));
+  return { id: login.data.record.id, token: login.data.token };
+}
+
+async function main() {
+  console.log(`Command Charge atomicity: ${HOOKS_SOURCE}, port ${PORT}, evidence ${TMP}`);
+  fs.mkdirSync(DATA);
+  fs.cpSync(HOOKS_SOURCE, HOOKS, { recursive: true });
+  fs.writeFileSync(path.join(HOOKS, "zz_charge_faults.pb.js"), faultHooks);
+  await start();
+  user = await register("charge-main@test.local");
+  freshUser = await register("charge-fresh@test.local");
+  assert.equal((await request("/api/footfive/health")).status, 200);
+  await stop();
+  const teams = query("SELECT * FROM proball_teams ORDER BY sort_order");
+  team = teams[0];
+  execute([
+    ["UPDATE world SET progression_paused = 1, pace = 'normal' WHERE key = 'main'"],
+    ["UPDATE proball_teams SET manager = ?, manager_mode = 'manual' WHERE id = ?", [user.id, team.id]],
+    ["UPDATE proball_teams SET manager = ?, manager_mode = 'manual' WHERE id = ?", [freshUser.id, teams[1].id]],
+  ]);
+  players = query("SELECT * FROM proball_players WHERE team = ? ORDER BY sort_order", team.id);
+  foreignPlayer = query("SELECT * FROM proball_players WHERE team != ? LIMIT 1", team.id)[0];
+  ownFixture = query("SELECT * FROM shared_fixtures WHERE home_team = ? OR away_team = ? LIMIT 1", team.id, team.id)[0];
+  foreignFixture = query("SELECT * FROM shared_fixtures WHERE home_team != ? AND away_team != ? LIMIT 1", team.id, team.id)[0];
+  assert(players.length >= 5 && ownFixture && foreignFixture, "complete real world fixture required");
+  await start();
+  assert.equal((await request("/api/footfive/command-charge", user.token)).status, 200);
+
+  for (const [name, body] of [
+    ["missing player parameter", { action: "rapid_charge" }],
+    ["missing player record", { action: "rapid_charge", playerId: "missingplayer00" }],
+    ["foreign player", { action: "field_repair", playerId: foreignPlayer.id }],
+    ["missing scan fixture", { action: "tactical_scan", fixtureId: "missingfixture0" }],
+    ["foreign scan fixture", { action: "tactical_scan", fixtureId: foreignFixture.id }],
+    ["no upcoming scan fixture", { action: "tactical_scan" }],
+  ]) await test(name + " spends nothing", async () => {
+    const extra = name.startsWith("no upcoming") ? [["UPDATE shared_fixtures SET status = 'finished' WHERE home_team = ? OR away_team = ?", [team.id, team.id]]] : [];
+    await configure(extra);
+    const before = state();
+    rejected(await spend(body));
+    assert.deepEqual(state(), before);
+    if (extra.length) await configure([["UPDATE shared_fixtures SET status = 'scheduled' WHERE id = ?", [ownFixture.id]]]);
+  });
+
+  for (const action of ["toString", "constructor", "__proto__"]) await test(`inherited action ${action} is cleanly rejected`, async () => {
+    await configure();
+    const before = state();
+    const response = await spend({ action });
+    rejected(response);
+    assert.match(response.data.message, /unknown action/i);
+    assert.deepEqual(state(), before);
+  });
+
+  for (const action of ["rapid_charge", "field_repair", "tactical_scan", "overclock"]) await test(`${action} retains its cost and effect`, async () => {
+    await configure();
+    const response = await spend({ action, playerId: players[0].id, fixtureId: ownFixture.id });
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(points(), action === "overclock" ? 3 : 4);
+    const player = query("SELECT * FROM proball_players WHERE id = ?", players[0].id)[0];
+    if (action === "rapid_charge") assert.equal(player.energy, 58);
+    if (action === "field_repair") assert.equal(player.condition, 55);
+    if (action === "tactical_scan") {
+      const scans = query("SELECT * FROM tactical_scans WHERE user = ?", user.id);
+      assert.equal(scans.length, 1);
+      assert.equal(scans[0].fixture_id, ownFixture.id);
+      assert.deepEqual(JSON.parse(scans[0].report_json), response.data.report);
+    }
+    if (action === "overclock") {
+      assert.equal(query("SELECT overclock_ready FROM proball_teams WHERE id = ?", team.id)[0].overclock_ready, 1);
+      assert(query("SELECT energy FROM proball_players WHERE team = ? AND is_starter = 1", team.id).every((row) => row.energy === 32));
+    }
+  });
+
+  for (const [name, action, collection, op, record] of [
+    ["player update", "rapid_charge", "proball_players", "update", players[0].id],
+    ["scan insert", "tactical_scan", "tactical_scans", "create", null],
+    ["late overclock team save", "overclock", "proball_teams", "update", team.id],
+  ]) await test(`${name} fault rolls back charge and every effect`, async () => {
+    await configure();
+    const before = state();
+    arm({ id: name, collection, op, record });
+    const response = await spend({ action, playerId: players[0].id, fixtureId: ownFixture.id });
+    rejected(response);
+    // Goja/PB may wrap a persistence exception; use the real hook's unique log
+    // marker to prove the requested late fault was reached, not its public text.
+    const deadline = Date.now() + 1000;
+    while (!fs.readFileSync(LOG, "utf8").includes("ff18-injected:" + name) && Date.now() < deadline) await sleep(10);
+    assert(fs.readFileSync(LOG, "utf8").includes("ff18-injected:" + name), "requested fault did not run");
+    assert.deepEqual(state(), before);
+  });
+
+  async function concurrentCase(balance, regen, firstUse) {
+    const actor = firstUse ? freshUser : user;
+    const actorTeam = firstUse ? query("SELECT id FROM proball_teams WHERE manager = ?", actor.id)[0].id : team.id;
+    const targets = query("SELECT id FROM proball_players WHERE team = ? ORDER BY sort_order LIMIT 5", actorTeam);
+    const count = firstUse ? 3 : 5;
+    const expectedSuccess = firstUse ? 3 : balance + (regen ? 1 : 0);
+    const lastAt = new Date(Date.now() - 900_000 - 10_000).toISOString();
+    await configure([
+      ["UPDATE proball_players SET condition = 0 WHERE team = ?", [actorTeam]],
+      ...(firstUse ? [["DELETE FROM command_charge WHERE user = ?", [actor.id]]] : []),
+    ], balance, regen ? lastAt : undefined);
+    if (regen) {
+      // Independently prove both public readers include the one earned point;
+      // their response need not be materialised into the stored charge row.
+      const direct = await request("/api/footfive/command-charge", actor.token);
+      const world = await request("/api/footfive/world", actor.token);
+      assert.equal(direct.status, 200);
+      assert.equal(world.status, 200);
+      assert.equal(direct.data.points, 2);
+      assert.equal(world.data.commandCharge.points, 2);
+    }
+    arm({ collection: "command_charge", op: "update", delayMs: 120 });
+    const actions = targets.slice(0, count).map((p) => spend({ action: "field_repair", playerId: p.id }, actor));
+    const reads = (regen || firstUse) ? Array.from({ length: 4 }, (_, i) => request(i % 2 ? "/api/footfive/world" : "/api/footfive/command-charge", actor.token)) : [];
+    const [responses, readResponses] = await Promise.all([Promise.all(actions), Promise.all(reads)]);
+    assert.equal(responses.filter((r) => r.status === 200).length, expectedSuccess, JSON.stringify(responses));
+    for (const response of responses.filter((r) => r.status !== 200)) {
+      rejected(response);
+      assert.match(response.data.message, /insufficient command charge/i);
+    }
+    for (const response of readResponses) {
+      assert.equal(response.status, 200, JSON.stringify(response.data));
+      const value = response.data.commandCharge || response.data;
+      assert(Number.isInteger(value.points) && value.points >= 0 && value.points <= (firstUse ? 5 : expectedSuccess));
+    }
+    assert.equal(charge(actor).length, 1);
+    assert.equal(points(actor), (firstUse ? 5 : expectedSuccess) - expectedSuccess);
+    targets.slice(0, count).forEach((p, i) => {
+      assert.equal(query("SELECT condition FROM proball_players WHERE id = ?", p.id)[0].condition, responses[i].status === 200 ? 15 : 0);
+    });
+    const persisted = charge(actor)[0];
+    const finalRead = await request("/api/footfive/command-charge", actor.token);
+    assert.equal(finalRead.status, 200);
+    assert.equal(finalRead.data.points, persisted.points, "reading must not restore spent credit");
+    assert.equal(points(actor), persisted.points);
+  }
+  await test("parallel actions cannot overspend a two-point balance", () => concurrentCase(2, false, false));
+  await test("regeneration GET/world reads racing spends cannot restore credit", () => concurrentCase(1, true, false));
+  await test("first-use GET/world/spend race creates one row and reconciles effects", () => concurrentCase(5, false, true));
+
+  await test("spending from regenerated full charge discards banked regen time", async () => {
+    await configure([], 5, new Date(Date.now() - 3600_000).toISOString());
+    const before = Date.now();
+    const response = await spend({ action: "overclock" });
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(points(), 3);
+    const saved = charge()[0];
+    const resetAt = Date.parse(saved.last_regen_at.replace(" ", "T"));
+    await sleep(1000); // Exercise the specified subsequent read, well before a new point is due.
+    const later = await request("/api/footfive/command-charge", user.token);
+    assert.equal(later.status, 200);
+    assert.equal(later.data.points, 3, `banked regen restored points; persisted clock ${saved.last_regen_at}`);
+    assert.equal(points(), 3);
+    assert(resetAt >= before - 10 && resetAt <= Date.now(), `regen clock not reset at spend: ${saved.last_regen_at}`);
+  });
+}
+
+try { await main(); }
+catch (error) { results.push({ name: "suite setup", status: "FAIL", error: error.stack || String(error) }); console.error(error); }
+finally {
+  disarm();
+  await stop();
+  fs.writeFileSync(path.join(TMP, "results.json"), JSON.stringify({ hooks: HOOKS_SOURCE, results }, null, 2));
+}
+const failed = results.filter((r) => r.status === "FAIL").length;
+console.log(`${results.length - failed}/${results.length} cases passed; evidence ${TMP}; owned PB stopped`);
+process.exitCode = failed ? 1 : 0;

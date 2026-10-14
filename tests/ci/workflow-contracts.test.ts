@@ -182,6 +182,19 @@ describe("footfive-ci.yml contracts", () => {
     expect(readFileSync(path.join(root, "tests/integration/world-setup-atomicity.mjs"), "utf8")).toContain('from "node:sqlite"');
   });
 
+  it("gates the API job on the real Command Charge suite after verified PocketBase installation", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => new RegExp(`^ {8}run: ${run}$`, "m").test(step));
+    const charge = steps.filter((step) => /^ {8}run: npm run test:command-charge$/m.test(step));
+    expect(charge).toHaveLength(1);
+    expect(charge[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(at("npm run test:command-charge")).toBeGreaterThan(at("bash scripts\\/fetch-pocketbase\\.sh"));
+    expect(at("npm run test:world-setup")).toBeGreaterThan(-1); // the world-setup gate stays
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:command-charge"]).toBe("node tests/integration/command-charge-atomicity.mjs");
+    expect(readFileSync(path.join(root, "tests/integration/command-charge-atomicity.mjs"), "utf8")).toContain("COMMAND_CHARGE_PB_PORT");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

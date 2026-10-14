@@ -55,6 +55,8 @@ jobs:
         run: bash scripts/fetch-pocketbase.sh
       - name: World setup atomicity (disposable PocketBase)
         run: npm run test:world-setup
+      - name: Command Charge atomicity (disposable PocketBase)
+        run: npm run test:command-charge
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test
