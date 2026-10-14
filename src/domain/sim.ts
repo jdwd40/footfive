@@ -29,13 +29,25 @@ export function possession(scene: Scene): Side | null {
  * `bx`/`by` in that same frame. With the ball, the whole block advances with it: defenders step up behind the ball, forwards run
  * ahead of it, so the shape carries up the field as the ball progresses. Without it, the old gentle drift towards the ball.
  */
-export function shapeAt(i: number, bx: number, by: number, attacking: boolean): Pt {
+export function shapeAt(i: number, bx: number, by: number, attacking: boolean, defending = false): Pt {
   const [ax, ay] = ANCHORS[i];
-  if (!attacking) return [clamp(ax + (bx - ax) * 0.3, 1, 99), clamp(ay + (by - ay) * 0.3, 2, 62)];
   const fwd = i >= 3;
-  const push = (bx - 30) * (fwd ? 0.75 : 0.6); // the block moves up with the ball
-  const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4, 4, fwd ? 94 : Math.max(8, bx - 4));
-  return [x, clamp(ay + (by - ay) * 0.25, 2, 62)];
+  if (attacking) {
+    const push = (bx - 30) * (fwd ? 0.75 : 0.6); // the block moves up with the ball
+    const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4, 4, fwd ? 94 : Math.max(8, bx - 4));
+    // Off the ball (#103): supporting runners find space — nobody stands in the carrier's lane; a forward offers width.
+    let y = ay + (by - ay) * 0.25;
+    if (Math.abs(y - by) < 9) y = by + (y >= by ? 9 : -9);
+    if (y < 4 || y > 60) y = by + (y < by ? 9 : -9);
+    return [x, clamp(y, 2, 62)];
+  }
+  if (defending) {
+    // Off the ball (#103): defenders track goal-side of the ball and squeeze across to it; forwards drop in to screen.
+    const x = fwd ? clamp(ax + (bx - ax) * 0.5, 6, Math.max(10, bx + 6)) : clamp(Math.min(ax + (bx - ax) * 0.45, bx - 5), 4, 80);
+    const y = ay + (by - ay) * (fwd ? 0.35 : 0.55);
+    return [x, clamp(y, 2, 62)];
+  }
+  return [clamp(ax + (bx - ax) * 0.3, 1, 99), clamp(ay + (by - ay) * 0.3, 2, 62)];
 }
 /**
  * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
@@ -238,7 +250,7 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
       let x = ax;
       let y = clamp(ay + (b[1] - ay) * 0.4, 2, 62);
       if (!gk) {
-        const [sx, sy] = shapeAt(Math.min(i, 4), own(b[0]), b[1], poss === side && side !== backOff);
+        const [sx, sy] = shapeAt(Math.min(i, 4), own(b[0]), b[1], poss === side && side !== backOff, !!poss && poss !== side && side !== backOff);
         x = own(sx);
         y = sy;
       }
