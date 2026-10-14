@@ -1,4 +1,6 @@
 /** #102-#107: fluid open play — team shape, off-ball movement, touch variety, tempo, no pauses, cross → shot continuity. */
+import { createRequire } from "node:module";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, touchStyle, type Pt } from "./scenes";
 import { frameAt, smooth, type Lineups } from "./sim";
@@ -129,5 +131,41 @@ describe("#106 long balls, runs and fluid motion", () => {
       expect(b.ball).toEqual(a.ball);
       a.players.forEach((p, i) => expect(Math.hypot(p.x - b.players[i].x, p.y - b.players[i].y)).toBeLessThan(0.02));
     }
+  });
+});
+
+describe("#107 a runner who meets a cross heads it at once", () => {
+  const require = createRequire(import.meta.url);
+  const lib = (f: string) => require(path.resolve(__dirname, "../../pocketbase/pb_hooks/lib/" + f));
+  const eng = lib("matchEngine.js");
+  const { TEAMS } = lib("teams.js");
+  const { defaultStarters } = lib("tournament.js");
+  const team = (i: number) => { const t = TEAMS[i]; return { id: t.slug, name: t.name, abbr: t.abbreviation, grade: t.grade, players: defaultStarters(t.players) }; };
+  it("cross → header → result: the ball never stands still in the box and never doubles back", () => {
+    let n = 0;
+    for (let i = 0; i < 12; i++) {
+      const st = eng.createMatch({ fixtureId: "f" + i, seed: 2000 + i, kickoffAt: 0, home: team(i % 16), away: team((i * 5 + 1) % 16), timing: eng.buildTiming(15000, 1) });
+      const evs: MatchEvent[] = eng.advanceTo(st, 1e12);
+      let prev: Pt = [50, 32];
+      for (let j = 0; j < evs.length; j++) {
+        const e = evs[j];
+        const s = sceneFor(e, prev, 15000, evs[j + 1]);
+        if (!s) continue;
+        if (e.t === "shot" && e.header && evs[j - 1]?.t === "cross") {
+          n++;
+          const box = e.ball as Pt;
+          expect(s.ball[0]).toEqual(box);
+          const gx = e.side === "home" ? 100 : 0;
+          const toGoal = (p: Pt) => Math.abs(gx - p[0]);
+          // Moving from the first frame up to the result event (published 1200 ms in, ≈ 0.92 of the scene).
+          for (let t = 0; t <= 0.9; t += 0.05) expect(toGoal(sample(s.ball, t + 0.02)), `#${e.seq} t=${t.toFixed(2)}`).toBeLessThan(toGoal(sample(s.ball, t)));
+          const r = sceneFor(evs[j + 1], s.ball[s.ball.length - 1], 15000, evs[j + 2])!;
+          expect(r.ball[0]).toEqual(s.ball[s.ball.length - 1]); // the result carries on from where the header left it
+          expect(toGoal(r.ball[1]), `${evs[j + 1].t} ${JSON.stringify(r.ball)} from ${JSON.stringify(evs[j + 1].from)} box ${JSON.stringify(box)}`).toBeLessThanOrEqual(toGoal(r.ball[0]) + 1e-9);
+        }
+        prev = s.ball[s.ball.length - 1];
+      }
+    }
+    expect(n).toBeGreaterThan(5);
   });
 });
