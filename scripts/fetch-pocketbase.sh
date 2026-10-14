@@ -33,7 +33,8 @@ if [[ -n ${PB_VERSION:-} && $PB_VERSION != "$version" ]]; then
 fi
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+stage=
+trap 'rm -rf "$tmp"; if [[ -n $stage ]]; then rm -f "$stage"; fi' EXIT
 url="https://github.com/pocketbase/pocketbase/releases/download/v${version}/${asset}"
 echo "Downloading PocketBase v${version} (linux_${arch})..."
 curl -fsSL --retry 3 -o "$tmp/$asset" "$url"
@@ -58,5 +59,10 @@ if [[ $reported != "pocketbase version $version" ]]; then
 fi
 
 mkdir -p "$dest"
-install -m 755 "$tmp/x/pocketbase" "$dest/pocketbase"
+# Stage a complete copy beside the target, then rename it into place: a failed or
+# partial write is removed on exit and never replaces the existing binary.
+stage=$(mktemp "$dest/.pocketbase.XXXXXX")
+install -m 755 "$tmp/x/pocketbase" "$stage"
+mv -f "$stage" "$dest/pocketbase"
+stage=
 echo "Installed $reported (linux_${arch}, sha256 $expected) at $dest/pocketbase"

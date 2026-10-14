@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "vitest";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ const officialPins = fileURLToPath(new NodeURL("./pocketbase-release.sha256", im
 const asset = (arch) => `pocketbase_0.28.4_linux_${arch}.zip`;
 const releaseUrl = (arch) => `https://github.com/pocketbase/pocketbase/releases/download/v0.28.4/${asset(arch)}`;
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
+const realInstall = spawnSync("bash", ["-c", "command -v install"], { encoding: "utf8" }).stdout.trim();
 // Fake release binary: records that it was executed, then reports its version.
 const binary = (version) => `#!/bin/sh\necho ran >> "$FETCH_TEST_RAN"\necho "pocketbase version ${version}"\n`;
 
@@ -33,7 +34,7 @@ function zip(dir, name, files) {
 
 // Run a verbatim copy of the helper beside a test pin file, with curl and uname
 // replaced by fakes that serve local archives. No network access.
-function fetchPb({ served = {}, pins, machine = "x86_64", curlFails = false, env = {}, existing } = {}) {
+function fetchPb({ served = {}, pins, machine = "x86_64", curlFails = false, env = {}, existing, limitInstall = false } = {}) {
   const dir = scratch();
   for (const sub of ["scripts", "bin", "served"]) mkdirSync(path.join(dir, sub));
   copyFileSync(helper, path.join(dir, "scripts/fetch-pocketbase.sh"));
@@ -61,6 +62,8 @@ if (${curlFails} || !fs.existsSync(source)) process.exit(22);
 fs.copyFileSync(source, args[args.indexOf('-o') + 1]);
 `, { mode: 0o700 });
   writeFileSync(path.join(dir, "bin/uname"), `#!/bin/sh\necho ${machine}\n`, { mode: 0o700 });
+  // The real install under a 1 KiB file-size limit: larger writes fail part-way.
+  if (limitInstall) writeFileSync(path.join(dir, "bin/install"), `#!/bin/bash\nulimit -c 0\nulimit -f 1\nexec ${realInstall} "$@"\n`, { mode: 0o700 });
   const ran = path.join(dir, "ran");
   const result = spawnSync("bash", [path.join(dir, "scripts/fetch-pocketbase.sh")], {
     encoding: "utf8", timeout: 20000,
@@ -71,6 +74,7 @@ fs.copyFileSync(source, args[args.indexOf('-o') + 1]);
     result, archives, installed: existsSync(installed) ? readFileSync(installed, "utf8") : null,
     mode: existsSync(installed) ? statSync(installed).mode : 0,
     executed: existsSync(ran), curls: JSON.parse(readFileSync(state, "utf8")),
+    listing: existsSync(dest) ? readdirSync(dest).sort() : [],
   };
 }
 
@@ -112,6 +116,21 @@ test("a checksum-matching archive whose binary is another version is not install
   expect(r.result.status).toBe(1);
   expect(r.result.stderr).toContain("binary reports 'pocketbase version 0.29.0'");
   expect(r.installed).toBeNull();
+});
+
+test("a failed install after verification keeps the existing binary and leaves no partial file", () => {
+  const large = { amd64: { pocketbase: binary("0.28.4") + `#${"x".repeat(8192)}\n`, "CHANGELOG.md": "amd64" } };
+  const pins = (a) => `${sha256(a.amd64)}  ${asset("amd64")}\n`;
+  const failed = fetchPb({ served: large, pins, existing: "previous binary", limitInstall: true });
+  expect(failed.result.status).not.toBe(0);
+  expect(failed.executed).toBe(true); // checksum, extraction and version check had passed
+  expect(failed.installed).toBe("previous binary");
+  expect(failed.listing).toEqual(["pocketbase"]);
+  const replaced = fetchPb({ served: large, pins, existing: "previous binary" });
+  expect(replaced.result.status, replaced.result.stderr).toBe(0);
+  expect(replaced.installed).toBe(large.amd64.pocketbase);
+  expect(replaced.mode & 0o777).toBe(0o755);
+  expect(replaced.listing).toEqual(["pocketbase"]);
 });
 
 test("a failed download installs nothing", () => {
