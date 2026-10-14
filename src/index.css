@@ -309,7 +309,7 @@ h3,
   .match-page:has([data-testid="final-result"]) [aria-label="Highlights"] { position: absolute; top: 8px; right: 8px; }
 }
 @media (min-width: 360px) {
-  .match-page { margin-inline: -4px; --pitch-chrome: 328px; }
+  .match-page { margin-inline: -4px; --pitch-chrome: 368px; }
   .match-pitch-panel { padding: 4px; }
 }
 @media (min-width: 640px) {
@@ -318,6 +318,9 @@ h3,
 @media (min-width: 1024px) {
   .match-score-row { padding-block: 2px; }
   .match-score-row [data-testid="match-score"] { font-size: 40px; }
+  /* Desktop (#8/#55): size the pitch so pitch + its rows (score/legend, message strip, commentary) fill one
+     viewport once scrolled to, and take the full column width — the camera aspect never changes. */
+  .match-page { --pitch-chrome: 160px; }
 }
 
 main {

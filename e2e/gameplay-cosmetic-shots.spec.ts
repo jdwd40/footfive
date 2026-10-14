@@ -159,7 +159,8 @@ for (const key of KEYS) {
             distance: Math.hypot(x - bx, y - by) };
         });
         return { ball: [flipped ? 100 - bx : bx, by], elevation: by - Number(ballEl.getAttribute("cy")), players,
-          badges: Array.from(pitch.querySelectorAll("span")).map((s) => s.textContent ?? "") };
+          // Result badges sit in the message strip under the pitch, off the playing surface.
+          badges: Array.from(pitch.ownerDocument.querySelectorAll('[data-testid="pitch-strip"] span')).map((s) => s.textContent ?? "") };
       }, flip);
       const caption = (await page.getByTestId("commentary").textContent()) ?? "";
       const badge = d.badges.includes(badgeWord);

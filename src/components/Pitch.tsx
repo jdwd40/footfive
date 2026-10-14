@@ -79,18 +79,40 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
         ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber", big: false }
         : null;
 
+  // Messages live in strips above/below the pitch, never on the playing surface: on small screens an overlay hid the play (#52).
+  const flashText = frame && flash
+    ? flash === "goal"
+      ? frame.type === "shootout_kick" && frame.pens
+        ? `GOAL! ${frame.pens[0]}–${frame.pens[1]}`
+        : "GOAL!"
+      : flash === "card"
+        ? frame.type === "red_card"
+          ? "RED CARD"
+          : "BOOKED"
+        : BADGE[flash]
+    : null;
+  const pill = "event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg";
+
   return (
     <>
-      <div className="mb-1 flex gap-3 font-display text-[10px] font-bold tracking-wider text-muted" data-testid="kit-legend">
-        <span className="flex items-center gap-1">
-          <i className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: hc }} /> {home.abbreviation}
-        </span>
-        <span className="flex items-center gap-1">
-          <i className="inline-block h-2.5 w-2.5 rounded-full bg-[#f4f7ff]" style={{ boxShadow: `0 0 0 2px ${ac}` }} /> {away.abbreviation}
-        </span>
+      <div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pitch-top">
+        {hud ? (
+          <div className="flex items-center gap-2 rounded-md bg-black/60 px-2 py-0.5 font-display text-[11px] font-bold tracking-wider text-white sm:text-xs" data-testid="pitch-hud">
+            {hud}
+          </div>
+        ) : null}
+        <div className="flex gap-3 font-display text-[10px] font-bold tracking-wider text-muted" data-testid="kit-legend">
+          <span className="flex items-center gap-1">
+            <i className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: hc }} /> {home.abbreviation}
+          </span>
+          <span className="flex items-center gap-1">
+            <i className="inline-block h-2.5 w-2.5 rounded-full bg-[#f4f7ff]" style={{ boxShadow: `0 0 0 2px ${ac}` }} /> {away.abbreviation}
+          </span>
+        </div>
+        {replay ? <span className="chip chip-amber ml-auto">Replay</span> : null}
       </div>
       {/* Keep the camera aspect stable. Responsive chrome/insets live in CSS; tiny screens retain the old cap. */}
-      <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: `max(260px, calc((100vh - var(--pitch-chrome, 360px)) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))` }} data-testid="pitch">
+      <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: `max(260px, calc((100vh - var(--pitch-chrome, 400px)) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))` }} data-testid="pitch">
         <svg viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
@@ -144,69 +166,52 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
 
         {flash === "goal" ? <circle cx={ball[0]} cy={32} r={9} fill="url(#glow)" opacity={0.7} /> : null}
       </svg>
+      </div>
 
-      {banner ? (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30 transition-opacity duration-1000" style={dim ? { opacity: 0.85 } : undefined} data-testid={banner.id}>
-          {glow ? (
-            <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
-              {Array.from({ length: 24 }, (_, i) => (
-                <i key={i} style={{ left: `${(i * 4.3 + 2) % 100}%`, background: i % 3 ? glow : "#fff", animationDelay: `${(i % 6) * 0.15}s` }} />
-              ))}
+      {/* Message strip: fixed height so the layout never jumps; the same cues and animations as the old overlays. */}
+      <div className="pitch-strip relative mx-auto mt-1 flex min-h-[2.75rem] w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-lg text-center" data-testid="pitch-strip">
+        {banner ? (
+          <div className={`pointer-events-none relative w-full rounded-lg bg-black/40 px-2 py-1 transition-opacity duration-1000 ${banner.cls}`} style={dim ? { opacity: 0.85 } : undefined} data-testid={banner.id}>
+            {glow ? (
+              <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
+                {Array.from({ length: 24 }, (_, i) => (
+                  <i key={i} style={{ left: `${(i * 4.3 + 2) % 100}%`, background: i % 3 ? glow : "#fff", animationDelay: `${(i % 6) * 0.15}s` }} />
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-baseline justify-center gap-x-3">
+              <span className={`font-display font-black ${banner.big ? "text-2xl sm:text-4xl" : "text-lg sm:text-2xl"}`} style={glow ? { textShadow: `0 0 12px ${glow}, 0 0 28px ${glow}` } : undefined}>
+                {banner.title}
+              </span>
+              {banner.sub ? <span className="font-display text-lg font-black tabular sm:text-2xl">{banner.sub}</span> : null}
+              {banner.who ? <span className="text-sm font-bold sm:text-base">{banner.who}</span> : null}
             </div>
-          ) : null}
-          <div className={`text-center ${banner.cls}`}>
-            <div className={`font-display font-black ${banner.big ? "text-5xl" : "text-4xl"} sm:text-6xl`} style={glow ? { textShadow: `0 0 18px ${glow}, 0 0 40px ${glow}` } : undefined}>
-              {banner.title}
-            </div>
-            {banner.sub ? <div className="mt-1 font-display text-2xl font-black tabular sm:text-3xl">{banner.sub}</div> : null}
-            {banner.who ? <div className="mt-1 text-sm font-bold sm:text-base">{banner.who}</div> : null}
           </div>
-        </div>
-      ) : frame && flash ? (
-        <div className="pointer-events-none absolute inset-x-0 top-9 flex justify-center">
-          <span
-            className={`event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg ${
-              flash === "goal" ? "bg-lime text-ink" : flash === "save" ? "bg-cyan text-ink" : flash === "card" ? "bg-live text-white" : "bg-amber text-ink"
-            }`}
-          >
-            {flash === "goal"
-              ? frame.type === "shootout_kick" && frame.pens
-                ? `GOAL! ${frame.pens[0]}–${frame.pens[1]}`
-                : "GOAL!"
-              : flash === "card"
-                ? frame.type === "red_card"
-                  ? "RED CARD"
-                  : "BOOKED"
-                : BADGE[flash]}
-          </span>
-        </div>
-      ) : null}
-      {frame?.won && !banner ? (
-        // WON IT: a challenge cue, not a result — in the winning side's colour, under any result badge still showing.
-        <div className={`pointer-events-none absolute inset-x-0 ${flash ? "top-[4.25rem]" : "top-9"} flex justify-center`}>
-          <span className="event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg" style={{ background: frame.won === "home" ? hc : ac, color: textOn(frame.won === "home" ? hc : ac) }} data-testid="won-badge">
-            WON IT
-          </span>
-        </div>
-      ) : null}
-      {hud ? (
-        <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-2 rounded-md bg-black/60 px-2 py-1 font-display text-[11px] font-bold tracking-wider text-white shadow-lg sm:text-xs" data-testid="pitch-hud">
-          {hud}
-        </div>
-      ) : null}
-      {strip ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 py-0.5 text-center font-display text-[11px] font-bold tracking-widest text-white" data-testid="pen-strip">
-          {strip}
-        </div>
-      ) : null}
-      {pen ? (
-        <div className={`pointer-events-none absolute inset-x-0 ${strip ? "bottom-7" : "bottom-3"} flex justify-center px-2`}>
-          <span className={`goal-pop rounded-md px-3 py-1 text-center font-display font-black tracking-wide shadow-lg ${pen.cls}`} data-testid="pen-banner">
-            {pen.text}
-          </span>
-        </div>
-      ) : null}
-        {replay ? <span className="chip chip-amber absolute right-2 top-2">Replay</span> : null}
+        ) : flashText || frame?.won || pen ? (
+          <div className="pointer-events-none flex flex-wrap items-center justify-center gap-2 px-2 py-1">
+            {flashText ? (
+              <span className={`${pill} ${flash === "goal" ? "bg-lime text-ink" : flash === "save" ? "bg-cyan text-ink" : flash === "card" ? "bg-live text-white" : "bg-amber text-ink"}`} data-testid="pitch-flash">
+                {flashText}
+              </span>
+            ) : null}
+            {frame?.won ? (
+              // WON IT: a challenge cue, not a result — in the winning side's colour, beside any result badge still showing.
+              <span className={pill} style={{ background: frame.won === "home" ? hc : ac, color: textOn(frame.won === "home" ? hc : ac) }} data-testid="won-badge">
+                WON IT
+              </span>
+            ) : null}
+            {pen ? (
+              <span className={`goal-pop rounded-md px-3 py-1 text-center font-display font-black tracking-wide shadow-lg ${pen.cls}`} data-testid="pen-banner">
+                {pen.text}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {strip ? (
+          <div className="pointer-events-none w-full rounded-md bg-black/60 py-0.5 text-center font-display text-[11px] font-bold tracking-widest text-white" data-testid="pen-strip">
+            {strip}
+          </div>
+        ) : null}
       </div>
     </>
   );
