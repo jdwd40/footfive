@@ -142,10 +142,27 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: M
   if (s) s.tempo = tempoFor(e, s);
   // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.
   if (s && (s.ball[0][0] !== prevBall[0] || s.ball[0][1] !== prevBall[1])) {
+    // #107: the previous scene already struck it a little way along this scene's first leg (a header off a cross): carry on from
+    // there instead of a lead-in back to the strike point, so the ball never doubles back.
+    if (s.ball.length > 1 && onLeg(s.ball[0], s.ball[1], prevBall)) {
+      s.ball = [prevBall, ...s.ball.slice(1)];
+      return s;
+    }
     s.ball = [prevBall, ...s.ball];
     if (s.ballHeight) s.ballHeight = [s.ballHeight[0], ...s.ballHeight];
   }
   return s;
+}
+
+/** Is `p` part-way along a → b (strictly after a, before b, within 2.5 of the line)? */
+function onLeg(a: Pt, b: Pt, p: Pt) {
+  const vx = b[0] - a[0];
+  const vy = b[1] - a[1];
+  const len2 = vx * vx + vy * vy;
+  if (len2 < 1e-6) return false;
+  const u = ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / len2;
+  const perp = Math.abs((p[0] - a[0]) * vy - (p[1] - a[1]) * vx) / Math.sqrt(len2);
+  return u > 0 && u < 1 && perp < 2.5;
 }
 
 function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
@@ -396,6 +413,23 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
     }
     case "shot": {
       const shotFrom = ball;
+      if (e.header) {
+        // #107: the runner meets the cross and heads it at once — the ball leaves his head towards goal from the first frame, no
+        // stand-still in the box. It covers only the first stretch (the result scene carries on from there, see onLeg).
+        const aim: Pt = [goalX(atk), GOAL_Y];
+        const gkH = keeperSpot(def);
+        return {
+          ...base,
+          ms: d(1300),
+          ball: [shotFrom, lerp(shotFrom, aim, 0.1), lerp(shotFrom, aim, 0.2)],
+          ballHeight: [0.6, 0.55, 0.5],
+          actors: [
+            { id: "s", side: atk, label: short(e.p), path: [shotFrom, lerp(shotFrom, aim, 0.06), lerp(shotFrom, aim, 0.08)] },
+            { id: "gk", side: def, keeper: true, path: [gkH, [gkH[0] + toward(atk, -1.5), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.15], [gkH[0] + toward(atk, -2), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.2]] },
+            { id: "d", side: def, path: [clampPt([shotFrom[0] + toward(atk, 6), shotFrom[1] + 5]), clampPt([shotFrom[0] + toward(atk, 4), shotFrom[1] + 2]), clampPt([shotFrom[0] + toward(atk, 3), shotFrom[1] + 1])] },
+          ],
+        };
+      }
       return {
         ...base,
         ms: d(1300),
