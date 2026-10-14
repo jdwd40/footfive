@@ -195,6 +195,20 @@ describe("footfive-ci.yml contracts", () => {
     expect(readFileSync(path.join(root, "tests/integration/command-charge-atomicity.mjs"), "utf8")).toContain("COMMAND_CHARGE_PB_PORT");
   });
 
+  it("gates the API job on the real lineup suite after the Command Charge suite", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => new RegExp(`^ {8}run: ${run}$`, "m").test(step));
+    const lineup = steps.filter((step) => /^ {8}run: npm run test:lineup$/m.test(step));
+    expect(lineup).toHaveLength(1);
+    expect(lineup[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(at("npm run test:lineup")).toBeGreaterThan(at("bash scripts\\/fetch-pocketbase\\.sh"));
+    expect(at("npm run test:lineup")).toBeGreaterThan(at("npm run test:command-charge"));
+    expect(at("npm run test:command-charge")).toBeGreaterThan(-1); // the Command Charge gate stays
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:lineup"]).toBe("node tests/integration/lineup-atomicity.mjs");
+    expect(readFileSync(path.join(root, "tests/integration/lineup-atomicity.mjs"), "utf8")).toContain("LINEUP_PB_PORT");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

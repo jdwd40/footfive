@@ -57,6 +57,8 @@ jobs:
         run: npm run test:world-setup
       - name: Command Charge atomicity (disposable PocketBase)
         run: npm run test:command-charge
+      - name: Lineup atomicity (disposable PocketBase)
+        run: npm run test:lineup
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test

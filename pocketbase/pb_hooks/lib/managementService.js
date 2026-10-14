@@ -395,42 +395,80 @@ function applyWearDelta($app, players) {
   }
 }
 
+/**
+ * Save the starting five (distinct owned players, at least one goalkeeper) and the subs
+ * (omitted, null or a list of distinct owned non-starters; reserves fill the rest in
+ * roster order). The manager, roster and every id are checked on fresh reads before any
+ * write, and all players are saved in one transaction, so a rejected or failed save
+ * changes nothing and kick-off never freezes half a lineup.
+ */
 function setLineup($app, userId, starterIds, subIds) {
-  var team = requireManagerTeam($app, userId);
-  if (!starterIds || starterIds.length !== 5) {
-    throw new BadRequestError("Exactly 5 starters required");
+  var failure = null;
+  function reject(err) {
+    failure = err;
+    throw err;
   }
-  var players = $app.findRecordsByFilter(
-    "proball_players",
-    "team = {:t}",
-    "sort_order",
-    20,
-    0,
-    { t: team.id },
-  );
-  var byId = {};
-  for (var i = 0; i < players.length; i++) byId[players[i].id] = players[i];
-  var hasGk = false;
-  for (var s = 0; s < starterIds.length; s++) {
-    var pl = byId[starterIds[s]];
-    if (!pl) throw new BadRequestError("Invalid starter id");
-    if (pl.get("role") === "gk") hasGk = true;
-  }
-  if (!hasGk) throw new BadRequestError("Starting five must include a goalkeeper");
+  try {
+    $app.runInTransaction(function (tx) {
+      var team = null;
+      try {
+        team = requireManagerTeam(tx, userId);
+      } catch (err) {
+        reject(err);
+      }
+      if (!Array.isArray(starterIds) || starterIds.length !== 5) {
+        reject(new BadRequestError("Exactly 5 starters required"));
+      }
+      if (subIds == null) subIds = [];
+      if (!Array.isArray(subIds)) reject(new BadRequestError("Subs must be a list of player ids"));
+      var players = tx.findRecordsByFilter(
+        "proball_players",
+        "team = {:t}",
+        "sort_order",
+        20,
+        0,
+        { t: team.id },
+      );
+      var byId = {};
+      for (var i = 0; i < players.length; i++) byId[players[i].id] = players[i];
+      function owned(id) {
+        return typeof id === "string" && Object.prototype.hasOwnProperty.call(byId, id) ? byId[id] : null;
+      }
+      var starters = [];
+      var hasGk = false;
+      for (var s = 0; s < starterIds.length; s++) {
+        var pl = owned(starterIds[s]);
+        if (!pl) reject(new BadRequestError("Invalid starter id"));
+        if (starters.indexOf(pl.id) >= 0) reject(new BadRequestError("Starters must be 5 different players"));
+        if (pl.get("role") === "gk") hasGk = true;
+        starters.push(pl.id);
+      }
+      if (!hasGk) reject(new BadRequestError("Starting five must include a goalkeeper"));
+      var subList = [];
+      for (var b = 0; b < subIds.length; b++) {
+        var sub = owned(subIds[b]);
+        if (!sub) reject(new BadRequestError("Invalid sub id"));
+        if (starters.indexOf(sub.id) >= 0) reject(new BadRequestError("A starter cannot also be a sub"));
+        if (subList.indexOf(sub.id) >= 0) reject(new BadRequestError("Subs must be different players"));
+        subList.push(sub.id);
+      }
 
-  // Subs: remaining or explicit
-  var subList = subIds && subIds.length ? subIds : [];
-  for (var p = 0; p < players.length; p++) {
-    var rec = players[p];
-    var isSt = starterIds.indexOf(rec.id) >= 0;
-    rec.set("is_starter", isSt);
-    if (!isSt && subList.length < 2 && subList.indexOf(rec.id) < 0) {
-      subList.push(rec.id);
-    }
-    // sort_order: starters 0-4, subs 5-6
-    var order = isSt ? starterIds.indexOf(rec.id) : 5 + Math.max(0, subList.indexOf(rec.id));
-    rec.set("sort_order", order);
-    $app.save(rec);
+      // Subs: explicit first, then remaining reserves in roster order
+      for (var p = 0; p < players.length; p++) {
+        var rec = players[p];
+        var isSt = starters.indexOf(rec.id) >= 0;
+        rec.set("is_starter", isSt);
+        if (!isSt && subList.length < 2 && subList.indexOf(rec.id) < 0) {
+          subList.push(rec.id);
+        }
+        // sort_order: starters 0-4, subs 5-6
+        var order = isSt ? starters.indexOf(rec.id) : 5 + Math.max(0, subList.indexOf(rec.id));
+        rec.set("sort_order", order);
+        tx.save(rec);
+      }
+    });
+  } catch (err) {
+    throw failure || err;
   }
   return { ok: true };
 }
