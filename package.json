@@ -22,6 +22,7 @@
     "test:security": "vitest run src/domain/security.test.ts",
     "test:account-security": "node tests/integration/account-security.mjs",
     "test:world-setup": "node tests/integration/world-setup-atomicity.mjs",
+    "test:command-charge": "node tests/integration/command-charge-atomicity.mjs",
     "test:settlement": "node tests/integration/settlement-recovery.mjs",
     "test:progression": "node tests/integration/progression-lock.mjs",
     "test:recovery": "node scripts/restart-recovery.mjs",

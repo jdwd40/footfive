@@ -121,57 +121,78 @@ function getPace($app) {
   return "dev";
 }
 
+/**
+ * Materialise a player's regenerated energy as of now and save it (same formula, rounding
+ * and stamp as ever). The save re-reads the player in a transaction and writes only that
+ * fresh row, so a stale record (read before a concurrent paid change) cannot overwrite it;
+ * the supplied record is updated to the saved energy and stamp.
+ */
 function materialisePlayerEnergy($app, playerRec, pace) {
-  var timing = getTiming(pace || getPace($app));
+  var regen = getTiming(pace || getPace($app)).energyRegenPerHour;
   var now = Date.now();
-  var last = parsePbDate(playerRec.get("energy_updated_at"));
   var stored = playerRec.get("energy");
   if (stored == null) stored = 100;
-  var energy = materialiseEnergy(stored, last, now, timing.energyRegenPerHour);
-  if (energy !== stored || isNaN(last)) {
-    playerRec.set("energy", Math.round(energy));
-    playerRec.set("energy_updated_at", toPbDate(now));
-    $app.save(playerRec);
-  }
+  var last = parsePbDate(playerRec.get("energy_updated_at"));
+  var energy = materialiseEnergy(stored, last, now, regen);
+  if (energy === stored && !isNaN(last)) return Math.round(energy); // nothing to save
+  $app.runInTransaction(function (tx) {
+    // Joins the caller's transaction when $app already is one.
+    var fresh = tx.findRecordById("proball_players", playerRec.id);
+    stored = fresh.get("energy");
+    if (stored == null) stored = 100;
+    last = parsePbDate(fresh.get("energy_updated_at"));
+    energy = materialiseEnergy(stored, last, now, regen);
+    if (energy !== stored || isNaN(last)) {
+      fresh.set("energy", Math.round(energy));
+      fresh.set("energy_updated_at", toPbDate(now));
+      tx.save(fresh);
+    }
+    playerRec.set("energy", fresh.get("energy"));
+    playerRec.set("energy_updated_at", fresh.get("energy_updated_at"));
+  });
   return Math.round(energy);
 }
 
-function ensureCommandCharge($app, userId) {
-  var rows = $app.findRecordsByFilter(
-    "command_charge",
-    "user = {:u}",
-    "",
-    1,
-    0,
-    { u: userId },
-  );
-  if (rows && rows.length) return rows[0];
-  var col = $app.findCollectionByNameOrId("command_charge");
-  var rec = new Record(col);
+function findCommandCharge($app, userId) {
+  var rows = $app.findRecordsByFilter("command_charge", "user = {:u}", "", 1, 0, { u: userId });
+  return rows && rows.length ? rows[0] : null;
+}
+
+/** The user's charge row; first use creates it full. Call inside a transaction. */
+function ensureCommandCharge(tx, userId) {
+  var rec = findCommandCharge(tx, userId);
+  if (rec) return rec;
+  rec = new Record(tx.findCollectionByNameOrId("command_charge"));
   rec.set("user", userId);
   rec.set("points", BALANCE.commandChargeMax);
   rec.set("last_regen_at", toPbDate(Date.now()));
-  $app.save(rec);
+  tx.save(rec);
   return rec;
 }
 
+function materialisedCharge(rec, now, regenMs) {
+  return materialiseCommandCharge(rec.get("points"), parsePbDate(rec.get("last_regen_at")), now, regenMs, BALANCE.commandChargeMax);
+}
+
+/**
+ * Charge as of now. Reads never save regeneration (a stale save could restore points a
+ * concurrent spend took); only the first use creates the row, in a transaction.
+ */
 function getCommandChargeState($app, userId) {
-  var rec = ensureCommandCharge($app, userId);
+  var rec = findCommandCharge($app, userId);
+  if (!rec) {
+    try {
+      $app.runInTransaction(function (tx) {
+        rec = ensureCommandCharge(tx, userId);
+      });
+    } catch (err) {
+      rec = findCommandCharge($app, userId); // created concurrently (unique per user)
+      if (!rec) throw err;
+    }
+  }
   var timing = getTiming(getPace($app));
   var now = Date.now();
-  var last = parsePbDate(rec.get("last_regen_at"));
-  var mat = materialiseCommandCharge(
-    rec.get("points"),
-    last,
-    now,
-    timing.commandChargeRegenMs,
-    BALANCE.commandChargeMax,
-  );
-  if (mat.points !== rec.get("points")) {
-    rec.set("points", mat.points);
-    rec.set("last_regen_at", toPbDate(mat.lastAt));
-    $app.save(rec);
-  }
+  var mat = materialisedCharge(rec, now, timing.commandChargeRegenMs);
   var nextIn = 0;
   if (mat.points < BALANCE.commandChargeMax) {
     var elapsed = now - mat.lastAt;
@@ -181,27 +202,37 @@ function getCommandChargeState($app, userId) {
     points: mat.points,
     max: BALANCE.commandChargeMax,
     nextPointInMs: nextIn,
-    lastRegenAt: rec.get("last_regen_at"),
+    lastRegenAt: toPbDate(mat.lastAt),
   };
 }
 
-function spendCommandCharge($app, userId, cost) {
-  var rec = ensureCommandCharge($app, userId);
-  var timing = getTiming(getPace($app));
+/** Debit `cost` from the fresh, regenerated charge. Call inside the action's transaction. */
+function debitCommandCharge(tx, userId, cost, regenMs, reject) {
+  var rec = ensureCommandCharge(tx, userId);
   var now = Date.now();
-  var last = parsePbDate(rec.get("last_regen_at"));
-  var mat = materialiseCommandCharge(
-    rec.get("points"),
-    last,
-    now,
-    timing.commandChargeRegenMs,
-    BALANCE.commandChargeMax,
-  );
-  if (mat.points < cost) throw new BadRequestError("Insufficient Command Charge");
+  var mat = materialisedCharge(rec, now, regenMs);
+  if (mat.points < cost) reject(new BadRequestError("Insufficient Command Charge"));
   rec.set("points", mat.points - cost);
-  rec.set("last_regen_at", toPbDate(mat.lastAt));
-  $app.save(rec);
-  return rec.get("points");
+  // A full charge banks no regeneration: its clock restarts at the spend, so time spent
+  // full cannot hand the spent points straight back.
+  rec.set("last_regen_at", toPbDate(mat.points >= BALANCE.commandChargeMax ? now : mat.lastAt));
+  tx.save(rec);
+}
+
+/** Cost of a known action: own keys with a positive integer cost only. */
+function commandChargeCost(action) {
+  var costs = BALANCE.commandChargeCosts;
+  if (typeof action !== "string" || !Object.prototype.hasOwnProperty.call(costs, action)) return null;
+  var cost = costs[action];
+  return typeof cost === "number" && cost > 0 && Math.floor(cost) === cost ? cost : null;
+}
+
+function findRecordOrNull($app, collection, id) {
+  try {
+    return $app.findRecordById(collection, id);
+  } catch (_) {
+    return null;
+  }
 }
 
 function playerPublic($app, p, coachingStance, overclock) {
@@ -529,90 +560,98 @@ function repairPlayer($app, userId, playerId, points) {
   return { ok: true, points: points, cost: cost };
 }
 
+/**
+ * Spend Command Charge on an action. Fresh reads, target validation, the debit and every
+ * action write commit together in one transaction or not at all, so a missing, foreign or
+ * failing target spends nothing and parallel spends cannot overdraw.
+ */
 function commandChargeSpend($app, userId, action, playerId, fixtureId) {
-  var team = requireManagerTeam($app, userId);
-  var costs = BALANCE.commandChargeCosts;
-  if (!costs[action]) throw new BadRequestError("Unknown action");
-  var cost = costs[action];
-
-  if (action === "rapid_charge" || action === "field_repair") {
-    if (!playerId) throw new BadRequestError("playerId required");
-    var player = $app.findRecordById("proball_players", playerId);
-    if (player.get("team") !== team.id) throw new ForbiddenError("Not your player");
+  var cost = commandChargeCost(action);
+  if (cost === null) throw new BadRequestError("Unknown action");
+  var regenMs = getTiming(getPace($app)).commandChargeRegenMs;
+  var failure = null;
+  function reject(err) {
+    failure = err;
+    throw err;
   }
+  var result;
+  try {
+    $app.runInTransaction(function (tx) {
+      var team = null;
+      try {
+        team = requireManagerTeam(tx, userId);
+      } catch (err) {
+        reject(err);
+      }
+      var player = null;
+      var fx = null;
+      if (action === "rapid_charge" || action === "field_repair") {
+        if (!playerId || typeof playerId !== "string") reject(new BadRequestError("playerId required"));
+        player = findRecordOrNull(tx, "proball_players", playerId);
+        if (!player) reject(new BadRequestError("Player not found"));
+        if (player.get("team") !== team.id) reject(new ForbiddenError("Not your player"));
+      } else if (action === "tactical_scan") {
+        if (fixtureId) {
+          if (typeof fixtureId !== "string") reject(new BadRequestError("Invalid fixtureId"));
+          fx = findRecordOrNull(tx, "shared_fixtures", fixtureId);
+          if (!fx) reject(new BadRequestError("Fixture not found"));
+        } else {
+          fx = findNextManagedFixture(tx, team.id);
+          if (!fx) reject(new BadRequestError("No upcoming fixture to scan"));
+        }
+        if (fx.get("home_team") !== team.id && fx.get("away_team") !== team.id) {
+          reject(new BadRequestError("Fixture does not involve your team"));
+        }
+      } else if (action !== "overclock") {
+        reject(new BadRequestError("Unknown action"));
+      }
 
-  spendCommandCharge($app, userId, cost);
+      debitCommandCharge(tx, userId, cost, regenMs, reject);
 
-  if (action === "rapid_charge") {
-    materialisePlayerEnergy($app, player);
-    var e = player.get("energy") || 0;
-    player.set("energy", clamp(e + BALANCE.rapidChargeEnergy, 0, 100));
-    player.set("energy_updated_at", toPbDate(Date.now()));
-    $app.save(player);
-    return { ok: true, action: action, energy: player.get("energy") };
+      if (action === "rapid_charge") {
+        materialisePlayerEnergy(tx, player);
+        var e = player.get("energy") || 0;
+        player.set("energy", clamp(e + BALANCE.rapidChargeEnergy, 0, 100));
+        player.set("energy_updated_at", toPbDate(Date.now()));
+        tx.save(player);
+        result = { ok: true, action: action, energy: player.get("energy") };
+      } else if (action === "field_repair") {
+        var c = player.get("condition");
+        if (c == null) c = 100;
+        player.set("condition", clamp(c + BALANCE.fieldRepairCondition, 0, 100));
+        tx.save(player);
+        result = { ok: true, action: action, condition: player.get("condition") };
+      } else if (action === "tactical_scan") {
+        var oppId = fx.get("home_team") === team.id ? fx.get("away_team") : fx.get("home_team");
+        var report = buildTacticalScan(tx, oppId);
+        var scan = new Record(tx.findCollectionByNameOrId("tactical_scans"));
+        scan.set("user", userId);
+        scan.set("team", team.id);
+        scan.set("fixture_id", fx.id);
+        scan.set("report_json", report);
+        scan.set("consumed", false);
+        tx.save(scan);
+        result = { ok: true, action: action, report: report, fixtureId: fx.id };
+      } else {
+        // Overclock: energy cost to every starter, then the flag.
+        var players = tx.findRecordsByFilter("proball_players", "team = {:t} && is_starter = true", "", 10, 0, { t: team.id });
+        for (var i = 0; i < players.length; i++) {
+          materialisePlayerEnergy(tx, players[i]);
+          var en = players[i].get("energy") || 0;
+          players[i].set("energy", clamp(en - BALANCE.overclockEnergyCost, 0, 100));
+          players[i].set("energy_updated_at", toPbDate(Date.now()));
+          tx.save(players[i]);
+        }
+        team.set("overclock_ready", true);
+        team.set("overclock_fixture", "");
+        tx.save(team);
+        result = { ok: true, action: action, bonus: BALANCE.overclockBonus };
+      }
+    });
+  } catch (err) {
+    throw failure || err;
   }
-
-  if (action === "field_repair") {
-    var c = player.get("condition");
-    if (c == null) c = 100;
-    player.set("condition", clamp(c + BALANCE.fieldRepairCondition, 0, 100));
-    $app.save(player);
-    return { ok: true, action: action, condition: player.get("condition") };
-  }
-
-  if (action === "tactical_scan") {
-    // Find next opponent fixture
-    var fxId = fixtureId;
-    if (!fxId) {
-      var next = findNextManagedFixture($app, team.id);
-      if (!next) throw new BadRequestError("No upcoming fixture to scan");
-      fxId = next.id;
-    }
-    var fx = $app.findRecordById("shared_fixtures", fxId);
-    var oppId =
-      fx.get("home_team") === team.id ? fx.get("away_team") : fx.get("home_team");
-    if (oppId !== fx.get("home_team") && oppId !== fx.get("away_team")) {
-      throw new BadRequestError("Fixture does not involve your team");
-    }
-    if (fx.get("home_team") !== team.id && fx.get("away_team") !== team.id) {
-      throw new BadRequestError("Fixture does not involve your team");
-    }
-    var report = buildTacticalScan($app, oppId);
-    var col = $app.findCollectionByNameOrId("tactical_scans");
-    var scan = new Record(col);
-    scan.set("user", userId);
-    scan.set("team", team.id);
-    scan.set("fixture_id", fxId);
-    scan.set("report_json", report);
-    scan.set("consumed", false);
-    $app.save(scan);
-    return { ok: true, action: action, report: report, fixtureId: fxId };
-  }
-
-  if (action === "overclock") {
-    // Apply energy cost to starters + flag
-    var players = $app.findRecordsByFilter(
-      "proball_players",
-      "team = {:t} && is_starter = true",
-      "",
-      10,
-      0,
-      { t: team.id },
-    );
-    for (var i = 0; i < players.length; i++) {
-      materialisePlayerEnergy($app, players[i]);
-      var en = players[i].get("energy") || 0;
-      players[i].set("energy", clamp(en - BALANCE.overclockEnergyCost, 0, 100));
-      players[i].set("energy_updated_at", toPbDate(Date.now()));
-      $app.save(players[i]);
-    }
-    team.set("overclock_ready", true);
-    team.set("overclock_fixture", "");
-    $app.save(team);
-    return { ok: true, action: action, bonus: BALANCE.overclockBonus };
-  }
-
-  throw new BadRequestError("Unknown action");
+  return result;
 }
 
 function findNextManagedFixture($app, teamId) {
