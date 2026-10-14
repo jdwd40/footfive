@@ -1,7 +1,7 @@
 /** #102-#107: fluid open play — team shape, off-ball movement, touch variety, tempo, no pauses, cross → shot continuity. */
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, touchStyle, type Pt } from "./scenes";
-import { frameAt, type Lineups } from "./sim";
+import { frameAt, smooth, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
 const squad = (tag: string): LineupPlayer[] => ["gk", "df", "df", "fw", "fw"].map((role, i) => ({ name: `${tag} P${i}`, no: i + 1, role, starter: true }));
@@ -75,5 +75,27 @@ describe("#104 mix of carrying, holding and passing", () => {
         for (const t of [0, 0.2, 0.4, 0.5]) expect(Math.hypot(...(sample(p.path, t).map((v, i) => v - sample(s.ball, t)[i]) as [number, number]))).toBeLessThan(2);
       }
     }
+  });
+});
+
+describe("#105 fast and slow phases of play", () => {
+  it("counters and quick balls are fast, patient build-up slow; scene lengths unchanged", () => {
+    const tk = sceneFor(ev(40, "tackle", "home", [50, 30], [52, 30]), [50, 30], 15000)!;
+    const bu = sceneFor(ev(41, "build_up", "home", [30, 30], [36, 30]), [30, 30], 15000)!;
+    expect(tk.tempo).toBe("fast");
+    expect(bu.tempo).toBe("slow");
+    expect(bu.ms).toBe(1500);
+    const tempos = new Set(Array.from({ length: 30 }, (_, i) => sceneFor(ev(50 + i, "pass", "home", [40, 30], [52, 36]), [40, 30], 15000)!.tempo));
+    expect(tempos.size).toBeGreaterThan(1);
+  });
+  it("players move further per frame in a fast phase than in a slow one", () => {
+    const s = sceneFor(ev(42, "pass", "home", [30, 30], [60, 40]), [30, 30], 15000)!;
+    const f0 = frameAt(s, 0, lineups);
+    const f1 = frameAt(s, 0.6, lineups);
+    const step = (tempo: "fast" | "slow") => {
+      const n = smooth({ ...f0, tempo }, { ...f1, tempo }, 16);
+      return n.players.reduce((a, p, i) => a + Math.hypot(p.x - f0.players[i].x, p.y - f0.players[i].y), 0);
+    };
+    expect(step("fast")).toBeGreaterThan(step("slow") * 1.5);
   });
 });

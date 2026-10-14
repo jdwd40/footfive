@@ -123,7 +123,7 @@ const keyOf = (lineups: Lineups, side: Side, name?: string) => `${side}:${lineup
 /** The lay-off man: the extra, unnamed attacking actor who takes the ball in between. */
 const layoffOf = (s: Scene) => s.actors.find((a) => a.id === "l");
 /** The same event drawn as an ordinary pass: a build-up shares the ordinary pass branch and never gets the lay-off. */
-const ordinary = (e: MatchEvent, prev: Pt = e.from as Pt) => ({ ...sceneFor({ ...e, t: "build_up" }, prev, 15000)!, type: e.t });
+const ordinary = (e: MatchEvent, prev: Pt = e.from as Pt) => ({ ...sceneFor({ ...e, t: "build_up" }, prev, 15000)!, type: e.t, tempo: sceneFor(e, prev, 15000)!.tempo }); // #105: tempo follows the event type
 
 /** Lay-off then forward release, as authored and on the target frames (both sides, any lineup). */
 function expectLayoff(s: Scene, e: MatchEvent, lineups: Lineups, tag: string) {

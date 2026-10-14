@@ -6,7 +6,7 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
@@ -111,6 +111,8 @@ const DWELL_LANE = 6; // lateral gap between the two lanes
  * two lanes keep laying the ball off where they are, however late the next event is: a long gap circulates, it neither shuttles nor freezes. */
 export const DWELL_ADVANCE = 8;
 export const DWELL_LINE = 70;
+/** #105: dwell clock rate by tempo — a fast phase moves it on quicker, a slow one keeps it longer (same bounded advance). */
+export const dwellRate = (tempo?: Scene["tempo"]) => (tempo === "fast" ? 1.5 : tempo === "slow" ? 0.7 : 1);
 
 /** Possession choreography, separate from hot (actor binding). Ground passes are free flight too.
  * These windows only nominate an actor; Pitch checks the smoothed ball is actually at that player.
@@ -158,7 +160,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   let carrier = owner ? owner.side + ":" + owner.no : null;
   const rawOver = Math.max(0, t - 1) * scene.ms;
   if (rawOver > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
-    const over = rawOver;
+    // #105: a fast phase keeps running and moves it on quicker, a slow one jogs and keeps it longer (same bounded advance).
+    const over = rawOver * dwellRate(scene.tempo);
     // Dwell: two lanes jog on from the scene end at DWELL_SPEED, easing to a stop within the bounded advance (never turning
     // back, never past the line). The ball is laid off between the lanes every DWELL_CYCLE, so the two nearest teammates keep
     // passing instead of one of them carrying forever; the nearest opponent closes to four in front of whoever has it.
@@ -230,7 +233,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPt = [86, 19]; // beside the box, where setupScene / penaltyScene keep him (penRefSpot("home"))
     if (t < 0.7) cam = FULL_CAM;
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo };
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
@@ -323,7 +326,9 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   dtMs = Math.min(100, dtMs); // a stutter still reads as a chase, not a jump
   const k = (tau: number) => 1 - Math.exp(-dtMs / tau);
   const kb = k(90);
-  const kp = k(220);
+  const tempo = target.tempo === "fast" ? 0.65 : target.tempo === "slow" ? 1.45 : 1; // #105: fast phases sprint, slow ones jog
+  const kp = k(220 * tempo);
+  const runSpeed = MAX_SPEED / tempo;
   const chase = (ax: number, ay: number, bx: number, by: number, kk: number, speed: number): Pt => {
     let dx = (bx - ax) * kk;
     let dy = (by - ay) * kk;
@@ -342,7 +347,7 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
     // Crosses compress a wide delivery and box arrival into the match pace.
     // Only its involved attackers sprint; everyone else keeps the ordinary chase.
     const crossSprint = target.type === "cross" && p.hot && p.side === target.side;
-    const [x, y] = chase(q.x, q.y, p.x, p.y, crossSprint ? k(70) : kp, crossSprint ? 120 : MAX_SPEED);
+    const [x, y] = chase(q.x, q.y, p.x, p.y, crossSprint ? k(70) : kp, crossSprint ? 120 : runSpeed);
     return { ...p, x, y };
   });
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
