@@ -18,6 +18,25 @@ const ANCHORS: Pt[] = [
   [42, 40],
 ];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+/** Open-play scenes in which `scene.side` has the ball: that side's shape moves up the pitch with it (#102). */
+const IN_PLAY = new Set(["build_up", "pass", "through_ball", "dribble", "cross", "tackle", "interception", "shot", "bounce"]);
+/** Possession side of a scene, or null when nobody is building an attack (set pieces, breaks, results). */
+export function possession(scene: Scene): Side | null {
+  return scene.side && IN_PLAY.has(scene.type) ? scene.side : null;
+}
+/**
+ * Team shape (#102): where outfielder `i` (1..4) of a side stands, in that side's own frame (attacking → x=100), given the ball
+ * `bx`/`by` in that same frame. With the ball, the whole block advances with it: defenders step up behind the ball, forwards run
+ * ahead of it, so the shape carries up the field as the ball progresses. Without it, the old gentle drift towards the ball.
+ */
+export function shapeAt(i: number, bx: number, by: number, attacking: boolean): Pt {
+  const [ax, ay] = ANCHORS[i];
+  if (!attacking) return [clamp(ax + (bx - ax) * 0.3, 1, 99), clamp(ay + (by - ay) * 0.3, 2, 62)];
+  const fwd = i >= 3;
+  const push = (bx - 30) * (fwd ? 0.75 : 0.6); // the block moves up with the ball
+  const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4, 4, fwd ? 94 : Math.max(8, bx - 4));
+  return [x, clamp(ay + (by - ay) * 0.25, 2, 62)];
+}
 /**
  * Same scene re-routed from `start`: the ball path (and the carrier's, if an actor stands on the ball) is translated by
  * `start − ball[0]`, the offset blending out keyframe by keyframe so the destination — which the next scene depends on — is
@@ -207,15 +226,22 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
   // After a goal the defending side backs off to the centre for the restart while the scorer celebrates.
   const backOff = scene.flash === "goal" && (scene.type === "celebration" || t > 0.5) ? other(scene.side) : null;
   const players: Player[] = [];
+  const poss = possession(scene);
   for (const side of ["home", "away"] as Side[]) {
     const mirror = side === "away";
     const b: Pt = side === backOff ? [50, 32] : ball;
+    const own = (x: number) => (mirror ? 100 - x : x); // own frame <-> pitch x (self-inverse)
     starters(lineups?.[side] ?? [], side, sentOff).forEach((p, i) => {
       const gk = i === 0;
-      const ax = mirror ? 100 - ANCHORS[i][0] : ANCHORS[i][0];
+      const ax = own(ANCHORS[i][0]);
       const ay = ANCHORS[i][1];
-      const x = gk ? ax : clamp(ax + (b[0] - ax) * 0.3, 1, 99);
-      const y = clamp(ay + (b[1] - ay) * (gk ? 0.4 : 0.3), 2, 62);
+      let x = ax;
+      let y = clamp(ay + (b[1] - ay) * 0.4, 2, 62);
+      if (!gk) {
+        const [sx, sy] = shapeAt(Math.min(i, 4), own(b[0]), b[1], poss === side && side !== backOff);
+        x = own(sx);
+        y = sy;
+      }
       players.push({ side, name: p.name, no: p.no, gk, x, y, hot: false });
     });
   }
