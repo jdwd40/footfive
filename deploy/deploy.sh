@@ -9,10 +9,12 @@
 #   SERVICE_NAME=pocketbase
 #
 # Usage:
-#   ./deploy/deploy.sh check     # tests + build only
-#   ./deploy/deploy.sh backup    # backup only
-#   ./deploy/deploy.sh apply     # backup, stop, copy, start, smoke
-#   ./deploy/deploy.sh rollback  # restore last backup paths
+#   ./deploy/deploy.sh check       # tests + build only
+#   ./deploy/deploy.sh backup      # backup only
+#   ./deploy/deploy.sh apply SHA   # new release: SHA must be the main head whose
+#                                  # FootFive CI passed, checked out clean; then
+#                                  # tests, build, backup, stop, copy, start
+#   ./deploy/deploy.sh rollback    # emergency: restore last backup paths (no new code)
 set -euo pipefail
 
 ROOT="${FOOTFIVE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -50,7 +52,30 @@ backup() {
   echo "backup at $DEST"
 }
 
+# A new release is exactly the current main commit whose FootFive CI push run passed
+# every required job (the gate deploy.yml uses), from a clean checkout of that commit.
+# Runs before any backup, stop or copy; needs an authenticated gh CLI.
+require_tested_release() {
+  local sha="$1" head changes
+  if [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Usage: $0 apply FULL_40_CHARACTER_SHA (the main commit whose FootFive CI passed)" >&2
+    exit 1
+  fi
+  head=$(git -C "$ROOT" rev-parse --verify HEAD)
+  if [[ $head != "$sha" ]]; then
+    echo "Refusing: checkout is at $head, not $sha (git fetch origin && git checkout --detach $sha)" >&2
+    exit 1
+  fi
+  changes=$(git -C "$ROOT" status --porcelain --untracked-files=normal)
+  if [[ -n $changes ]]; then
+    echo "Refusing: $ROOT has local changes; deploy a clean checkout of $sha" >&2
+    exit 1
+  fi
+  GH_REPO="${GH_REPO:-jdwd40/footfive}" node "$ROOT/scripts/verify-deploy-ci.mjs" "$sha"
+}
+
 apply() {
+  require_tested_release "$1"
   check
   backup
   if [[ -n "$SERVICE_NAME" ]]; then
@@ -108,10 +133,10 @@ rollback() {
 case "$cmd" in
   check) check ;;
   backup) backup ;;
-  apply) apply ;;
+  apply) apply "${2:-}" ;;
   rollback) rollback ;;
   *)
-    echo "Usage: $0 check|backup|apply|rollback"
+    echo "Usage: $0 check|backup|apply SHA|rollback"
     exit 1
     ;;
 esac

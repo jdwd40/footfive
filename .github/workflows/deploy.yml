@@ -1,9 +1,25 @@
 name: Deploy FootFive
 
+# Deploys only a commit FootFive CI fully tested: automatically after its push run on
+# main succeeds, or by hand for an exact main SHA whose push run passed. Every job
+# builds, deploys and records that SHA; GITHUB_SHA is the default-branch head on
+# workflow_run, never the tested commit, so nothing here uses it.
 on:
-  push:
+  workflow_run:
+    workflows: [FootFive CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character main commit SHA whose FootFive CI push run passed
+        required: true
+        type: string
+      rollback:
+        description: Emergency rollback (allow a tested main commit older than the main head)
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-footfive-production
@@ -11,15 +27,70 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  gate:
+    name: Verify tested commit
+    # Failed, cancelled, non-push, foreign or other-workflow CI runs never deploy.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.path == '.github/workflows/footfive-ci.yml' &&
+       github.event.workflow_run.repository.full_name == github.repository &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.verify.outputs.sha }}
+    steps:
+      # Trusted gate code from main; no secrets or SSH before this job passes.
+      - name: Checkout gate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require FootFive CI success for the exact commit
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then sha="$INPUT_SHA"; else sha="$RUN_SHA"; fi
+          args=("$sha")
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$ROLLBACK" = true ]; then args+=(--rollback); fi
+          # Validates the SHA format before it reaches GITHUB_OUTPUT.
+          node scripts/verify-deploy-ci.mjs "${args[@]}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
   test-and-build:
     name: Test & production build
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout
+      - name: Checkout tested commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Confirm exact commit
+        env:
+          DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -72,12 +143,15 @@ jobs:
 
   deploy:
     name: Deploy to VPS
-    needs: test-and-build
+    needs: [gate, test-and-build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout
+      - name: Checkout tested commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
 
       - name: Download dist
         uses: actions/download-artifact@v4
@@ -118,9 +192,12 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
           test -n "${VPS_USER:-}" || { echo "Missing secret VPS_USER"; exit 1; }
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Missing verified deploy SHA"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
           STAMP=$(date -u +%Y%m%dT%H%M%SZ)
           REMOTE="${VPS_USER}@${VPS_HOST}"
           SSH=(ssh -p "${VPS_PORT}" -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes "${REMOTE}")
@@ -163,12 +240,12 @@ jobs:
           # Provenance: record markers only after the validated-healthy app
           # above. Never written for a degraded or unreachable deploy.
           "${SSH[@]}" "echo ${STAMP} > /home/jd/footfive/DEPLOYED_STAMP"
-          "${SSH[@]}" "echo ${GITHUB_SHA} > /home/jd/footfive/DEPLOYED_SHA"
+          "${SSH[@]}" "echo ${DEPLOY_SHA} > /home/jd/footfive/DEPLOYED_SHA"
 
           # Prune old releases (keep last 8)
           "${SSH[@]}" 'cd /home/jd/footfive/releases && ls -1dt */ 2>/dev/null | tail -n +9 | xargs -r rm -rf'
 
-          echo "Deploy finished stamp=${STAMP}"
+          echo "Deploy finished stamp=${STAMP} sha=${DEPLOY_SHA}"
 
       - name: Smoke test production
         run: |

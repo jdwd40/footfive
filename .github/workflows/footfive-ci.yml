@@ -50,20 +50,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - name: Ensure PocketBase binary
-        run: |
-          if [ ! -x pocketbase/pocketbase ]; then
-            echo "Missing pocketbase binary — download 0.28.4"
-            curl -fsSL -o /tmp/pb.zip \
-              https://github.com/pocketbase/pocketbase/releases/download/v0.28.4/pocketbase_0.28.4_linux_amd64.zip
-            if command -v unzip >/dev/null 2>&1; then
-              unzip -o /tmp/pb.zip -d pocketbase/
-            else
-              python3 -c 'import zipfile; zipfile.ZipFile("/tmp/pb.zip").extractall("pocketbase")'
-            fi
-            chmod +x pocketbase/pocketbase
-          fi
-          ./pocketbase/pocketbase --version
+      # Always install from the checksum-pinned release; no existing binary is trusted.
+      - name: Install verified PocketBase 0.28.4
+        run: bash scripts/fetch-pocketbase.sh
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test
@@ -106,19 +95,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - name: Ensure PocketBase binary
-        run: |
-          if [ ! -x pocketbase/pocketbase ]; then
-            curl -fsSL -o /tmp/pb.zip \
-              https://github.com/pocketbase/pocketbase/releases/download/v0.28.4/pocketbase_0.28.4_linux_amd64.zip
-            if command -v unzip >/dev/null 2>&1; then
-              unzip -o /tmp/pb.zip -d pocketbase/
-            else
-              python3 -c 'import zipfile; zipfile.ZipFile("/tmp/pb.zip").extractall("pocketbase")'
-            fi
-            chmod +x pocketbase/pocketbase
-          fi
-          ./pocketbase/pocketbase --version | grep -q 0.28.4
+      # Always install from the checksum-pinned release; no existing binary is trusted.
+      - name: Install verified PocketBase 0.28.4
+        run: bash scripts/fetch-pocketbase.sh
       - name: Install chromium matching package
         run: npx playwright install --with-deps chromium
       - name: Run E2E (API + UI)
