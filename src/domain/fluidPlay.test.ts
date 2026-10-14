@@ -29,3 +29,28 @@ describe("#102 team in possession carries the shape up the field", () => {
     });
   }
 });
+
+describe("#103 off-the-ball players move into sensible positions", () => {
+  for (const side of ["home", "away"] as Side[]) {
+    const def: Side = side === "home" ? "away" : "home";
+    it(`${side} attacking: defenders track goal-side, attackers find space away from the ball`, () => {
+      for (const bx of [40, 55, 70]) {
+        for (const by of [12, 32, 52]) {
+          const s = sceneFor(ev(20, "pass", side, [own(side, bx - 8), by], [own(side, bx), by]), [own(side, bx - 8), by], 15000)!;
+          const f = frameAt(s, 0.999, lineups);
+          const ball = f.ball;
+          for (const p of f.players.filter((q) => q.side === def && (q.no === 2 || q.no === 3) && !q.hot)) expect(own(def, p.x)).toBeLessThan(own(def, ball[0]));
+          for (const p of f.players.filter((q) => q.side === side && !q.gk && !q.hot)) expect(Math.abs(p.y - ball[1])).toBeGreaterThanOrEqual(5);
+        }
+      }
+    });
+  }
+  it("positions respond to the ball and to which team has it", () => {
+    const a = frameAt(sceneFor(ev(30, "pass", "home", [45, 20], [50, 20]), [45, 20], 15000)!, 0.999, lineups);
+    const b = frameAt(sceneFor(ev(31, "pass", "away", [55, 20], [50, 20]), [55, 20], 15000)!, 0.999, lineups);
+    const c = frameAt(sceneFor(ev(32, "pass", "home", [45, 44], [50, 44]), [45, 44], 15000)!, 0.999, lineups);
+    const pos = (f: typeof a) => f.players.filter((p) => !p.gk && !p.hot).map((p) => p.side + p.no + ":" + p.x.toFixed(1) + "," + p.y.toFixed(1)).join();
+    expect(pos(a)).not.toEqual(pos(b));
+    expect(pos(a)).not.toEqual(pos(c));
+  });
+});
