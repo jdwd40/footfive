@@ -1,6 +1,6 @@
 /** #102-#107: fluid open play — team shape, off-ball movement, touch variety, tempo, no pauses, cross → shot continuity. */
 import { describe, expect, it } from "vitest";
-import { sceneFor, type Pt } from "./scenes";
+import { sample, sceneFor, touchStyle, type Pt } from "./scenes";
 import { frameAt, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
@@ -52,5 +52,28 @@ describe("#103 off-the-ball players move into sensible positions", () => {
     const pos = (f: typeof a) => f.players.filter((p) => !p.gk && !p.hot).map((p) => p.side + p.no + ":" + p.x.toFixed(1) + "," + p.y.toFixed(1)).join();
     expect(pos(a)).not.toEqual(pos(b));
     expect(pos(a)).not.toEqual(pos(c));
+  });
+});
+
+describe("#104 mix of carrying, holding and passing", () => {
+  it("is deterministic by seq and mixes all three", () => {
+    const styles = Array.from({ length: 60 }, (_, i) => touchStyle(i + 1));
+    expect(styles).toEqual(Array.from({ length: 60 }, (_, i) => touchStyle(i + 1)));
+    for (const k of ["quick", "carry", "hold"]) expect(styles.filter((x) => x === k).length).toBeGreaterThan(8);
+  });
+  it("keeps the engine's endpoints and the passer on the ball until the release", () => {
+    for (let seq = 1; seq <= 40; seq++) {
+      const side: Side = seq % 2 ? "home" : "away";
+      const from: Pt = [own(side, 40), 30];
+      const to: Pt = [own(side, 52), 36];
+      const s = sceneFor(ev(seq, "pass", side, from, to), from, 15000)!;
+      expect(s.ball[0]).toEqual(from);
+      expect(s.ball[s.ball.length - 1]).toEqual(to);
+      expect(s.touch).toBe(touchStyle(seq));
+      if (s.touch !== "quick") {
+        const p = s.actors.find((a) => a.id === "p")!;
+        for (const t of [0, 0.2, 0.4, 0.5]) expect(Math.hypot(...(sample(p.path, t).map((v, i) => v - sample(s.ball, t)[i]) as [number, number]))).toBeLessThan(2);
+      }
+    }
   });
 });

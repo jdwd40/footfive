@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sample, sampleN, sceneFor, short, type Actor, type Pt, type Scene } from "./scenes";
+import { sample, sampleN, sceneFor, short, touchStyle, type Actor, type Pt, type Scene } from "./scenes";
 import { frameAt, type Frame, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
@@ -166,7 +166,9 @@ describe("through balls are a runner beating his marker into space (FF-70)", () 
 
   it.each(CASES)("$name: is not drawn as an ordinary pass of the same ball", ({ e }) => {
     const tb = scene(e);
-    const pass = scene({ ...e, t: "pass" });
+    let quick = e.seq;
+    while (touchStyle(quick) !== "quick") quick++; // #104: compare with the one-touch pass (carries/hold-ups draw their own ball)
+    const pass = scene({ ...e, t: "pass", seq: quick });
     const t = cast(tb, e);
     const p = cast(pass, e);
     // Same ball, same passer: only the runner and his marker tell the two apart.
