@@ -15,7 +15,7 @@ describe("Pitch penalty camera and shootout reveal", () => {
     expect(svg.getAttribute("viewBox")).toBe("63 16 50 32");
     const box = screen.getByTestId("pitch") as HTMLElement;
     expect(box.style.aspectRatio.replace(/\s/g, "")).toBe("108/77"); // the box carries the ratio (and a viewport height cap); the svg fills it
-    expect(box.style.maxWidth).toContain("100vh - var(--pitch-chrome, 360px)");
+    expect(box.style.maxWidth).toContain("100vh - var(--pitch-chrome, 400px)");
     expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
     expect(svg.className.baseVal).toContain("h-full");
   });
@@ -87,7 +87,7 @@ describe("Pitch kits and numbers", () => {
     const badge = (flash: Frame["flash"], revealed = true) => {
       cleanup();
       render(<Pitch frame={frame({ type: "miss", flash, p: 0.9 })} home={home} away={away} revealed={revealed} />);
-      return screen.getByTestId("pitch").querySelector("span.event-enter")?.textContent ?? null;
+      return screen.queryByTestId("pitch-flash")?.textContent ?? null; // result badge lives in the strip below the pitch
     };
     expect(badge("miss")).toBe("WIDE");
     expect(badge("over")).toBe("OVER");
@@ -105,17 +105,20 @@ describe("Pitch kits and numbers", () => {
     rerender(<Pitch frame={frame({ type: "interception", side: "away", won: "away" })} home={home} away={away} revealed />);
     expect(screen.getByTestId("won-badge").style.background).toBe("rgb(255, 45, 149)");
     rerender(<Pitch frame={frame({ type: "pass", side: "away", won: "away", flash: "save" })} home={home} away={away} revealed />);
-    expect(screen.getByText("SAVED!")).toBeTruthy(); // a lingering result keeps its slot; WON IT sits under it
-    expect(screen.getByTestId("won-badge").parentElement!.className).toContain("top-[4.25rem]");
+    expect(screen.getByText("SAVED!")).toBeTruthy(); // a lingering result keeps its slot; WON IT sits beside it in the strip
+    expect(screen.getByTestId("won-badge").parentElement).toBe(screen.getByTestId("pitch-flash").parentElement);
+    expect(screen.getByTestId("pitch").contains(screen.getByTestId("won-badge"))).toBe(false);
     rerender(<Pitch frame={frame({ type: "tackle", side: "home", won: null })} home={home} away={away} revealed />);
     expect(screen.queryByTestId("won-badge")).toBeNull();
   });
-  it("pins the HUD to the pitch's top-left corner and keeps the replay chip out of its way", () => {
+  it("puts the HUD and replay chip in the row above the pitch, off the playing surface", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed replay hud={<span>HOM 1–0 AWY</span>} />);
     const hud = screen.getByTestId("pitch-hud");
     expect(hud.textContent).toBe("HOM 1–0 AWY");
-    expect(hud.className).toContain("left-2");
-    expect(screen.getByText("Replay").className).toContain("right-2");
+    const top = screen.getByTestId("pitch-top");
+    expect(top.contains(hud)).toBe(true);
+    expect(top.contains(screen.getByText("Replay"))).toBe(true);
+    expect(screen.getByTestId("pitch").contains(hud)).toBe(false);
   });
 });
 
@@ -129,6 +132,8 @@ describe("Pitch goal banner", () => {
     expect(b.textContent).toContain("Jo Striker");
     expect(b.textContent).toContain("HOM 1–2 AWY");
     expect(b.querySelectorAll(".confetti > i")).toHaveLength(24);
+    expect(screen.getByTestId("pitch").contains(b)).toBe(false); // in the strip below, not over play
+    expect(screen.getByTestId("pitch-strip").contains(b)).toBe(true);
   });
 
   it("stays up through the celebration, whatever the gate says", () => {
@@ -161,10 +166,11 @@ describe("Pitch period banners", () => {
   };
   it("half-time with the score", () => expect(period({ type: "half_time" })).toBe("HALF-TIME · HOM 1–0 AWY"));
   it("extra-time half-time with the score", () => expect(period({ type: "et_half_time", score: [2, 2] })).toBe("ET HALF-TIME · HOM 2–2 AWY"));
-  it("is GOOOAL-sized, and dims to 85 % after 4 s so the pitch shows through the break", () => {
+  it("sits in the strip below the pitch (#52), and dims to 85 % after 4 s so the pitch shows through the break", () => {
     period({ type: "half_time", ms: 30000, p: 3000 / 30000 });
     const b = screen.getByTestId("period-banner");
-    expect(b.querySelector(".font-black")!.className).toContain("text-6xl");
+    expect(b.querySelector(".font-black")!.className).toContain("text-2xl");
+    expect(screen.getByTestId("pitch").contains(b)).toBe(false);
     expect(b.style.opacity).toBe("");
     cleanup();
     period({ type: "half_time", ms: 30000, p: 5000 / 30000 });

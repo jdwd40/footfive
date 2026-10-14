@@ -64,7 +64,8 @@ describe("MatchPage timeline player", () => {
     const kick: MatchEvent = { ...ev(1, now - 30000, "Steps up"), t: "shootout_setup", side: "away" as const, kick: { no: 3, sd: 0 }, st: pens };
     await mount(view([kick], { home: names("Home"), away: names("Away") }, now));
     const hud = screen.getByTestId("pitch-hud");
-    expect(screen.getByTestId("pitch").contains(hud)).toBe(true);
+    expect(screen.getByTestId("pitch-top").contains(hud)).toBe(true); // above the pitch, off the playing surface
+    expect(screen.getByTestId("pitch").contains(hud)).toBe(false);
     expect(screen.getByTestId("hud-score").textContent).toBe("HOM 1–1 AWA");
     expect(screen.getByTestId("hud-pens").textContent).toBe("PENS 2–1");
     expect(screen.getByTestId("hud-kicker").textContent).toBe("AWA to kick");
