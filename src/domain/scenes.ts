@@ -341,6 +341,22 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ],
         };
       }
+      const ahead = toward(atk, recv[0] - passer[0]);
+      if (touch === "quick" && ahead > 24) {
+        // #106: a long ball — lifted over the midfield, the receiver chasing it from deep onto the drop.
+        return {
+          ...base,
+          ms: d(1500),
+          touch,
+          ball: [passer, lerp(passer, recv, 0.5), recv],
+          ballHeight: [0, 0.8, 0],
+          actors: [
+            { id: "p", side: atk, label: short(e.p), path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
+            { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 12), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 5), recv[1]]), recv] },
+            { id: "m", side: def, path: [markerStart, lerp(markerStart, recv, 0.4), clampPt([recv[0] + toward(atk, 2.5), recv[1] + 2])] },
+          ],
+        };
+      }
       return {
         ...base,
         ms: d(run ? 2000 : 1500),
@@ -667,14 +683,21 @@ function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnTyp
   };
 }
 
-/** Sample keyframes at t ∈ [0,1] with easing. */
+/**
+ * Sample keyframes at t ∈ [0,1]. #106: motion only slows where it really stops — into a hold (repeated keyframe) or the
+ * path's end — and only builds up out of a hold; through a moving keyframe it keeps its speed, so nobody pauses before a pass,
+ * shot or run. A path builds up from its first keyframe, where the previous scene left everyone.
+ */
 export function sample(path: Pt[], t: number): Pt {
   if (path.length === 1) return path[0];
   const seg = path.length - 1;
   const x = Math.min(0.9999, Math.max(0, t)) * seg;
   const i = Math.floor(x);
   const f = x - i;
-  const e = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;
+  const same = (a?: Pt, b?: Pt) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
+  const easeIn = i === 0 || same(path[i - 1], path[i]);
+  const easeOut = i === seg - 1 || same(path[i + 1], path[i + 2]);
+  const e = easeIn && easeOut ? (f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2) : easeOut ? f * (2 - f) : easeIn ? f * f : f;
   return lerp(path[i], path[i + 1], e);
 }
 

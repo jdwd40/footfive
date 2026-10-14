@@ -111,6 +111,9 @@ const DWELL_LANE = 6; // lateral gap between the two lanes
  * two lanes keep laying the ball off where they are, however late the next event is: a long gap circulates, it neither shuttles nor freezes. */
 export const DWELL_ADVANCE = 8;
 export const DWELL_LINE = 70;
+/** Idle drift: amplitude (units) and time constant (ms per radian); peak speed IDLE_AMP / IDLE_TAU ≈ 0.6 units/s. */
+export const IDLE_AMP = 0.6;
+export const IDLE_TAU = 1000;
 /** #105: dwell clock rate by tempo — a fast phase moves it on quicker, a slow one keeps it longer (same bounded advance). */
 export const dwellRate = (tempo?: Scene["tempo"]) => (tempo === "fast" ? 1.5 : tempo === "slow" ? 0.7 : 1);
 
@@ -190,13 +193,12 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       marker.y = clamp(marker.y + (ball[1] - marker.y) * k, 0, 64);
     }
   } else if (t >= 1 && nowMs) {
-    // Idle breathing: scene over, nothing newer yet — everyone sways a touch so the frame never looks frozen.
-    ball[0] += Math.sin(nowMs / 400) * 0.4;
+    // Idle drift (#106): scene over, nothing newer yet — players ease slowly about their spot (a 6 s cycle, never an on-the-spot
+    // wobble), the ball stays where it was, so the frame never looks frozen and nothing jitters.
     for (const p of players) {
-      const amp = p.hot ? 0.4 : 0.25;
-      const ph = p.hot ? 0 : p.no * 1.7;
-      p.x += Math.sin(nowMs / 400 + ph) * amp;
-      p.y += Math.cos(nowMs / 400 + ph) * amp * 0.5;
+      const ph = p.no * 1.7 + (p.side === "away" ? 0.9 : 0);
+      p.x += Math.sin(nowMs / IDLE_TAU + ph) * IDLE_AMP;
+      p.y += Math.cos(nowMs / IDLE_TAU + ph) * IDLE_AMP * 0.5;
     }
   }
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
