@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "vitest";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -25,6 +25,7 @@ function project() {
   mkdirSync(path.join(dir, "bin"));
   copyFileSync(path.join(repoRoot, "deploy/deploy.sh"), path.join(root, "deploy/deploy.sh"));
   copyFileSync(path.join(repoRoot, "scripts/verify-deploy-ci.mjs"), path.join(root, "scripts/verify-deploy-ci.mjs"));
+  copyFileSync(path.join(repoRoot, "scripts/pb-data-backup.py"), path.join(root, "scripts/pb-data-backup.py"));
   writeFileSync(path.join(root, "pocketbase/pb_hooks/main.pb.js"), "// hooks\n");
   writeFileSync(path.join(root, "pocketbase/pb_migrations/1_init.js"), "// migration\n");
   writeFileSync(path.join(root, ".gitignore"), "dist/\nbackups/\n");
@@ -143,4 +144,51 @@ test("emergency rollback restores the last backup without the new-release gate",
   expect(r.result.status, r.result.stderr).toBe(0);
   expect(r.log).toEqual([]);
   expect(readFileSync(path.join(p.dir, "web/index.html"), "utf8")).toBe("built");
+});
+
+// PocketBase data with committed rows still only in its WAL, as a running server has it.
+function liveData(p: ReturnType<typeof project>, rows: number) {
+  const pbData = path.join(p.dir, "pb/pb_data");
+  mkdirSync(pbData, { recursive: true });
+  const r = spawnSync("python3", ["-I", "-c", [
+    "import os, sqlite3, sys",
+    "c = sqlite3.connect(sys.argv[1]); c.execute('pragma journal_mode=wal'); c.execute('pragma wal_autocheckpoint=0')",
+    "c.execute('create table t(i)'); c.executemany('insert into t values(?)', [(i,) for i in range(int(sys.argv[2]))]); c.commit()",
+    "os._exit(0)",
+  ].join("\n"), path.join(pbData, "data.db"), String(rows)], { encoding: "utf8" });
+  expect(r.status, r.stderr).toBe(0);
+  return pbData;
+}
+
+test("apply snapshots the live PocketBase data, verified, before replacing any code", () => {
+  const p = project();
+  liveData(p, 120);
+  const r = apply(p, ["apply", p.sha]);
+  expect(r.result.status, r.result.stderr).toBe(0);
+  const latest = readFileSync(path.join(p.dir, "backups/LATEST"), "utf8").trim();
+  expect(readdirSync(path.join(latest, "pb_data"))).toEqual(["data.db"]);
+  const check = spawnSync("python3", ["-I", "-c",
+    "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from t').fetchone()[0], c.execute('pragma integrity_check').fetchone()[0])",
+    path.join(latest, "pb_data/data.db")], { encoding: "utf8" });
+  expect(check.stdout.trim()).toBe("120 ok");
+  expect(existsSync(path.join(p.dir, "pb/pb_hooks/main.pb.js"))).toBe(true);
+});
+
+test("a failed data snapshot aborts apply before any code, frontend or LATEST change", () => {
+  for (const broken of [
+    (pbData: string) => {
+      for (const f of ["data.db-wal", "data.db-shm"]) rmSync(path.join(pbData, f));
+      writeFileSync(path.join(pbData, "data.db"), Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(8192)]));
+    },
+    (pbData: string) => rmSync(path.join(pbData, "data.db")), // wrong or emptied data directory
+  ]) {
+    const p = project();
+    broken(liveData(p, 3));
+    const r = apply(p, ["apply", p.sha]);
+    expect(r.result.status).not.toBe(0);
+    expect(r.result.stderr).toContain("pb_data backup FAILED, nothing published");
+    expect(existsSync(path.join(p.dir, "pb/pb_hooks"))).toBe(false);
+    expect(existsSync(path.join(p.dir, "web"))).toBe(false);
+    expect(existsSync(path.join(p.dir, "backups/LATEST"))).toBe(false);
+  }
 });

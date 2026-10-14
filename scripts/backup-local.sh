@@ -9,9 +9,9 @@ mkdir -p "$DEST"
 echo "Backup -> $DEST"
 
 if [[ -d "$ROOT/pocketbase/pb_data" ]]; then
-  # Prefer cold copy; if PB running, still copy (WAL may lag)
-  cp -a "$ROOT/pocketbase/pb_data" "$DEST/pb_data"
-  echo "  pb_data copied"
+  # Online, verified SQLite snapshot: consistent even while PocketBase runs.
+  python3 -I "$ROOT/scripts/pb-data-backup.py" "$ROOT/pocketbase/pb_data" "$DEST/pb_data"
+  echo "  pb_data snapshot verified"
 else
   echo "  warn: no pb_data"
 fi

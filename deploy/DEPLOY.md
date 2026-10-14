@@ -63,7 +63,10 @@ Weak bootstrap passwords force `must_change_password=true`.
 
 - World field `between_round_minutes` (default **3** for testing).
 - Admin UI: save interval; **Apply to waiting round** only when not live.
-- Daily backups: `footfive-backup.timer` → `/var/backups/footfive/`.
+- Daily backups: `footfive-backup.timer` → `/var/backups/footfive/`. `pb_data` is an online, verified
+  SQLite snapshot (`scripts/pb-data-backup.py`; PocketBase keeps running). A failed backup is marked
+  `STATUS` failed and `LATEST` stays on the last good one. Each deploy installs `footfive-backup.sh` and
+  its helper in `/home/jd/footfive/scripts/`.
 
 ### Match speed
 
@@ -125,7 +128,7 @@ Workflow: `.github/workflows/deploy.yml` — runs only for a commit that **FootF
    records that SHA, never the latest main.
 1. Unit tests + typecheck + lint  
 2. Production build (`VITE_BASE_PATH=/footfive/`, `VITE_POCKETBASE_URL=https://jdwd40.com/footfive-pb`)  
-3. SSH deploy: code-only backup to root-owned `/var/backups/footfive/<stamp>/` via scoped `sudo -n`, SPA release under `/home/jd/footfive/releases/<stamp>/`, rsync to nginx web root, update hooks/migrations, restart `footfive-pocketbase`
+3. SSH deploy: first a verified `pb_data` snapshot (`scripts/pb-data-backup.py` from the tested checkout, piped to `sudo -n python3`) plus hooks/migrations/web/scripts backups to root-owned `/var/backups/footfive/<stamp>/`; any backup failure aborts before production changes. Then SPA release under `/home/jd/footfive/releases/<stamp>/`, rsync to nginx web root, update hooks/migrations, restart `footfive-pocketbase`
 4. Health verification: app health JSON validated on the runner (`status == "ok"` and `worldAvailable == true`, via `scripts/validate-health.mjs`); only then provenance markers `DEPLOYED_STAMP` + `DEPLOYED_SHA` (the exact tested commit) are written in `/home/jd/footfive/`
 5. Public smoke: SPA + PB health + app health JSON validated the same way + unauth world = 401
 
@@ -172,7 +175,7 @@ VITE_POCKETBASE_URL=https://your.domain ./deploy/deploy.sh apply "$SHA"
 ./deploy/smoke-prod.sh
 ```
 
-`apply` sequence: gate → tests → build → timestamped backup → stop PB → rsync hooks/migrations/frontend → start PB → health.
+`apply` sequence: gate → tests → build → timestamped backup (verified `pb_data` snapshot; a failure stops here) → stop PB → rsync hooks/migrations/frontend → start PB → health.
 The gate refuses unless the checkout is clean and exactly at `SHA`, and `SHA` is the main head whose
 FootFive CI push run passed all three required jobs (same `scripts/verify-deploy-ci.mjs` as the
 workflow; needs an authenticated `gh`). Never deploy a floating `git pull`, a dirty checkout or an
@@ -208,7 +211,8 @@ RESTORE_PB_DATA=1 ./deploy/deploy.sh rollback
 Restore:
 
 1. `systemctl stop pocketbase`
-2. Replace `pb_data` from backup
+2. Replace the whole `pb_data` directory with the backup copy (snapshots carry no `-wal`/`-shm`; never
+   copy a backup `data.db` over a live directory's sidecar files)
 3. Optionally restore `pb_hooks` / `dist`
 4. `systemctl start pocketbase`
 5. Smoke checklist

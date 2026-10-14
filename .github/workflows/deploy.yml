@@ -204,17 +204,22 @@ jobs:
 
           "${SSH[@]}" 'echo ssh_ok && whoami && test -d /home/jd/footfive'
 
-          # Timestamped release of SPA
-          "${SSH[@]}" "mkdir -p /home/jd/footfive/releases/${STAMP} /home/jd/footfive/pocketbase/pb_hooks /home/jd/footfive/pocketbase/pb_migrations /home/jd/footfive/logs"
-
-          # Backup current hooks + migrations + web (code only; never pb_data).
-          # /var/backups/footfive is root:root mode 700, so jd cannot write it
-          # directly: use scoped non-interactive sudo for the backup dir + copies.
-          # Backups stay root-owned; any failure here aborts the deploy.
+          # Backups come first, before any production change; any failure aborts the
+          # deploy. /var/backups/footfive is root:root mode 700, so jd cannot write it
+          # directly: use non-interactive sudo for the backup dir, snapshot and copies.
+          # Backups stay root-owned.
           "${SSH[@]}" "sudo -n install -d -m 700 -o root -g root /var/backups/footfive/${STAMP}"
+          # Online, verified SQLite snapshot of the live data (PocketBase keeps running);
+          # the helper comes from this tested checkout, never the server.
+          "${SSH[@]}" "sudo -n python3 -I - /home/jd/footfive/pb_data /var/backups/footfive/${STAMP}/pb_data" < scripts/pb-data-backup.py
+          # Current hooks + migrations + web + backup scripts.
           "${SSH[@]}" "if [ -d /home/jd/footfive/pocketbase/pb_hooks ]; then sudo -n cp -a /home/jd/footfive/pocketbase/pb_hooks /var/backups/footfive/${STAMP}/pb_hooks; else echo 'skip backup: no existing pb_hooks'; fi"
           "${SSH[@]}" "if [ -d /home/jd/footfive/pocketbase/pb_migrations ]; then sudo -n cp -a /home/jd/footfive/pocketbase/pb_migrations /var/backups/footfive/${STAMP}/pb_migrations; else echo 'skip backup: no existing pb_migrations'; fi"
           "${SSH[@]}" "if [ -d /var/www/jdwd40.com/html/footfive ]; then sudo -n cp -a /var/www/jdwd40.com/html/footfive /var/backups/footfive/${STAMP}/web; else echo 'skip backup: no existing web root'; fi"
+          "${SSH[@]}" "if [ -d /home/jd/footfive/scripts ]; then sudo -n cp -a /home/jd/footfive/scripts /var/backups/footfive/${STAMP}/scripts; else echo 'skip backup: no existing scripts'; fi"
+
+          # Timestamped release of SPA
+          "${SSH[@]}" "mkdir -p /home/jd/footfive/releases/${STAMP} /home/jd/footfive/pocketbase/pb_hooks /home/jd/footfive/pocketbase/pb_migrations /home/jd/footfive/logs"
 
           # Frontend → release dir then web root + current symlink
           tar -C dist -czf - . | "${SSH[@]}" "tar -C /home/jd/footfive/releases/${STAMP} -xzf -"
@@ -224,6 +229,10 @@ jobs:
           # PocketBase hooks + migrations (binary + pb_data stay on server)
           tar -C pocketbase/pb_hooks -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_hooks/* && tar -C /home/jd/footfive/pocketbase/pb_hooks -xzf -'
           tar -C pocketbase/pb_migrations -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_migrations/* && tar -C /home/jd/footfive/pocketbase/pb_migrations -xzf -'
+
+          # Daily backup scripts run as root by footfive-backup.timer: staged, then
+          # renamed into place helper first, so the timer never runs half an update.
+          tar -C scripts -czf - footfive-backup.sh pb-data-backup.py | "${SSH[@]}" 'set -eu; d=/home/jd/footfive/scripts; mkdir -p "$d"; s=$(mktemp -d "$d/.stage.XXXXXX"); tar -C "$s" -xzf -; chmod 755 "$s/footfive-backup.sh" "$s/pb-data-backup.py"; mv -f "$s/pb-data-backup.py" "$d/pb-data-backup.py"; mv -f "$s/footfive-backup.sh" "$d/footfive-backup.sh"; rmdir "$s"'
 
           # Restart system service (NOPASSWD sudo on VPS).
           # Health bodies are captured, never piped: under remote set -eu a

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# FootFive production backup — brief consistent stop of pocketbase service.
+# FootFive production backup. pb_data is an online, verified SQLite snapshot
+# (pb-data-backup.py beside this script), so PocketBase keeps running. Any failure
+# marks this backup STATUS=failed and leaves LATEST on the previous good backup.
 # Env overrides:
 #   FOOTFIVE_HOME=/home/jd/footfive
 #   FOOTFIVE_BACKUP_ROOT=/var/backups/footfive
@@ -14,21 +16,14 @@ KEEP_DAILY="${FOOTFIVE_KEEP_DAILY:-14}"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DEST="$BACKUP_ROOT/$STAMP"
 WEB="${FOOTFIVE_WEB:-/var/www/jdwd40.com/html/footfive}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-mkdir -p "$DEST"
+mkdir -p "$BACKUP_ROOT"
+mkdir "$DEST" # fails on a same-second collision instead of merging into another backup
+trap 'status=$?; if [[ $status -ne 0 ]]; then echo "failed" >"$DEST/STATUS"; echo "backup FAILED $DEST" >&2; fi' EXIT
 echo "backup start $STAMP"
 
-# Minimal downtime for SQLite consistency
-systemctl stop "$SERVICE"
-sleep 1
-cp -a "$HOME_DIR/pb_data" "$DEST/pb_data"
-systemctl start "$SERVICE"
-sleep 2
-if ! curl -sf http://127.0.0.1:8091/api/health >/dev/null; then
-  echo "ERROR: service unhealthy after backup start" >&2
-  echo "failed" >"$DEST/STATUS"
-  exit 1
-fi
+python3 -I "$SCRIPT_DIR/pb-data-backup.py" "$HOME_DIR/pb_data" "$DEST/pb_data"
 
 cp -a "$HOME_DIR/pocketbase/pb_hooks" "$DEST/pb_hooks"
 cp -a "$HOME_DIR/pocketbase/pb_migrations" "$DEST/pb_migrations"
@@ -54,7 +49,9 @@ fi
 
 ( cd "$DEST" && find . -type f ! -name SHA256SUMS -print0 | xargs -0 sha256sum ) >"$DEST/SHA256SUMS"
 echo "ok" >"$DEST/STATUS"
-echo "$DEST" >"$BACKUP_ROOT/LATEST"
+echo "$DEST" >"$BACKUP_ROOT/LATEST.tmp"
+mv -f "$BACKUP_ROOT/LATEST.tmp" "$BACKUP_ROOT/LATEST"
+trap - EXIT # published: a later retention error must not relabel this good backup
 chmod 700 "$BACKUP_ROOT" 2>/dev/null || true
 chmod -R go-rwx "$DEST" 2>/dev/null || true
 
