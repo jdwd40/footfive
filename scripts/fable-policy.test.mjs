@@ -13,12 +13,12 @@ const issue = (number, repository = repo) => ({ number, url: `https://github.com
 
 // Exercise the actual workflow entry point and gate, with every gh operation
 // confined to a disposable fake executable. No network, model or repository write.
-function workflow({ linked = [], labelled = false, state = "OPEN", event = { pull_request: { number: 101 } }, record } = {}) {
+function workflow({ linked = [], labelled = false, state = "OPEN", event = { pull_request: { number: 101 } }, record, movedHead } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "footfive-fable-policy-"));
   dirs.push(dir);
   const stateFile = path.join(dir, "state.json");
   const eventFile = path.join(dir, "event.json");
-  writeFileSync(stateFile, JSON.stringify({ linked, labelled, state, record, calls: [] }));
+  writeFileSync(stateFile, JSON.stringify({ linked, labelled, state, record, movedHead, calls: [] }));
   writeFileSync(eventFile, JSON.stringify(event));
   writeFileSync(path.join(dir, "gh"), `#!${process.execPath}
 const fs = require('node:fs');
@@ -32,7 +32,7 @@ const endpoint = args.find(x => x.startsWith('repos/')) || '';
 let result;
 if (args[0] === 'pr') result = {state: st.state, headRefOid: '${head}', labels: st.labelled ? [{name:'fable-review'}] : [], closingIssuesReferences:st.linked};
 else if (endpoint.endsWith('/labels')) { st.labelled = true; result = []; }
-else if (endpoint.endsWith('/pulls/101')) result = {number:101, base:{repo:{full_name:'${repo}'}}, head:{sha:'${head}'}, labels:st.labelled ? [{name:'fable-review'}] : []};
+else if (endpoint.endsWith('/pulls/101')) result = {number:101, base:{repo:{full_name:'${repo}'}}, head:{sha:st.movedHead || '${head}'}, labels:st.labelled ? [{name:'fable-review'}] : []};
 else if (endpoint.includes('/comments?')) result = st.record ? [{id:1,user:{login:'jdwd40'},body:'<!-- footfive-fable-review:v1 -->\\n'+String.fromCharCode(96).repeat(3)+'json\\n'+JSON.stringify(st.record)+'\\n'+String.fromCharCode(96).repeat(3)+'\\n\\nSHIP'}] : [];
 else if (endpoint.endsWith('/check-runs')) result = {};
 else { process.stderr.write('unexpected gh operation'); process.exit(2); }
@@ -86,4 +86,16 @@ test("closed historical PRs do not trigger new labels or review checks", () => {
   const r = workflow({ state: "MERGED", linked: [issue(16)], labelled: true, event: { issue: { number: 101, pull_request: {} } } });
   expect(r.result.status).toBe(0);
   expect(r.calls).toHaveLength(1);
+});
+
+
+test("a moving PR head cannot approve the earlier commit", () => {
+  const movedHead = "b".repeat(40);
+  const record = { round: 1, model: "claude-fable-5-1", headSha: movedHead, status: "complete", verdict: "SHIP", findings: [] };
+  const r = workflow({ labelled: true, movedHead, record });
+  expect(r.result.status).toBe(1);
+  const check = r.calls.find((c) => c.body?.name === "Fable review").body;
+  expect(check.head_sha).toBe(head);
+  expect(check.conclusion).toBe("failure");
+  expect(check.output.summary).toContain("head changed");
 });

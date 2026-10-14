@@ -28,16 +28,20 @@ if (mixed && !labelled) {
   result = { status: 1, stdout: "Mixed approved/excluded scope: ask the user before adding fable-review.", stderr: "" };
 } else {
   if (approved && !labelled) ghJson(["api", `repos/${repo}/issues/${number}/labels`, "--method", "POST", "--input", "-"], { labels: ["fable-review"] });
-  result = spawnSync(process.execPath, [fileURLToPath(new URL("./fable-review.mjs", import.meta.url)), "check", String(number)], {
+  result = spawnSync(process.execPath, [fileURLToPath(new URL("./fable-review.mjs", import.meta.url)), "check", String(number), "--json"], {
     encoding: "utf8", env: { ...process.env, GH_REPO: repo },
   });
 }
 const summary = [result.stdout, result.stderr, result.error?.message].filter(Boolean).join("\n").slice(0, 60000);
-const passed = result.status === 0 && !result.error;
+let evaluated;
+try { evaluated = JSON.parse(result.stdout); } catch { /* Mixed scope and transport errors fail closed. */ }
+const passed = result.status === 0 && !result.error && evaluated?.ok === true && evaluated.headSha === pr.headRefOid;
+const detail = evaluated?.headSha && evaluated.headSha !== pr.headRefOid
+  ? "PR head changed during verification; retry against its current head.\n" + summary : summary;
 ghJson(["api", `repos/${repo}/check-runs`, "--method", "POST", "--input", "-"], {
   name: "Fable review", head_sha: pr.headRefOid, status: "completed",
   conclusion: passed ? "success" : "failure",
-  output: { title: passed ? "Fable policy satisfied" : "Fable review required or blocked", summary: summary || "Review gate failed without output." },
+  output: { title: passed ? "Fable policy satisfied" : "Fable review required or blocked", summary: detail || "Review gate failed without output." },
 });
-console.log(summary);
+console.log(detail);
 if (!passed) process.exitCode = 1;

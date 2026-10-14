@@ -81,8 +81,12 @@ PRs pass without reading review records or spending Fable budget.
 The GitHub workflow runs trusted default-branch code only, publishes a `Fable
 review` check and responds to label/head/review-record changes. It never executes
 PR code with write permissions and never calls a paid review service. The lead's
-merge wrapper additionally requires the normal-review acknowledgement, green CI
-and the same exact head.
+merge wrapper additionally requires the normal-review acknowledgement and successful
+GitHub Actions results for all three existing FootFive CI jobs on the exact SHA:
+unit/type/lint/build, PocketBase API E2E and Playwright Chromium. Missing, skipped,
+pending or failed jobs block merging; other published checks must also pass.
+A head change during workflow verification produces a failed check, never an
+approval attributed to the earlier commit.
 
 GitHub branch protection is unavailable on this private repository's current
 plan (API returns HTTP 403). The check is visible but cannot be made a required

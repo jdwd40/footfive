@@ -10,6 +10,7 @@ head=$2
 export GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-jdwd40/footfive}}"
 script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 node "$script_dir/fable-review.mjs" check "$pr"
+node "$script_dir/verify-pr-ci.mjs" "$head"
 gh pr checks "$pr" --repo "$GH_REPO"
 current=$(gh pr view "$pr" --repo "$GH_REPO" --json headRefOid --jq .headRefOid)
 [[ $current == "$head" ]] || { echo 'PR head changed; review and verify the new commit.' >&2; exit 1; }
