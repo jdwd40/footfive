@@ -209,6 +209,20 @@ describe("footfive-ci.yml contracts", () => {
     expect(readFileSync(path.join(root, "tests/integration/lineup-atomicity.mjs"), "utf8")).toContain("LINEUP_PB_PORT");
   });
 
+  it("gates the API job on the real coaching suite after the lineup suite", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => new RegExp(`^ {8}run: ${run}$`, "m").test(step));
+    const coaching = steps.filter((step) => /^ {8}run: npm run test:coaching$/m.test(step));
+    expect(coaching).toHaveLength(1);
+    expect(coaching[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(at("npm run test:coaching")).toBeGreaterThan(at("bash scripts\\/fetch-pocketbase\\.sh"));
+    expect(at("npm run test:coaching")).toBeGreaterThan(at("npm run test:lineup"));
+    expect(at("npm run test:lineup")).toBeGreaterThan(-1); // the lineup gate stays
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:coaching"]).toBe("node tests/integration/coaching-atomicity.mjs");
+    expect(readFileSync(path.join(root, "tests/integration/coaching-atomicity.mjs"), "utf8")).toContain("COACHING_PB_PORT");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

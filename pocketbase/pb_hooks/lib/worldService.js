@@ -1718,13 +1718,31 @@ function liveCoachCooldownMs(T) {
   return (BALANCE.liveCoachingCooldownMinutes || 3) * T.minuteMs;
 }
 
-/** Manager Defend / Balanced / Attack — applies from the next simulated minute. */
+/**
+ * Manager Defend / Balanced / Attack — applies from the next simulated minute, which must
+ * start after the command is accepted. The tick first resolves play up to now; if the
+ * match is still behind the clock (the world is paused, another worker holds the lease
+ * or an advance failed), the command is rejected unchanged after one more catch-up try,
+ * rather than applied to a minute that has already been played.
+ */
 function setCoaching($app, userId, fixtureId, stance) {
   if (["defend", "balanced", "attack"].indexOf(stance) < 0) throw new BadRequestError("Choose Defend, Balanced or Attack");
-  tick($app, Date.now()); // resolve everything up to now first
-  var now = Date.now();
   var world = ensureWorld($app);
   var T = timing(world);
+  for (var attempt = 0; ; attempt++) {
+    tick($app, Date.now()); // resolve everything up to now first
+    var behind = false;
+    try {
+      return coachInTransaction($app, userId, fixtureId, stance, T, function () {
+        behind = true;
+      });
+    } catch (err) {
+      if (!behind || attempt > 0) throw err;
+    }
+  }
+}
+
+function coachInTransaction($app, userId, fixtureId, stance, T, markBehind) {
   var result = null;
   $app.runInTransaction(function (tx) {
     var fx = tx.findRecordById("shared_fixtures", fixtureId);
@@ -1735,11 +1753,18 @@ function setCoaching($app, userId, fixtureId, stance) {
     var ms = one(tx, "match_states", "fixture = {:f}", "", { f: fixtureId });
     if (!ms || ms.get("sim_version") !== 2) throw new BadRequestError("Match has not kicked off");
     var st = readJson(ms, "state_json", null);
+    var now = Date.now();
     var pub = lastPublished(tx, fixtureId, now);
     if (!pub || eng.LIVE_PHASES.indexOf(pub.st.ph) < 0 && ["half_time", "et_break", "et_half_time"].indexOf(pub.st.ph) < 0) {
       throw new BadRequestError("Coaching is available while the match is being played");
     }
     if (st.phase === "shootout" || st.phase === "finished") throw new BadRequestError("Coaching has closed for this match");
+    // The next minute has already started unsimulated: queueing now would apply the
+    // command to elapsed play.
+    if (!(st.nextAt > now)) {
+      markBehind();
+      throw new BadRequestError("Match is catching up — try again in a moment");
+    }
     st.coach = st.coach || {};
     var c = st.coach[side] || { n: 0, last: 0 };
     if (c.n >= BALANCE.liveCoachingMax) throw new BadRequestError("No coaching commands left this match (" + BALANCE.liveCoachingMax + " max)");
