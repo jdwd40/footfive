@@ -99,3 +99,35 @@ describe("#105 fast and slow phases of play", () => {
     expect(step("fast")).toBeGreaterThan(step("slow") * 1.5);
   });
 });
+
+describe("#106 long balls, runs and fluid motion", () => {
+  const speed = (path: Pt[], t: number, dt = 0.002) => Math.hypot(...(sample(path, t + dt).map((v, i) => (v - sample(path, t)[i]) / dt) as [number, number]));
+  it("never stalls through a moving keyframe: no pause frames before a pass, shot or run", () => {
+    const path: Pt[] = [[10, 10], [20, 10], [30, 10]];
+    expect(speed(path, 0.5)).toBeGreaterThan(10);
+    for (let seq = 1; seq <= 30; seq++) {
+      const s = sceneFor(ev(seq, "pass", "home", [30, 30], [44, 34]), [30, 30], 15000)!;
+      for (let t = 0.3; t <= 0.7; t += 0.02) expect(speed(s.ball, t), `#${seq} t=${t.toFixed(2)}`).toBeGreaterThan(1);
+    }
+    // a real hold still holds
+    expect(speed([[0, 0], [5, 0], [5, 0], [9, 0]], 0.5)).toBe(0);
+  });
+  it("a long forward pass is a lifted long ball the receiver chases from deep", () => {
+    let seq = 1;
+    while (touchStyle(seq) !== "quick") seq++;
+    const s = sceneFor(ev(seq, "pass", "away", [80, 30], [45, 30]), [80, 30], 15000)!;
+    expect(Math.max(...s.ballHeight!)).toBeGreaterThan(0.5);
+    const r = s.actors.find((a) => a.id === "r")!;
+    expect(r.path[0][0] - 45).toBeGreaterThanOrEqual(10);
+    expect(s.ball[s.ball.length - 1]).toEqual([45, 30]);
+  });
+  it("idle drift is slow: no on-the-spot wobble between frames", () => {
+    const s = sceneFor(ev(60, "corner_kick", "home", [50, 32], [50, 32]), [50, 32], 15000) ?? { key: "60", seq: 60, type: "x", ms: 0, ball: [[50, 32]] as Pt[], actors: [], caption: "" };
+    for (let now = 1000; now < 9000; now += 16) {
+      const a = frameAt(s, 1, lineups, undefined, now);
+      const b = frameAt(s, 1, lineups, undefined, now + 16);
+      expect(b.ball).toEqual(a.ball);
+      a.players.forEach((p, i) => expect(Math.hypot(p.x - b.players[i].x, p.y - b.players[i].y)).toBeLessThan(0.02));
+    }
+  });
+});

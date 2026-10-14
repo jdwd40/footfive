@@ -88,7 +88,7 @@ describe("highlight scenes agree with the simulation", () => {
         n++;
         const [ix, iy] = s.impact!;
         let best = Infinity;
-        for (let t = 0; t <= 1.0001; t += 0.01) {
+        for (let t = 0; t <= 1.0001; t += 0.001) { // #106: the ball keeps its speed through a moving keyframe, so sample finely
           const [x, y] = sample(s.ball, t);
           best = Math.min(best, Math.hypot(x - ix, y - iy));
         }

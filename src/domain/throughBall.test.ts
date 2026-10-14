@@ -178,7 +178,8 @@ describe("through balls are a runner beating his marker into space (FF-70)", () 
     expect(t.marker.path).not.toEqual(p.marker.path);
     // The ordinary pass stays a short pass: receiver 4 short of the ball, his marker ending goal-side of him.
     const spot = e.ball as Pt;
-    expect(along(t.atk, spot) - along(t.atk, first(p.runner))).toBeCloseTo(4, 6);
+    const long = along(t.atk, spot) - along(t.atk, e.from as Pt) > 24; // #106: a long one is a long ball, chased from deep
+    expect(along(t.atk, spot) - along(t.atk, first(p.runner))).toBeCloseTo(long ? 12 : 4, 6);
     expect(along(t.atk, last(p.marker))).toBeGreaterThan(along(t.atk, spot));
     // The through-ball runner covers more ground onto the ball than a pass receiver does.
     const run = (a: Actor) => along(t.atk, last(a)) - along(t.atk, first(a));

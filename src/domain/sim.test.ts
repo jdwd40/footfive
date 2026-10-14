@@ -155,20 +155,20 @@ describe("frameAt", () => {
     expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 77]);
   });
 
-  it("breathes once the scene is over: players and ball drift a little with time, never when mid-scene", () => {
+  it("drifts once the scene is over: players ease slowly with time, the ball stays put, nothing moves mid-scene (#106)", () => {
     const m = ms[0];
     const s = sceneFor(m.events[5], [50, 32], 15000) ?? idle(m.events[5], [50, 32]);
     const a = frameAt(s, 1, m.lineups, undefined, 0);
-    const b = frameAt(s, 1, m.lineups, undefined, 628); // sin(π/2)
+    const b = frameAt(s, 1, m.lineups, undefined, 1571); // sin(π/2) at IDLE_TAU
     const moved = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y);
-    expect(moved({ x: a.ball[0], y: a.ball[1] }, { x: b.ball[0], y: b.ball[1] })).toBeGreaterThan(0.2);
+    expect(b.ball).toEqual(a.ball);
     a.players.forEach((p, i) => {
       const d = moved(p, b.players[i]);
       expect(d).toBeGreaterThan(0);
-      expect(d).toBeLessThanOrEqual(0.6);
+      expect(d).toBeLessThanOrEqual(1.4);
     });
     const c = frameAt(s, 0.5, m.lineups, undefined, 0);
-    const e = frameAt(s, 0.5, m.lineups, undefined, 628);
+    const e = frameAt(s, 0.5, m.lineups, undefined, 1571);
     expect(e.players.map((p) => [p.x, p.y])).toEqual(c.players.map((p) => [p.x, p.y]));
   });
 
