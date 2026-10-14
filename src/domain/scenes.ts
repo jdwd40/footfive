@@ -37,6 +37,7 @@ export type Scene = {
   cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
   flashAt?: number; // progress at which the result badge may show (default 0.62)
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
+  tempo?: Tempo; // #105: phase-of-play pace for the movement around this event (never its timing)
   touch?: Touch; // plain pass: how the passer plays it (#104)
   won?: number; // challenge scenes: progress at which the winner (`side`) has the ball — a WON IT cue, not a result (no reveal gate, no hold)
 };
@@ -52,6 +53,17 @@ export function seqHash(seq: number, k = 0) {
 export function touchStyle(seq: number): Touch {
   const h = seqHash(seq, 104);
   return h < 0.4 ? "quick" : h < 0.75 ? "carry" : "hold";
+}
+/** #105: counters and quick passing are fast, patient build-up slow. Only movement speed follows it; scene lengths do not. */
+export type Tempo = "fast" | "normal" | "slow";
+const FAST = new Set(["tackle", "interception", "through_ball", "cross", "shot", "dribble"]);
+export function tempoFor(e: MatchEvent, s: Scene): Tempo {
+  if (e.turn || FAST.has(e.t)) return "fast";
+  const from = e.from as Pt | undefined;
+  const fwd = from && e.ball && e.side ? toward(e.side, e.ball[0] - from[0]) : 0;
+  if (e.t === "pass" && (s.touch === "carry" || fwd > 18)) return "fast";
+  if (e.t === "build_up" || s.touch === "hold") return "slow";
+  return "normal";
 }
 export type Cam = [number, number, number, number];
 export const FULL_CAM: Cam = [-4, -3, 108, 77]; // bottom margin reaches the tunnel at y=70
@@ -127,6 +139,7 @@ function head(e: MatchEvent) {
  */
 export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
   const s = build(e, prevBall, minuteMs, next);
+  if (s) s.tempo = tempoFor(e, s);
   // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.
   if (s && (s.ball[0][0] !== prevBall[0] || s.ball[0][1] !== prevBall[1])) {
     s.ball = [prevBall, ...s.ball];
