@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { FULL_CAM, sample, sampleN, sceneFor, short, type Actor, type Pt, type Scene } from "./scenes";
+import { sample, sampleN, sceneFor, short, type Actor, type Pt, type Scene } from "./scenes";
 import { frameAt, type Frame, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
@@ -157,8 +157,7 @@ describe("through balls are a runner beating his marker into space (FF-70)", () 
     });
     // A through ball is not a result or a contest: no badge, impact, WON IT cue, focus or camera move.
     expect(s.flash ?? null).toBeNull();
-    for (const k of ["impact", "won", "focus"] as const) expect(s[k], k).toBeUndefined();
-    expect(s.cam === undefined || s.cam[2] < FULL_CAM[2], "cam: final-third zoom (#81) or full pitch").toBe(true);
+    for (const k of ["impact", "won", "focus", "cam"] as const) expect(s[k], k).toBeUndefined();
     // Same pace as the pass it replaces, at a broadcast and at the live minute.
     for (const ms of [15000, 8000]) expect(scene(e, ms).ms).toBe(sceneFor({ ...e, t: "pass" }, e.from as Pt, ms)!.ms);
     // The passer strikes it from where the engine put the ball.

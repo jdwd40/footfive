@@ -64,8 +64,7 @@ describe("MatchPage timeline player", () => {
     const kick: MatchEvent = { ...ev(1, now - 30000, "Steps up"), t: "shootout_setup", side: "away" as const, kick: { no: 3, sd: 0 }, st: pens };
     await mount(view([kick], { home: names("Home"), away: names("Away") }, now));
     const hud = screen.getByTestId("pitch-hud");
-    expect(screen.getByTestId("pitch-top").contains(hud)).toBe(true); // above the pitch, off the playing surface
-    expect(screen.getByTestId("pitch").contains(hud)).toBe(false);
+    expect(screen.getByTestId("pitch").contains(hud)).toBe(true);
     expect(screen.getByTestId("hud-score").textContent).toBe("HOM 1–1 AWA");
     expect(screen.getByTestId("hud-pens").textContent).toBe("PENS 2–1");
     expect(screen.getByTestId("hud-kicker").textContent).toBe("AWA to kick");
@@ -102,13 +101,13 @@ describe("MatchPage timeline player", () => {
       await mount(view([shot, goal], null, now));
       return { score: screen.getByTestId("match-score").textContent, shots: screen.getByTestId("stats").textContent, feed: screen.getByTestId("event-feed").textContent };
     };
-    const early = await run(0.3 * 3800);
+    const early = await run(0.15 * 3800);
     expect(early.score).toBe("0–0");
     expect(early.shots).toContain("2Shots");
     expect(early.feed).toContain("Shoots!");
     expect(early.feed).not.toContain("GOAL!");
     cleanup();
-    const late = await run(0.8 * 3800);
+    const late = await run(0.35 * 3800); // the ball crossed the line at p = 0.25: no hold (#98)
     expect(late.score).toBe("1–0");
     expect(late.shots).toContain("3Shots");
     expect(late.feed).toContain("GOAL!");
@@ -123,9 +122,10 @@ describe("MatchPage timeline player", () => {
       await mount(view([shot, goal], null, now));
       return screen.getByTestId("commentary").textContent;
     };
-    expect(await run(0.3 * 3800)).toBe("Shoots!");
+    expect(await run(0.15 * 3800)).toBe("Shoots!");
     cleanup();
-    expect(await run(0.8 * 3800)).toBe("GOAL!");
+    expect(await run(0.35 * 3800)).toBe("GOAL!"); // straight after the ball crosses the line (p = 0.25), #98
+    expect(screen.getByTestId("goal-banner")).toBeTruthy(); // big GOOOAL over the pitch at the same moment
   });
 
   it("the result waits for the drawn ball, not just the clock: a lagging ball keeps the shot's caption a few frames longer", async () => {

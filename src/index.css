@@ -309,7 +309,7 @@ h3,
   .match-page:has([data-testid="final-result"]) [aria-label="Highlights"] { position: absolute; top: 8px; right: 8px; }
 }
 @media (min-width: 360px) {
-  .match-page { margin-inline: -4px; --pitch-chrome: 368px; }
+  .match-page { margin-inline: -4px; --pitch-chrome: 328px; }
   .match-pitch-panel { padding: 4px; }
 }
 @media (min-width: 640px) {

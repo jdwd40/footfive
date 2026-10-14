@@ -118,37 +118,7 @@ export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: M
     s.ball = [prevBall, ...s.ball];
     if (s.ballHeight) s.ballHeight = [s.ballHeight[0], ...s.ballHeight];
   }
-  if (s && !s.cam && ZOOM_TYPES.has(s.type)) s.cam = finalThirdCam(s);
   return s;
-}
-
-/** Final-third moments that get the tighter broadcast camera (#81). Presentation only: the camera never moves the ball or a player. */
-export const ZOOM_TYPES = new Set(["through_ball", "cross", "shot"]);
-const ZOOM_W = 72; // the attacked third plus the edge of midfield
-const ZOOM_MAX_W = 92; // wider than this is barely a zoom: keep the full pitch
-const ZOOM_PAD = 6; // room round the action (labels, dwell drift)
-/**
- * Tighter camera on the attacked end when a through ball / cross / shot ends in the final third. It always frames the whole
- * scene (ball keyframes and actor paths, padded), so nothing in the moment leaves the shot; if that needs nearly the full
- * pitch it stays on the full pitch. Undefined = full pitch, and the next scene without a camera eases back (sim smooth()).
- */
-export function finalThirdCam(s: Scene): Cam | undefined {
-  const atk = (s.side || "home") as Side;
-  const endX = s.ball[s.ball.length - 1][0];
-  if (toward(atk, endX - 50) < 50 / 3) return undefined; // not in the final third
-  const pts = [...s.ball, ...s.actors.flatMap((a) => a.path)];
-  const xs = pts.map((p) => p[0]);
-  const ys = pts.map((p) => p[1]);
-  const [x0, x1] = [Math.min(...xs) - ZOOM_PAD, Math.max(...xs) + ZOOM_PAD];
-  const [y0, y1] = [Math.min(...ys) - ZOOM_PAD, Math.max(...ys) + ZOOM_PAD];
-  const [, , fw, fh] = FULL_CAM;
-  const g = goalX(atk);
-  // Wide enough for the action and the goal it attacks, and tall enough for its spread (aspect fixed).
-  const spanX = Math.max(x1, g + 4) - Math.min(x0, g - 4);
-  const w = Math.max(ZOOM_W, spanX, ((y1 - y0) * fw) / fh);
-  if (w > ZOOM_MAX_W) return undefined;
-  const cx = atk === "home" ? Math.max(x1, g + 4) - w / 2 : Math.min(x0, g - 4) + w / 2;
-  return camAt(cx, (y0 + y1) / 2, w);
 }
 
 function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
@@ -395,7 +365,10 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         ],
         flash: "goal",
         focus: atk,
-        impact: net,
+        // GOAL shows the instant the ball crosses the line (p = 0.25, ball on `target`), not at the default 0.62 hold
+        // after it has already settled in the net (#98): no gap between the goal and its message.
+        flashAt: 0.25,
+        impact: target,
       };
     }
     case "celebration": {
