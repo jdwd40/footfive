@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { FULL_CAM, ZOOM_TYPES, penRefSpot, sample, sampleN, sceneFor, type Cam, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, penRefSpot, sample, sampleN, sceneFor, type Cam, type Pt, type Scene } from "./scenes";
 import type { MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -272,7 +272,7 @@ describe("highlight scenes agree with the simulation", () => {
         if (!s.cam) continue;
         n++;
         expect(Math.abs(s.cam[2] / s.cam[3] - ratio), `${e.t} #${e.seq}`).toBeLessThan(0.01);
-        if (!ZOOM_TYPES.has(s.type)) expect(s.cam[2], `${e.t} #${e.seq}`).toBe(56); // penalties: the box and the goal fit
+        expect(s.cam[2], `${e.t} #${e.seq}`).toBe(56); // the box and the goal fit
         expect(s.cam[0]).toBeGreaterThanOrEqual(FULL_CAM[0]); // inside the full-pitch margins
         expect(s.cam[0] + s.cam[2]).toBeLessThanOrEqual(FULL_CAM[0] + FULL_CAM[2]);
         expect(s.cam[1]).toBeGreaterThanOrEqual(FULL_CAM[1]);
@@ -541,43 +541,5 @@ describe("shootout banners have what they need", () => {
     expect(setups.some((e) => e.kick?.sd === 1)).toBe(true);
     expect(setups.some((e) => e.kick?.must === 1)).toBe(true);
     expect(setups.some((e) => e.kick?.win === 1)).toBe(true);
-  });
-});
-
-describe("final-third camera (#81)", () => {
-  const all = events(40).flat();
-  const inside = (c: Cam, [x, y]: Pt) => x >= c[0] && x <= c[0] + c[2] && y >= c[1] && y <= c[1] + c[3];
-  it("through balls, crosses and shots into the final third zoom in and keep the whole moment in shot", () => {
-    let prev: Pt = [50, 32];
-    let zoomed = 0;
-    const seen = new Set<string>();
-    for (const e of all) {
-      const s = sceneFor(e, prev, 15000);
-      if (!s) continue;
-      prev = end(s);
-      if (!["through_ball", "cross", "shot"].includes(s.type) || !s.cam) continue;
-      zoomed++;
-      seen.add(s.type);
-      expect(s.cam[2]).toBeLessThan(FULL_CAM[2]);
-      expect(s.cam[3] / s.cam[2]).toBeCloseTo(FULL_CAM[3] / FULL_CAM[2], 6);
-      for (const p of [...s.ball, ...s.actors.flatMap((a) => a.path)]) expect(inside(s.cam, p)).toBe(true);
-      const g = s.side === "away" ? 0 : 100;
-      expect(inside(s.cam, [g, 32])).toBe(true);
-    }
-    expect(zoomed).toBeGreaterThan(50);
-    expect(seen).toEqual(new Set(["through_ball", "cross", "shot"]));
-  });
-  it("other play keeps the full pitch, so the camera returns after the moment", () => {
-    let prev: Pt = [50, 32];
-    for (const e of all) {
-      const s = sceneFor(e, prev, 15000);
-      if (!s) continue;
-      prev = end(s);
-      if (["pass", "build_up", "dribble", "tackle", "interception"].includes(s.type)) expect(s.cam).toBeUndefined();
-    }
-  });
-  it("a through ball ending in midfield stays wide", () => {
-    const s = sceneFor({ seq: 1, t: "through_ball", side: "home", ball: [55, 30], from: [40, 30], text: "", st: {} } as unknown as MatchEvent, [40, 30], 15000);
-    expect(s?.cam).toBeUndefined();
   });
 });

@@ -3,7 +3,7 @@
  * at formation anchors drifted toward the ball, so all 10 players are always on the pitch.
  */
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
-import { FULL_CAM, ZOOM_TYPES, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
 export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase">;
@@ -279,10 +279,6 @@ function place(p: Player, a: Actor, t: number) {
 const MAX_SPEED = 60; // units per second
 const REF_SPEED = 14;
 const REF_DEADBAND = 4; // units: a target this close is "where he already is"
-/** Reduced motion has no smoothing, so a final-third zoom would cut in and out: hold the full pitch for those instead (#81). */
-export function calmCam(frame: Frame): Frame {
-  return ZOOM_TYPES.has(frame.type) && frame.cam !== FULL_CAM ? { ...frame, cam: FULL_CAM } : frame;
-}
 export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   if (!prev || dtMs > 1000) return target;
   dtMs = Math.min(100, dtMs); // a stutter still reads as a chase, not a jump
