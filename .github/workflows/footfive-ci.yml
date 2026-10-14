@@ -59,6 +59,8 @@ jobs:
         run: npm run test:command-charge
       - name: Lineup atomicity (disposable PocketBase)
         run: npm run test:lineup
+      - name: Live coaching order (disposable PocketBase)
+        run: npm run test:coaching
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test
