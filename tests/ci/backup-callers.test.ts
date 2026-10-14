@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "vitest";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -108,6 +108,30 @@ test("a failed daily snapshot is marked failed, publishes nothing and leaves LAT
     expect(readFileSync(path.join(dest, "STATUS"), "utf8").trim()).toBe("failed");
     expect(readdirSync(dest)).toEqual(["STATUS"]); // no pb_data, no staging, no manifest
     expect(r.calls).toBe("");
+  }
+});
+
+// Permission bits do not restrict root, so this regression needs an ordinary user.
+test.skipIf(process.getuid?.() === 0)("unreadable nested storage fails the daily backup instead of publishing it incomplete", () => {
+  for (const [label, target] of [["directory", "storage/private"], ["file", "storage/private/upload.txt"]]) {
+    let locked = "";
+    try {
+      const r = daily((home) => {
+        liveDb(path.join(home, "pb_data"), 8);
+        mkdirSync(path.join(home, "pb_data/storage/private"), { recursive: true });
+        writeFileSync(path.join(home, "pb_data/storage/private/upload.txt"), "upload");
+        locked = path.join(home, "pb_data", target);
+        chmodSync(locked, 0o000);
+      });
+      expect(r.result.status, label).not.toBe(0);
+      expect(r.result.stderr, label).toContain("Permission denied");
+      expect(r.latest, label).toBe(`${r.backups}/previous`);
+      const dest = path.join(r.backups, r.stamps[0]);
+      expect(readFileSync(path.join(dest, "STATUS"), "utf8").trim(), label).toBe("failed");
+      expect(readdirSync(dest), label).toEqual(["STATUS"]);
+    } finally {
+      if (locked) chmodSync(locked, 0o755);
+    }
   }
 });
 

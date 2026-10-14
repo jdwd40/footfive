@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL as NodeURL } from "node:url";
@@ -196,6 +196,27 @@ describe("actual online pb_data backup CLI", () => {
     expect(backup(source, dest).status).not.toBe(0);
     unpublished(dir, dest);
     expect(sourceEvidence(source)).toEqual(before);
+  });
+
+  // Root bypasses mode-000 access checks. Do not change identities or assume a
+  // privileged runner has an available unprivileged account; CI runs non-root.
+  it.skipIf(process.getuid?.() === 0)("fails instead of silently omitting unreadable storage", async () => {
+    const { dir, source, dest } = await fixture();
+    const privateDir = join(source, "storage", "private");
+    mkdirSync(privateDir);
+    writeFileSync(join(privateDir, "upload.txt"), "required upload");
+    const originalMode = statSync(privateDir).mode & 0o777;
+    try {
+      chmodSync(privateDir, 0o000);
+      expect(() => readdirSync(privateDir)).toThrow();
+      expect(backup(source, dest).status).toBe(1);
+      unpublished(dir, dest);
+    } finally {
+      chmodSync(privateDir, originalMode);
+      // Also make a wrongly published snapshot removable if this regresses.
+      const copiedPrivate = join(dest, "storage", "private");
+      if (existsSync(copiedPrivate)) chmodSync(copiedPrivate, originalMode);
+    }
   });
 
   it.each(["direct", "symlink parent"])("refuses destination inside source (%s) before changing source", async (kind) => {

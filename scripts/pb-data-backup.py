@@ -79,10 +79,14 @@ def snapshot(src, dst):
     keep_owner(src_stat, dst)
 
 
+def walk_error(error):
+    raise error  # an unreadable directory fails the backup instead of being skipped
+
+
 def copy_tree(src_root, stage, databases):
     skip = {name + s for name in databases for s in ("",) + LIVE}
     copied = 0
-    for dirpath, dirnames, filenames in os.walk(src_root):
+    for dirpath, dirnames, filenames in os.walk(src_root, onerror=walk_error):
         rel = os.path.relpath(dirpath, src_root)
         out = stage if rel == "." else os.path.join(stage, rel)
         for name in list(dirnames):
@@ -107,7 +111,7 @@ def copy_tree(src_root, stage, databases):
                 continue
             copied += 1
     # Directory modes, times and owners last, deepest first, once their contents exist.
-    for dirpath, _, _ in sorted(os.walk(src_root), key=lambda w: -w[0].count(os.sep)):
+    for dirpath, _, _ in sorted(os.walk(src_root, onerror=walk_error), key=lambda w: -w[0].count(os.sep)):
         rel = os.path.relpath(dirpath, src_root)
         out = stage if rel == "." else os.path.join(stage, rel)
         shutil.copystat(dirpath, out)
