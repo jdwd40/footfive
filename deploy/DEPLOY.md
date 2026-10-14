@@ -37,11 +37,15 @@ Frontend `VITE_POCKETBASE_URL` at **build time** must be the public API origin (
 ## First-time setup
 
 1. Install Nginx, certbot, create user `pocketbase`.
-2. Copy PB 0.28.4 binary + empty `pb_data` OR existing data.
+2. Install the PB 0.28.4 binary with `bash scripts/fetch-pocketbase.sh <dir>` (linux amd64/arm64;
+   refuses any archive whose SHA-256 differs from `scripts/pocketbase-release.sha256`, the
+   official release checksums) + empty `pb_data` OR existing data.
 3. Copy `pb_hooks` + `pb_migrations` from release.
 4. Install systemd unit; `systemctl enable --now pocketbase`.
 5. Create superuser: `./pocketbase superuser upsert … --dir=pb_data`.
-6. Build frontend with correct `VITE_POCKETBASE_URL`; rsync to `/var/www/footfive/dist`.
+6. Deploy the frontend through the deploy workflow or the gated manual `apply` below, so it is
+   built with the correct `VITE_POCKETBASE_URL` from a tested main commit; never from an
+   arbitrary local build.
 7. Install Nginx config; enable HTTPS; reload Nginx.
 8. Promote / create app admin (not PB superuser):
 
@@ -107,12 +111,22 @@ the login 429 budget, so it runs last.
 ## CI/CD (GitHub Actions → VPS)
 
 Repo: https://github.com/jdwd40/footfive  
-Workflow: `.github/workflows/deploy.yml` — on **push to `main`** (and `workflow_dispatch`):
+Workflow: `.github/workflows/deploy.yml` — runs only for a commit that **FootFive CI fully tested**:
 
+- **Automatic:** after a `FootFive CI` run for a push to `main` in this repository completes
+  successfully (`workflow_run`). Failed or cancelled CI never deploys.
+- **Manual:** *Run workflow* on `main` with the full 40-character `sha` of the main head. Tick
+  `rollback` only for an emergency rollback to an older main commit; it is gated the same way.
+
+0. Gate (before any secret or SSH): `scripts/verify-deploy-ci.mjs` requires the latest
+   `.github/workflows/footfive-ci.yml` push run on `main` for exactly that SHA to have passed
+   *Unit / type / lint / build*, *PocketBase API E2E* and *Playwright Chromium*, and (unless
+   `rollback`) that SHA to still be the main head. Every later job checks out, builds, deploys and
+   records that SHA, never the latest main.
 1. Unit tests + typecheck + lint  
 2. Production build (`VITE_BASE_PATH=/footfive/`, `VITE_POCKETBASE_URL=https://jdwd40.com/footfive-pb`)  
 3. SSH deploy: code-only backup to root-owned `/var/backups/footfive/<stamp>/` via scoped `sudo -n`, SPA release under `/home/jd/footfive/releases/<stamp>/`, rsync to nginx web root, update hooks/migrations, restart `footfive-pocketbase`
-4. Health verification: app health JSON validated on the runner (`status == "ok"` and `worldAvailable == true`, via `scripts/validate-health.mjs`); only then provenance markers `DEPLOYED_STAMP` + `DEPLOYED_SHA` (exact commit) are written in `/home/jd/footfive/`
+4. Health verification: app health JSON validated on the runner (`status == "ok"` and `worldAvailable == true`, via `scripts/validate-health.mjs`); only then provenance markers `DEPLOYED_STAMP` + `DEPLOYED_SHA` (the exact tested commit) are written in `/home/jd/footfive/`
 5. Public smoke: SPA + PB health + app health JSON validated the same way + unauth world = 401
 
 **Never** deploys or wipes `pb_data`. Binary stays on the VPS.
@@ -151,17 +165,30 @@ export PB_ROOT=/opt/pocketbase
 export WEB_ROOT=/var/www/footfive/dist
 export SERVICE_NAME=pocketbase
 
-cd $FOOTFIVE_ROOT && git pull   # or unpack release
+SHA=<full 40-character main head whose FootFive CI push run passed>
+cd $FOOTFIVE_ROOT && git fetch origin && git checkout --detach "$SHA"
 npm ci
-VITE_POCKETBASE_URL=https://your.domain ./deploy/deploy.sh apply
+VITE_POCKETBASE_URL=https://your.domain ./deploy/deploy.sh apply "$SHA"
 ./deploy/smoke-prod.sh
 ```
 
-`apply` sequence: tests → build → timestamped backup → stop PB → rsync hooks/migrations/frontend → start PB → health.
+`apply` sequence: gate → tests → build → timestamped backup → stop PB → rsync hooks/migrations/frontend → start PB → health.
+The gate refuses unless the checkout is clean and exactly at `SHA`, and `SHA` is the main head whose
+FootFive CI push run passed all three required jobs (same `scripts/verify-deploy-ci.mjs` as the
+workflow; needs an authenticated `gh`). Never deploy a floating `git pull`, a dirty checkout or an
+untested commit.
 
 Migrations apply automatically on PocketBase start.
 
 ## Rollback
+
+Emergency rollback is not a new release:
+
+- **Previous files:** `deploy/deploy.sh rollback` restores the last backup taken by `apply`; it
+  deploys no new code, so it is not CI-gated.
+- **Older tested commit:** run the deploy workflow manually with that main commit's `sha` and
+  `rollback` ticked. It must still have passed FootFive CI; only the main-head rule is relaxed.
+  Commits older than `a9aa8f4` lack `scripts/validate-health.mjs`, so their deploy fails closed.
 
 ```bash
 ./deploy/deploy.sh rollback

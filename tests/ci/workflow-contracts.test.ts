@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,11 +50,11 @@ describe("deploy.yml contracts", () => {
     }
   });
 
-  it("records deployed SHA marker after health verification", () => {
+  it("records the exact tested SHA marker after health verification", () => {
     expect(deploy).toContain("DEPLOYED_SHA");
-    expect(deploy).toContain("${GITHUB_SHA}");
+    expect(deploy).toContain("DEPLOY_SHA: ${{ needs.gate.outputs.sha }}");
     const healthIdx = deploy.indexOf("/api/footfive/health");
-    const shaIdx = deploy.indexOf("echo ${GITHUB_SHA} > /home/jd/footfive/DEPLOYED_SHA");
+    const shaIdx = deploy.indexOf("echo ${DEPLOY_SHA} > /home/jd/footfive/DEPLOYED_SHA");
     expect(healthIdx).toBeGreaterThan(-1);
     expect(shaIdx).toBeGreaterThan(healthIdx);
   });
@@ -108,7 +108,7 @@ describe("deploy.yml contracts", () => {
       "echo ${STAMP} > /home/jd/footfive/DEPLOYED_STAMP",
     );
     const shaIdx = deploy.indexOf(
-      "echo ${GITHUB_SHA} > /home/jd/footfive/DEPLOYED_SHA",
+      "echo ${DEPLOY_SHA} > /home/jd/footfive/DEPLOYED_SHA",
     );
     expect(validateIdx).toBeGreaterThan(-1);
     expect(stampIdx).toBeGreaterThan(validateIdx);
@@ -165,5 +165,108 @@ describe("footfive-ci.yml contracts", () => {
     const jobCount = (ci.match(/^  [a-z-]+:\n    name:/gm) || []).length;
     const timeoutCount = (ci.match(/timeout-minutes:/g) || []).length;
     expect(timeoutCount).toBeGreaterThanOrEqual(jobCount);
+  });
+});
+
+// Text of one top-level job, from its key to the next job key.
+const job = (yml: string, id: string) => {
+  const start = yml.indexOf(`\n  ${id}:\n`);
+  expect(start, id).toBeGreaterThan(-1);
+  const next = yml.slice(start + 1).search(/\n {2}[a-z0-9-]+:\n/);
+  return next < 0 ? yml.slice(start) : yml.slice(start, start + 1 + next);
+};
+const code = (yml: string) => yml.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+const ciJobNames = [...ci.matchAll(/^ {2}[a-z0-9-]+:\n {4}name: (.+)$/gm)].map((m) => m[1]);
+const requiredIn = (file: string) => {
+  const src = readFileSync(path.join(root, file), "utf8");
+  return JSON.parse(src.match(/\[("[^"\]]+"(?:, )?)+\]/)![0]) as string[];
+};
+
+describe("deploy.yml deploys only the exact tested SHA", () => {
+  it("triggers on a successful FootFive CI push run on main or a main-only manual dispatch, never a raw push", () => {
+    const on = deploy.slice(deploy.indexOf("\non:\n"), deploy.indexOf("\nconcurrency:"));
+    expect(on).toMatch(/workflow_run:\n\s+workflows: \[FootFive CI\]\n\s+types: \[completed\]\n\s+branches: \[main\]/);
+    expect(on).not.toMatch(/^\s+push:/m);
+    expect(ci).toMatch(/^name: FootFive CI$/m);
+    const gate = job(deploy, "gate");
+    for (const condition of [
+      "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+      "github.event.workflow_run.conclusion == 'success'",
+      "github.event.workflow_run.event == 'push'",
+      "github.event.workflow_run.head_branch == 'main'",
+      "github.event.workflow_run.path == '.github/workflows/footfive-ci.yml'",
+      "github.event.workflow_run.repository.full_name == github.repository",
+      "github.event.workflow_run.head_repository.full_name == github.repository",
+    ]) {
+      expect(gate).toContain(condition);
+    }
+  });
+
+  it("manual deploys name an exact SHA and pass the same gate; rollback only relaxes the main-head rule", () => {
+    expect(deploy).toMatch(/inputs:\n\s+sha:\n\s+description: [^\n]+\n\s+required: true\n\s+type: string/);
+    expect(deploy).toMatch(/rollback:\n\s+description: Emergency rollback[^\n]*\n\s+required: false\n\s+default: false\n\s+type: boolean/);
+    const gate = job(deploy, "gate");
+    expect(gate).toContain('node scripts/verify-deploy-ci.mjs "${args[@]}"');
+    expect(gate).toContain('if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$ROLLBACK" = true ]; then args+=(--rollback); fi');
+    expect(gate.match(/--rollback/g)).toHaveLength(1);
+    expect(gate).toContain('echo "sha=$sha" >> "$GITHUB_OUTPUT"');
+  });
+
+  it("the shared gate runs before any secret, and every later job checks out and verifies its SHA", () => {
+    const gate = job(deploy, "gate");
+    const build = job(deploy, "test-and-build");
+    const ship = job(deploy, "deploy");
+    expect(gate).not.toContain("secrets.");
+    expect(gate).not.toMatch(/\bref:/); // gate code comes from the trusted default branch
+    expect(build).toMatch(/needs: gate\n/);
+    expect(ship).toMatch(/needs: \[gate, test-and-build\]\n/);
+    for (const block of [build, ship]) {
+      expect(block).toMatch(/uses: actions\/checkout@v4\n\s+with:\n\s+ref: \$\{\{ needs\.gate\.outputs\.sha \}\}\n\s+persist-credentials: false/);
+      expect(block).toContain('test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"');
+    }
+    expect(deploy.match(/uses: actions\/checkout@v4/g)).toHaveLength(3);
+    expect(deploy.match(/persist-credentials: false/g)).toHaveLength(3);
+    expect(deploy).toMatch(/permissions:\n\s+contents: read\n\s+actions: read\n\njobs:/);
+    expect(deploy).not.toMatch(/:\s*write\b/);
+  });
+
+  it("never uses GITHUB_SHA (the default-branch head on workflow_run) for checkout or provenance", () => {
+    expect(code(deploy)).not.toMatch(/GITHUB_SHA|github\.sha\b/);
+  });
+
+  it("untrusted SHAs reach the shell only through env, never inline expressions", () => {
+    const lines = deploy.split("\n").filter((l) => /\$\{\{\s*(inputs\.|github\.event\.workflow_run\.head_sha)/.test(l));
+    expect(lines).toHaveLength(3); // RUN_SHA, INPUT_SHA, ROLLBACK
+    for (const line of lines) expect(line).toMatch(/^\s+[A-Z_]+: \$\{\{ [^}]+ \}\}$/);
+  });
+
+  it("the deploy and merge gates require exactly FootFive CI's three jobs", () => {
+    expect(ciJobNames).toHaveLength(3);
+    expect(requiredIn("scripts/verify-deploy-ci.mjs").slice().sort()).toEqual(ciJobNames.slice().sort());
+    expect(requiredIn("scripts/verify-pr-ci.mjs").slice().sort()).toEqual(ciJobNames.slice().sort());
+  });
+});
+
+describe("PocketBase downloads are checksum-verified", () => {
+  it("both e2e jobs always install through the pinned helper, never an existing or raw download", () => {
+    for (const id of ["api-e2e", "browser-e2e"]) {
+      expect(job(ci, id)).toContain("run: bash scripts/fetch-pocketbase.sh\n");
+    }
+    expect(ci).not.toMatch(/releases\/download|pb\.zip|-x pocketbase\/pocketbase/);
+  });
+
+  it("local setup downloads only through the same helper", () => {
+    const setup = readFileSync(path.join(root, "scripts/setup-local.sh"), "utf8");
+    expect(setup).toContain('bash "$ROOT/scripts/fetch-pocketbase.sh" "$PB_DIR"');
+    expect(setup).not.toMatch(/curl|releases\/download|zipfile/);
+  });
+
+  it("no other workflow, script or deploy file downloads a PocketBase release", () => {
+    const files = (dir: string): string[] => readdirSync(path.join(root, dir), { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? files(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+    const downloaders = [".github", "scripts", "deploy"].flatMap(files).concat("package.json")
+      .filter((f) => !/\.test\.[cm]?[jt]s$/.test(f))
+      .filter((f) => readFileSync(path.join(root, f), "utf8").includes("pocketbase/pocketbase/releases/download"));
+    expect(downloaders).toEqual(["scripts/fetch-pocketbase.sh"]);
   });
 });
