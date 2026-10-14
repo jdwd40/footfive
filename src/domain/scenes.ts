@@ -37,8 +37,22 @@ export type Scene = {
   cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
   flashAt?: number; // progress at which the result badge may show (default 0.62)
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
+  touch?: Touch; // plain pass: how the passer plays it (#104)
   won?: number; // challenge scenes: progress at which the winner (`side`) has the ball — a WON IT cue, not a result (no reveal gate, no hold)
 };
+/** #104: a plain pass is a quick one-touch ball, a carry up the field before the release, or a hold-up (shield, then lay it on). */
+export type Touch = "quick" | "carry" | "hold";
+/** Deterministic hash of the event sequence in [0, 1): presentation variety without Math.random. */
+export function seqHash(seq: number, k = 0) {
+  let h = (seq * 2654435761 + k * 40503) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 2246822507) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+export function touchStyle(seq: number): Touch {
+  const h = seqHash(seq, 104);
+  return h < 0.4 ? "quick" : h < 0.75 ? "carry" : "hold";
+}
 export type Cam = [number, number, number, number];
 export const FULL_CAM: Cam = [-4, -3, 108, 77]; // bottom margin reaches the tunnel at y=70
 
@@ -292,9 +306,32 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         };
       }
       const lift = [0, 0, 0];
+      const touch = run ? undefined : touchStyle(s);
+      if (touch === "carry" || touch === "hold") {
+        // Carry: he runs it up towards the receiver (up to 8) and releases halfway. Hold: he shields it, a touch back and across,
+        // then lays it on. Either way the ball keeps moving — no stand-still before the pass — and the endpoints are the engine's.
+        const len = Math.hypot(recv[0] - passer[0], recv[1] - passer[1]) || 1;
+        const k = Math.min(8, len * 0.45) / len;
+        const lat = passer[1] > GOAL_Y ? -1 : 1;
+        const touchPt: Pt = touch === "carry" ? clampPt(lerp(passer, recv, k)) : clampPt([passer[0] - toward(atk, 1.2), passer[1] + lat * 1.8]);
+        const by = (p: Pt): Pt => clampPt([p[0] - toward(atk, 0.8), p[1]]);
+        return {
+          ...base,
+          ms: d(1500),
+          touch,
+          ball: [passer, touchPt, recv],
+          ballHeight: lift,
+          actors: [
+            { id: "p", side: atk, label: short(e.p), path: [by(passer), by(touchPt), clampPt([touchPt[0] + toward(atk, 2), touchPt[1]])] },
+            { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 6), recv[1] + jit(s, 4, 4)]), lerp(recv, [recv[0] - toward(atk, 3), recv[1]], 0.5), recv] },
+            { id: "m", side: def, path: [markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
+          ],
+        };
+      }
       return {
         ...base,
         ms: d(run ? 2000 : 1500),
+        touch,
         ball: [passer, lerp(passer, recv, 0.5), recv],
         ballHeight: lift,
         actors: [

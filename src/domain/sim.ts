@@ -124,6 +124,7 @@ function carrierActor(scene: Scene, t: number): string | null {
       if (lost) return t >= 0.97 ? "r" : t >= w && t <= w + 0.22 ? "p" : t <= (lost.keeper ? 0.04 : w - 0.04) ? "lost" : null;
       if (scene.actors.some(a => a.id === "l")) return t <= 0.08 ? "p" : t >= 1 / 3 && t <= 0.64 ? "l" : t >= 0.97 ? "r" : null; // lay-off, touch, forward release
       if (scene.type === "cross") return t <= 0.04 ? "p" : t >= 0.25 && t <= 0.5 ? "r" : t >= 0.75 ? (scene.actors.some(a => a.id === "h") ? "h" : "p") : null; // feeder, winger, the arriving runner
+      if (scene.touch === "carry" || scene.touch === "hold") return t <= 0.48 ? "p" : t >= 0.97 ? "r" : null; // on the ball until the release (#104)
       return scene.type === "dribble" ? "p" : t <= 0.08 ? "p" : t >= 0.97 ? "r" : null;
     }
     case "tackle": case "interception": return t >= (scene.won ?? 0.5) ? "win" : t <= (scene.type === "tackle" ? 0.45 : 0.08) ? "lost" : null;
