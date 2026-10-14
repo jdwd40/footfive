@@ -24,6 +24,15 @@
  *   S6 completed R16 + empty scheduled QF (issue15 parked shape) → QF repaired and kicked off
  *   S7 scheduled partial round with an already-live fixture → played state/events/RNG preserved
  *   S8 scheduled partial round with a persisted v1 finished result → never restarted as v2
+ *   S9 kick-off failing at the second match state commits nothing (states, lineups, AI
+ *      condition/treasury repair and its ledger row, overclock flag, fixture status)
+ *   S10 kick-off failing at the final round-live update rolls back every earlier write;
+ *      the retry kicks off once, with exactly one state per fixture
+ *   S11 a live or finished fixture without a state fails closed: the slot repair and every
+ *      other kick-off write roll back and the retained rows stay byte-identical
+ *
+ * The fault spec may instead name {op: "update", field, value}: updating a record of
+ * `collection` whose `field` becomes `value` throws once more than `after` have passed.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -49,11 +58,24 @@ onRecordCreate((e) => {
   try {
     spec = JSON.parse(toString($os.readFile($os.getenv("FF_FAULT_FILE"))));
   } catch (_) {}
-  if (spec && spec.collection === e.record.collection().name) {
+  if (spec && (spec.op || "create") === "create" && spec.collection === e.record.collection().name) {
     const key = "ff_fault_" + spec.id;
     const n = ($app.store().get(key) || 0) + 1;
     $app.store().set(key, n);
     if (n > spec.after) throw new Error("injected fault: " + spec.collection + " create #" + n);
+  }
+  e.next();
+});
+onRecordUpdate((e) => {
+  let spec = null;
+  try {
+    spec = JSON.parse(toString($os.readFile($os.getenv("FF_FAULT_FILE"))));
+  } catch (_) {}
+  if (spec && spec.op === "update" && spec.collection === e.record.collection().name && e.record.get(spec.field) === spec.value) {
+    const key = "ff_fault_" + spec.id;
+    const n = ($app.store().get(key) || 0) + 1;
+    $app.store().set(key, n);
+    if (n > spec.after) throw new Error("injected fault: " + spec.collection + " update #" + n);
   }
   e.next();
 });
@@ -104,9 +126,10 @@ async function tick(times = 3) {
   }
 }
 
-function arm(collection, after, id) {
-  fs.writeFileSync(FAULT, JSON.stringify({ collection, after, id }));
+function arm(collection, after, id, extra = {}) {
+  fs.writeFileSync(FAULT, JSON.stringify({ collection, after, id, ...extra }));
 }
+const pbLog = () => fs.readFileSync(path.join(TMP, "pb.log"), "utf8");
 function disarm() {
   fs.rmSync(FAULT, { force: true });
 }
@@ -139,6 +162,10 @@ function teamsWhole() {
   const squad = rows.length ? rows[0].players : 0;
   return { count: rows.length, whole: rows.every((r) => r.players === squad && squad >= 5 && r.records === 1), rows };
 }
+
+/** Every row a kick-off may write (world lease bookkeeping excluded), for byte-exact comparison. */
+const SETUP_TABLES = ["shared_tournaments", "shared_rounds", "shared_fixtures", "match_states", "match_events", "proball_teams", "proball_players", "global_team_records", "team_finance_ledger"];
+const setupRows = () => JSON.stringify(SETUP_TABLES.map((table) => q(`select * from ${table} order by id`)));
 
 function r16Of(tournamentId) {
   return q("select * from shared_rounds where tournament = ? and round_key = 'r16'", tournamentId)[0];
@@ -322,6 +349,65 @@ async function main() {
   ok(again && again.status === "scheduled" && fxs.length === 8, "repair created the missing R16 round with 8 fixtures");
   ok(new Set(fxs.flatMap((f) => [f.home_team, f.away_team])).size === 16, "all 16 teams drawn once");
   ok(q("select odds_json from shared_tournaments where id = ?", t.id)[0].odds_json, "championship odds written with the repaired draw");
+
+  console.log("S9 kick-off fails creating the second match state");
+  await stopPb();
+  exec("update shared_rounds set scheduled_at = ? where id = ?", PAST, again.id);
+  exec("update shared_fixtures set scheduled_at = ? where round = ?", PAST, again.id);
+  // Make the first fixture write AI repair, ledger and overclock rows before the fault.
+  const first = fixturesOf(again.id)[0];
+  const tired = q("select id from proball_players where team = ? order by sort_order limit 1", first.home_team)[0].id;
+  exec("update proball_teams set overclock_ready = 1, treasury = 2500 where id = ?", first.home_team);
+  exec("update proball_players set condition = 40 where id = ?", tired);
+  const ready = setupRows();
+  arm("match_states", 1, "s9");
+  let logAt = 0;
+  await startPb();
+  await tick();
+  ok(pbLog().includes("injected fault: match_states create #2"), "fault hit the second match state, after the first fixture's writes");
+  ok(setupRows() === ready, "nothing committed: no state, lineup, AI repair, ledger, overclock or fixture change; round still scheduled");
+
+  console.log("S10 kick-off fails at the final round-live update");
+  logAt = pbLog().length;
+  arm("shared_rounds", 0, "s10", { op: "update", field: "status", value: "live" });
+  await tick();
+  ok(pbLog().slice(logAt).includes("injected fault: shared_rounds update #1"), "fault hit the round-live update, after every fixture's writes");
+  ok(setupRows() === ready, "every earlier kick-off write rolled back with the round update");
+  disarm();
+  await tick();
+  const kicked = fixturesOf(again.id);
+  ok(q("select status from shared_rounds where id = ?", again.id)[0].status === "live", "retry kicked the round off");
+  ok(
+    kicked.length === 8 && n("match_states") === 8 &&
+      kicked.every((f) => f.status === "live" && f.lineups_frozen === 1 && n("match_states", "fixture = ?", f.id) === 1),
+    "retry created exactly one engine state per fixture and froze every lineup",
+  );
+  const boosted = q("select overclock_ready, overclock_fixture from proball_teams where id = ?", first.home_team)[0];
+  ok(boosted.overclock_ready === 0 && boosted.overclock_fixture === first.id, "overclock consumed once, by the first fixture");
+  ok(
+    q("select condition from proball_players where id = ?", tired)[0].condition > 40 &&
+      n("team_finance_ledger", "team = ? and type = 'ai_repair'", first.home_team) === 1,
+    "AI repair committed exactly once, with one ledger row",
+  );
+
+  console.log("S11 fixture marked live/finished without a state fails closed");
+  for (const status of ["live", "finished"]) {
+    await stopPb();
+    exec("delete from match_events");
+    exec("delete from match_states");
+    exec("delete from shared_fixtures where round = ? and bracket_index >= 6", again.id);
+    exec("update shared_fixtures set status = 'scheduled' where round = ?", again.id);
+    const mixed = fixturesOf(again.id)[5];
+    exec("update shared_fixtures set status = ? where id = ?", status, mixed.id);
+    exec("update shared_rounds set status = 'scheduled' where id = ?", again.id);
+    const retained = setupRows();
+    logAt = pbLog().length;
+    await startPb();
+    await tick();
+    ok(pbLog().slice(logAt).includes("kickoff_fixture_mixed: " + mixed.id), `${status} fixture without a state stopped the kick-off`);
+    ok(fixturesOf(again.id).length === 6, `${status}: slot repair rolled back (missing fixtures not committed)`);
+    ok(setupRows() === retained, `${status}: no state, lineup or round change committed; retained rows byte-identical`);
+  }
 }
 
 try {

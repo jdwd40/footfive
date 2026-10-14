@@ -53,6 +53,8 @@ jobs:
       # Always install from the checksum-pinned release; no existing binary is trusted.
       - name: Install verified PocketBase 0.28.4
         run: bash scripts/fetch-pocketbase.sh
+      - name: World setup atomicity (disposable PocketBase)
+        run: npm run test:world-setup
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test

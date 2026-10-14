@@ -167,6 +167,21 @@ describe("deploy.yml contracts", () => {
 });
 
 describe("footfive-ci.yml contracts", () => {
+  it("gates the API job on the real world-setup suite after verified PocketBase installation", () => {
+    const api = job(ci, "api-e2e");
+    const steps = api.split(/^ {6}- /m).slice(1);
+    const setup = steps.filter((step) => /^ {8}run: npm run test:world-setup$/m.test(step));
+    expect(setup).toHaveLength(1);
+    expect(setup[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    const install = steps.findIndex((step) => /^ {8}run: bash scripts\/fetch-pocketbase\.sh$/m.test(step));
+    expect(install).toBeGreaterThan(-1);
+    expect(steps.indexOf(setup[0])).toBeGreaterThan(install);
+    expect(api).toMatch(/node-version: "22"/);
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:world-setup"]).toBe("node tests/integration/world-setup-atomicity.mjs");
+    expect(readFileSync(path.join(root, "tests/integration/world-setup-atomicity.mjs"), "utf8")).toContain('from "node:sqlite"');
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");
