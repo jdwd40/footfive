@@ -619,7 +619,8 @@ routerAdd(
       body = info.body || {};
     } catch (_) {}
     try {
-      return e.json(200, mgmt.setLineup($app, auth.id, body.starters || [], body.subs || []));
+      // Raw values: omitted or null subs auto-fill; false, 0 or "" are rejected as malformed.
+      return e.json(200, mgmt.setLineup($app, auth.id, body.starters, body.subs));
     } catch (err) {
       throw new BadRequestError(String(err.message || err));
     }
