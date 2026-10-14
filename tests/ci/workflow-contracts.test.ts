@@ -12,6 +12,8 @@ const ci = readFileSync(
   path.join(root, ".github/workflows/footfive-ci.yml"),
   "utf8",
 );
+const SNAPSHOT =
+  '          "${SSH[@]}" "sudo -n python3 -I - /home/jd/footfive/pb_data /var/backups/footfive/${STAMP}/pb_data" < scripts/pb-data-backup.py';
 const lock = JSON.parse(
   readFileSync(path.join(root, "package-lock.json"), "utf8"),
 ) as { packages: Record<string, { version: string }> };
@@ -124,9 +126,38 @@ describe("deploy.yml contracts", () => {
       .split("\n")
       .filter((l) => l.includes('"${SSH[@]}"'));
     for (const line of remoteCmds) {
-      expect(line).not.toMatch(/pb_data/);
+      // pb_data is only ever the read-only source of the verified snapshot.
+      if (line !== SNAPSHOT) expect(line).not.toMatch(/pb_data/);
       expect(line).not.toMatch(/pocketbase\/pocketbase/);
     }
+  });
+
+  it("takes a verified pb_data snapshot from the tested checkout before any production change", () => {
+    const lines = deploy.split("\n").map((l) => l.trim());
+    const at = (needle: string) => lines.findIndex((l) => l.includes(needle));
+    const snapshot = lines.indexOf(SNAPSHOT.trim());
+    expect(snapshot).toBeGreaterThan(at("sudo -n install -d -m 700 -o root -g root /var/backups/footfive/${STAMP}"));
+    for (const change of [
+      "mkdir -p /home/jd/footfive/releases", "tar -C dist", "ln -sfn", "rsync -a --delete",
+      "rm -rf /home/jd/footfive/pocketbase/pb_hooks", "tar -C scripts", "systemctl restart", "DEPLOYED_SHA",
+    ]) {
+      expect(at(change), change).toBeGreaterThan(snapshot);
+    }
+    // The deploy step runs under set -euo pipefail, so a failed snapshot aborts it.
+    expect(job(deploy, "deploy")).toMatch(/run: \|\n\s+set -euo pipefail\n\s+test -n "\$\{VPS_USER/);
+    expect(deploy).not.toContain("/home/jd/footfive/scripts/pb-data-backup.py\"");
+  });
+
+  it("delivers the daily backup scripts from the tested checkout, helper first, after the backups", () => {
+    const lines = deploy.split("\n");
+    const delivery = lines.find((l) => l.includes("tar -C scripts -czf - footfive-backup.sh pb-data-backup.py"));
+    expect(delivery).toBeDefined();
+    expect(delivery).toContain('s=$(mktemp -d "$d/.stage.XXXXXX")');
+    const helper = delivery!.indexOf('mv -f "$s/pb-data-backup.py" "$d/pb-data-backup.py"');
+    const daily = delivery!.indexOf('mv -f "$s/footfive-backup.sh" "$d/footfive-backup.sh"');
+    expect(helper).toBeGreaterThan(-1);
+    expect(daily).toBeGreaterThan(helper);
+    expect(lines.indexOf(delivery!)).toBeGreaterThan(lines.findIndex((l) => l.includes("/var/backups/footfive/${STAMP}/scripts")));
   });
 
   it("declares minimal permissions and job timeouts", () => {

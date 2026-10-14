@@ -36,9 +36,11 @@ check() {
 }
 
 backup() {
-  mkdir -p "$DEST"
+  mkdir -p "$BACKUP_DIR"
+  mkdir "$DEST" # fails on a same-second collision instead of merging backups
   if [[ -d "$PB_ROOT/pb_data" ]]; then
-    cp -a "$PB_ROOT/pb_data" "$DEST/pb_data"
+    # Online, verified SQLite snapshot; a failure aborts apply before any change.
+    python3 -I "$ROOT/scripts/pb-data-backup.py" "$PB_ROOT/pb_data" "$DEST/pb_data"
   fi
   if [[ -d "$WEB_ROOT" ]]; then
     cp -a "$WEB_ROOT" "$DEST/web_dist" 2>/dev/null || true
@@ -48,7 +50,8 @@ backup() {
   fi
   cp -a "$PB_ROOT/pb_hooks" "$DEST/pb_hooks" 2>/dev/null || cp -a "$ROOT/pocketbase/pb_hooks" "$DEST/pb_hooks"
   cp -a "$PB_ROOT/pb_migrations" "$DEST/pb_migrations" 2>/dev/null || cp -a "$ROOT/pocketbase/pb_migrations" "$DEST/pb_migrations"
-  echo "$DEST" >"$BACKUP_DIR/LATEST"
+  echo "$DEST" >"$BACKUP_DIR/LATEST.tmp"
+  mv -f "$BACKUP_DIR/LATEST.tmp" "$BACKUP_DIR/LATEST"
   echo "backup at $DEST"
 }
 
