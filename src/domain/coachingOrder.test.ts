@@ -149,6 +149,13 @@ describe("live coaching never applies to elapsed play", () => {
     expect(app.state()).toMatchObject({ minute: 10, pending: { home: "defend" }, teams: { home: { stance: "balanced" } } });
   });
 
+  it("queues for a manual kick-off side while the other side kicked off under AI", () => {
+    const app = fakeApp(live(Date.now() + 5000, { teams: { home: { stance: "balanced", ai: false }, away: { stance: "balanced", ai: true } } }));
+    expect(world.setCoaching(app, "u1", "fx", "attack")).toMatchObject({ fromMinute: 11, used: 1 });
+    expect(app.state()).toMatchObject({ pending: { home: "attack" }, coach: { home: { n: 1 } } });
+    expect(app.commands()).toMatchObject([{ team: "t1", stance: "attack" }]);
+  });
+
   const soon = () => Date.now() + 5000;
   const cases: [string, () => ReturnType<typeof fakeApp>, string, RegExp][] = [
     ["not the manager", () => fakeApp(live(soon())), "u9", /do not manage a team in this match/],
@@ -160,6 +167,8 @@ describe("live coaching never applies to elapsed play", () => {
     ["no commands left", () => fakeApp(live(soon(), { coach: { home: { n: 4, last: 0 } } })), "u1", /No coaching commands left/],
     ["recharging", () => fakeApp(live(soon(), { coach: { home: { n: 1, last: Date.now() - 1000 } } })), "u1", /recharging/],
     ["already set", () => fakeApp(live(soon())), "u1", /Already set to balanced/],
+    // Issue #123: overdue too, so a retry would show up as a second attempt.
+    ["the side kicked off under Full AI", () => fakeApp(live(Date.now() - 1000, { teams: { home: { stance: "balanced", ai: true }, away: { stance: "balanced" } } })), "u1", /started under Full AI — manual control starts from your next match/],
   ];
   for (const [name, make, user, message] of cases) {
     it(`does not retry when ${name}`, () => {

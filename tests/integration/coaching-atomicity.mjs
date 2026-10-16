@@ -445,6 +445,136 @@ async function main() {
     assert.equal(commands().length, 4);
     reconciled();
   });
+
+  // Issue 123: modes are set through the real authenticated API BEFORE real
+  // kickoff. No state_json.ai writes: the engine must freeze each mode itself.
+  const mode = async (actor, value) => {
+    const response = await request("/api/footfive/my-team/mode", actor.token, { mode: value });
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+  };
+  const kickoffState = (id = FX) => JSON.parse(query("SELECT state_json FROM match_states WHERE fixture = ?", id)[0].state_json);
+  const kickoffSnapshot = (id = FX) => JSON.stringify([
+    query("SELECT * FROM match_states WHERE fixture = ? ORDER BY id", id),
+    query("SELECT * FROM match_events WHERE fixture = ? ORDER BY seq", id),
+    query("SELECT * FROM coaching_commands WHERE fixture = ? ORDER BY id", id),
+    query("SELECT * FROM shared_fixtures WHERE id = ?", id),
+  ]);
+  async function realKickoff(aiSide, id = FX) {
+    disarm();
+    await stop();
+    execute([
+      ["DELETE FROM coaching_commands"], ["DELETE FROM match_events"], ["DELETE FROM match_states"],
+      ...(id === FX ? [] : [["UPDATE shared_fixtures SET id = ? WHERE id = ?", [id, FX]]]),
+      ["UPDATE shared_rounds SET status = 'scheduled', started_at = '' WHERE id = ?", [ROUND]],
+      ["UPDATE shared_fixtures SET status = 'scheduled', lineups_frozen = 0 WHERE round = ?", [ROUND]],
+      ["UPDATE proball_teams SET treasury = 0, battery_count = 0"],
+      ["UPDATE world SET progression_paused = 0, processing_status = 'processing', processing_version = ? WHERE key = 'main'", [Date.now() + 3600_000]],
+    ]);
+    await start();
+    await mode(user, aiSide === "home" ? "ai" : "manual");
+    await mode(otherUser, aiSide === "away" ? "ai" : "manual");
+    await stop();
+    const clock = Date.now();
+    execute([
+      ["UPDATE shared_rounds SET scheduled_at = ? WHERE id = ?", [new Date(clock - 1).toISOString(), ROUND]],
+      ["UPDATE shared_fixtures SET scheduled_at = ? WHERE round = ?", [new Date(clock - 1).toISOString(), ROUND]],
+      ["UPDATE world SET processing_version = ? WHERE key = 'main'", [clock - 1]],
+    ]);
+    await start();
+    const kicked = await operation("tick", clock, { fixture: id });
+    assert.equal(kicked.status, 200, JSON.stringify(kicked.data));
+    const st = kickoffState(id);
+    assert.equal(st.teams.home.ai, aiSide === "home");
+    assert.equal(st.teams.away.ai, aiSide === "away");
+    assert.equal(st.minute, 0, "only the real kickoff announcement should have run");
+    assert.equal(query("SELECT lineups_frozen FROM shared_fixtures WHERE id = ?", id)[0].lineups_frozen, 1);
+    // Prevent preliminary ticks from changing play during rejection snapshots.
+    // Fixed-clock coaching remains caught up; one rejection uses the real route.
+    await stop();
+    execute([["UPDATE world SET processing_status = 'processing', processing_version = ? WHERE key = 'main'", [Date.now() + 3600_000]]]);
+    await start();
+    return st.nextAt - 1;
+  }
+  function nextMatchOnly(response) {
+    rejected(response);
+    assert.match(response.data.message, /manual control/i);
+    assert.match(response.data.message, /next match/i);
+  }
+  const chooseStance = (st, side) => st.teams[side].stance === "attack" ? "defend" : "attack";
+
+  for (const side of ["home", "away"]) await test(`${side} AI kickoff rejects manual-switch coaching, repeat and concurrent attempts without usage`, async () => {
+    const clock = await realKickoff(side);
+    const actor = side === "home" ? user : otherUser;
+    await mode(actor, "manual");
+    const st = kickoffState(), stance = chooseStance(st, side);
+    assert.equal(st.teams[side].ai, true, "mode switch must preserve the genuine kickoff snapshot");
+    const before = kickoffSnapshot();
+    // Genuine production POST: kickoff was published in the real past, and the
+    // held lease prevents its preliminary tick from producing unrelated writes.
+    const production = await request(`/api/footfive/matches/${FX}/coaching`, actor.token, { stance });
+    nextMatchOnly(production);
+    assert.equal(kickoffSnapshot(), before);
+    nextMatchOnly(await operation("coach", clock, { stance }, actor));
+    assert.equal(kickoffSnapshot(), before);
+    const concurrent = await Promise.all([operation("coach", clock, { stance }, actor), operation("coach", clock, { stance: stance === "attack" ? "defend" : "attack" }, actor)]);
+    concurrent.forEach(nextMatchOnly);
+    assert.equal(kickoffSnapshot(), before, "rejected attempts changed usage, cooldown, pending, command or event rows");
+  });
+
+  for (const aiSide of ["home", "away"]) await test(`manual opposite side remains coachable with ${aiSide} frozen as AI`, async () => {
+    const clock = await realKickoff(aiSide);
+    await mode(aiSide === "home" ? user : otherUser, "manual");
+    const side = aiSide === "home" ? "away" : "home", actor = side === "home" ? user : otherUser;
+    const before = kickoffState(), beforeEvents = events();
+    const stance = chooseStance(before, side);
+    const response = await operation("coach", clock, { stance }, actor);
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(response.data.result.used, 1);
+    const after = kickoffState();
+    assert.equal(after.pending[side], stance);
+    assert.equal(after.coach[side].n, 1);
+    assert.deepEqual(after.coach[aiSide], before.coach?.[aiSide]);
+    assert.equal(after.pending[aiSide], before.pending[aiSide]);
+    assert.equal(after.teams[aiSide].ai, true);
+    assert.equal(commands().length, 1);
+    assert.deepEqual(events(), beforeEvents);
+  });
+
+  await test("manual kickoff remains coachable after a real AI then manual mode round trip", async () => {
+    const clock = await realKickoff(null);
+    await mode(user, "ai");
+    const before = kickoffSnapshot();
+    const denied = await coach(clock);
+    rejected(denied);
+    assert.match(denied.data.message, /full ai/i);
+    assert.equal(kickoffSnapshot(), before);
+    await mode(user, "manual");
+    assert.equal(kickoffState().teams.home.ai, false);
+    const stance = chooseStance(kickoffState(), "home");
+    const response = await coach(clock, { stance });
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(response.data.result.used, 1);
+    assert.equal(state().pending.home, stance);
+    assert.equal(commands().length, 1);
+  });
+
+  await test("a subsequent actual manual kickoff enables coaching after an earlier AI kickoff", async () => {
+    await realKickoff("home");
+    await mode(user, "manual");
+    assert.equal(kickoffState().teams.home.ai, true);
+    // A fresh authored fixture is kicked off by the real service, rather than
+    // modifying the previous match's frozen mode to imitate a new match.
+    const nextFixture = "ff123nextmatch0";
+    const clock = await realKickoff(null, nextFixture);
+    assert.equal(kickoffState(nextFixture).teams.home.ai, false);
+    const stance = chooseStance(kickoffState(nextFixture), "home");
+    const response = await operation("coach", clock, { fixture: nextFixture, stance });
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(response.data.result.used, 1);
+    assert.equal(kickoffState(nextFixture).pending.home, stance);
+    assert.equal(query("SELECT * FROM coaching_commands WHERE fixture = ?", nextFixture).length, 1);
+  });
+
 }
 try { await main(); }
 catch (error) { results.push({ name: "suite setup", status: "FAIL", error: error.stack || String(error) }); console.error(error); }
