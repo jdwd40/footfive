@@ -17,7 +17,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -147,6 +147,20 @@ else:
     print(json.dumps({'changed_tables': changed, 'column_changes': column_changes, 'bad_added_values': bad_added, 'users_changed': base['users'] != users, 'quick_check': c.execute('pragma quick_check').fetchone()[0]}))
 `;
 
+// Disposable copies only: unschedule this app's background jobs (the minute catch-up
+// writes world bookkeeping even while paused) and expose the live scheduler's job ids.
+// Hook files load in no fixed order, so the removal runs once every file has loaded.
+const ISOLATION_HOOK = `
+onBootstrap(function (e) {
+  e.next();
+  e.app.cron().remove("footfive_catchup");
+  e.app.cron().remove("footfive_retention_daily");
+});
+routerAdd("GET", "/api/upgrade-test/cron-jobs", function (e) {
+  return e.json(200, $app.cron().jobs().map(function (j) { return j.id(); }));
+});
+`;
+
 // 499 offline fixtures copied from a valid base-created record (unique
 // IDs/emails/tokenKeys), initially enabled; the suite disables them before
 // the upgrade so they stand in for persisted base-era disabled rows.
@@ -165,6 +179,7 @@ async function main() {
   const work = mkdtempSync(path.join(tmpdir(), "footfive-upgrade-"));
   const dataDir = path.join(work, "pb_data");
   const baseDir = path.join(work, "base");
+  const currentDir = path.join(work, "current");
   mkdirSync(dataDir, { recursive: true });
   try {
     // Extract the exact base hooks/migrations (no working-tree mutation).
@@ -192,6 +207,8 @@ async function main() {
       mkdirSync(path.dirname(dest), { recursive: true });
       writeFileSync(dest, spawnSync("git", ["show", `${BASE}:${f}`], { cwd: ROOT }).stdout);
     }
+    for (const sub of ["pb_hooks", "pb_migrations"]) cpSync(path.join(ROOT, "pocketbase", sub), path.join(currentDir, sub), { recursive: true });
+    for (const dir of [baseDir, currentDir]) writeFileSync(path.join(dir, "pb_hooks", "zz_upgrade_test_isolation.pb.js"), ISOLATION_HOOK);
 
     console.log(`Upgrade regression: base=${BASE} -> working tree, db=${dataDir}`);
     const stamp = Date.now();
@@ -234,6 +251,11 @@ async function main() {
     await stop();
     // The remaining bulk fixtures stand in for persisted base-era disabled rows.
     sql(DB, `c.execute("update users set disabled=1 where email like 'bulk%@t.local'"); c.commit()`);
+    // Pause this disposable world before the baseline: an unpaused tick (request-driven
+    // or the minute cron) claims the world lease and rewrites world.processing_version,
+    // so the full comparison below would depend on timing. Every column stays compared.
+    const paused = sql(DB, `cur = c.execute("update world set progression_paused = 1 where key = 'main'"); c.commit(); print(cur.rowcount)`);
+    ok("base: disposable world paused before the preservation baseline", paused === "1", `rows=${paused}`);
     const beforeKeys = JSON.parse(
       sql(DB, `import json; print(json.dumps(dict(c.execute("select id, tokenKey from users where disabled=1").fetchall())))`),
     );
@@ -245,7 +267,13 @@ async function main() {
     if (snapRun.status) throw new Error(`preservation snapshot failed: ${snapRun.stderr}`);
 
     // --- Upgrade: current hooks/migrations, SAME database ---
-    await start(path.join(ROOT, "pocketbase"), dataDir);
+    await start(currentDir, dataDir);
+    const jobs = await req("/api/upgrade-test/cron-jobs");
+    ok(
+      "upgrade: app background jobs unscheduled, PocketBase system jobs kept",
+      jobs.ok && jobs.data.includes("__pbDBOptimize__") && !jobs.data.some((id) => id.startsWith("footfive_")),
+      JSON.stringify(jobs.data),
+    );
     const mig = sql(DB, "print(','.join(r[0] for r in c.execute('SELECT file FROM _migrations')))");
     ok("upgrade: account-security migration applied", mig.includes("1750000016_account_security_rules.js"), mig.slice(-120));
 
@@ -275,7 +303,11 @@ async function main() {
     ok("upgrade: 501st base token sees no native users rows (F6)", listB.status >= 400 || (listB.data.items || []).length === 0, `status=${listB.status}`);
 
     // Full-table preservation across the real upgrade (ANALYZE sqlite_stat*
-    // excluded; users compared without the intentionally changed columns).
+    // excluded; users compared without the intentionally changed columns). A designed
+    // tick runs first, so an unpaused world fails here every time, not only when a
+    // scheduled tick happens to land in this window.
+    const designedTick = await req("/api/footfive/health");
+    ok("upgrade: designed tick ran before the preservation check", designedTick.ok, `status=${designedTick.status}`);
     const preservRun = spawnSync("python3", [preservPy, DB, "check", snapFile], { encoding: "utf8" });
     if (preservRun.status) throw new Error(`preservation check failed: ${preservRun.stderr}`);
     const preservRes = JSON.parse(preservRun.stdout.trim());
