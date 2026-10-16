@@ -226,9 +226,11 @@ jobs:
           "${SSH[@]}" "ln -sfn /home/jd/footfive/releases/${STAMP} /home/jd/footfive/current"
           "${SSH[@]}" "mkdir -p /var/www/jdwd40.com/html/footfive && rsync -a --delete /home/jd/footfive/releases/${STAMP}/ /var/www/jdwd40.com/html/footfive/"
 
-          # PocketBase hooks + migrations (binary + pb_data stay on server)
-          tar -C pocketbase/pb_hooks -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_hooks/* && tar -C /home/jd/footfive/pocketbase/pb_hooks -xzf -'
+          # PocketBase migrations, then hooks (binary + pb_data stay on server). The service
+          # reloads when its hooks change and applies pending migrations as it starts, so new
+          # hooks must never arrive before the migrations they need.
           tar -C pocketbase/pb_migrations -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_migrations/* && tar -C /home/jd/footfive/pocketbase/pb_migrations -xzf -'
+          tar -C pocketbase/pb_hooks -czf - . | "${SSH[@]}" 'rm -rf /home/jd/footfive/pocketbase/pb_hooks/* && tar -C /home/jd/footfive/pocketbase/pb_hooks -xzf -'
 
           # Daily backup scripts run as root by footfive-backup.timer: staged, then
           # renamed into place helper first, so the timer never runs half an update.

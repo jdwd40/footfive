@@ -231,6 +231,7 @@ function ensureTeams($app) {
       team.set("treasury", BALANCE.startingTreasury || 2500);
       team.set("battery_count", 2);
       team.set("overclock_ready", false);
+      team.set("overclock_cost_pending", false);
       tx.save(team);
       completeTeamSetup(tx, team, t);
       created.push(team);
@@ -575,9 +576,17 @@ function kickOff($app, roundId, now, T) {
       });
       var home = engineTeam(tx, homeRec);
       var away = engineTeam(tx, awayRec);
-      [homeRec, awayRec].forEach(function (t) {
+      [
+        [homeRec, home],
+        [awayRec, away],
+      ].forEach(function (pair) {
+        var t = pair[0];
         if (t.get("overclock_ready")) {
+          // The final five pay a pending cost before their lineup is copied into the match.
+          // An arm from before #121 (not pending) was already paid when it was made.
+          if (t.get("overclock_cost_pending")) mgmtMod.chargeOverclockStarters(tx, pair[1].players);
           t.set("overclock_ready", false);
+          t.set("overclock_cost_pending", false);
           t.set("overclock_fixture", fx.id);
           tx.save(t);
         }

@@ -144,7 +144,7 @@ async function configure(extra = [], balance = 5, lastAt = new Date(Date.now() +
     ["UPDATE world SET progression_paused = 1, pace = 'normal' WHERE key = 'main'"],
     ["UPDATE command_charge SET points = ?, last_regen_at = ? WHERE user = ?", [balance, lastAt, user.id]],
     ["UPDATE proball_players SET condition = 40, energy = 40, energy_updated_at = ? WHERE team = ?", [new Date(Date.now() + 3600_000).toISOString(), team.id]],
-    ["UPDATE proball_teams SET overclock_ready = 0, overclock_fixture = '' WHERE id = ?", [team.id]],
+    ["UPDATE proball_teams SET overclock_ready = 0, overclock_cost_pending = 0, overclock_fixture = '' WHERE id = ?", [team.id]],
     ["DELETE FROM tactical_scans"],
     ...extra,
   ]);
@@ -238,8 +238,9 @@ async function main() {
       assert.deepEqual(JSON.parse(scans[0].report_json), response.data.report);
     }
     if (action === "overclock") {
-      assert.equal(query("SELECT overclock_ready FROM proball_teams WHERE id = ?", team.id)[0].overclock_ready, 1);
-      assert(query("SELECT energy FROM proball_players WHERE team = ? AND is_starter = 1", team.id).every((row) => row.energy === 32));
+      // Issue 121: arming owes the energy cost; the actual kick-off starters pay it.
+      assert.deepEqual(query("SELECT overclock_ready, overclock_cost_pending FROM proball_teams WHERE id = ?", team.id)[0], { overclock_ready: 1, overclock_cost_pending: 1 });
+      assert(query("SELECT energy FROM proball_players WHERE team = ?", team.id).every((row) => row.energy === 40));
     }
   });
 
@@ -337,11 +338,12 @@ async function main() {
     assert.equal(points(), 3, "one arm costs exactly two points from five");
     const savedTeam = query("SELECT * FROM proball_teams WHERE id = ?", team.id)[0];
     assert.equal(savedTeam.overclock_ready, 1);
+    assert.equal(savedTeam.overclock_cost_pending, 1);
     assert.equal(savedTeam.overclock_fixture, "");
     const squad = query("SELECT * FROM proball_players WHERE team = ?", team.id);
     assert.equal(squad.filter((p) => p.is_starter).length, 5);
-    for (const player of squad) assert.equal(player.energy, player.is_starter ? 32 : 40,
-      "exactly eight energy per starter, reserves unchanged");
+    for (const player of squad) assert.equal(player.energy, 40,
+      "arming owes the energy cost until kick-off (issue 121)");
   }
 
   await test("first overclock arm keeps its cost/effect; second arm changes no persisted state", async () => {

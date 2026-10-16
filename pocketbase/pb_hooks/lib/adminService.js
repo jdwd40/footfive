@@ -463,6 +463,7 @@ function resetTeamOps($app, adminId, teamId, mode, reason) {
   }
   if (mode === "overclock" || mode === "full") {
     team.set("overclock_ready", false);
+    team.set("overclock_cost_pending", false);
     team.set("overclock_fixture", "");
   }
   $app.save(team);

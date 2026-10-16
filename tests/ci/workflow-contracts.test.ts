@@ -148,6 +148,16 @@ describe("deploy.yml contracts", () => {
     expect(deploy).not.toContain("/home/jd/footfive/scripts/pb-data-backup.py\"");
   });
 
+  it("delivers migrations before the hooks that need them (hook changes reload the service)", () => {
+    const lines = deploy.split("\n");
+    const at = (needle: string) => lines.findIndex((l) => l.trim().startsWith(needle));
+    const migrations = at("tar -C pocketbase/pb_migrations -czf - .");
+    const hooks = at("tar -C pocketbase/pb_hooks -czf - .");
+    expect(migrations).toBeGreaterThan(-1);
+    expect(hooks).toBeGreaterThan(migrations);
+    expect(lines.filter((l) => l.includes("tar -C pocketbase/pb_hooks"))).toHaveLength(1);
+  });
+
   it("delivers the daily backup scripts from the tested checkout, helper first, after the backups", () => {
     const lines = deploy.split("\n");
     const delivery = lines.find((l) => l.includes("tar -C scripts -czf - footfive-backup.sh pb-data-backup.py"));
@@ -221,6 +231,20 @@ describe("footfive-ci.yml contracts", () => {
     const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     expect(pkg.scripts["test:coaching"]).toBe("node tests/integration/coaching-atomicity.mjs");
     expect(readFileSync(path.join(root, "tests/integration/coaching-atomicity.mjs"), "utf8")).toContain("COACHING_PB_PORT");
+  });
+
+  it("gates the API job on the real overclock kick-off suite after the coaching suite", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => new RegExp(`^ {8}run: ${run}$`, "m").test(step));
+    const overclock = steps.filter((step) => /^ {8}run: npm run test:overclock$/m.test(step));
+    expect(overclock).toHaveLength(1);
+    expect(overclock[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(at("npm run test:overclock")).toBeGreaterThan(at("bash scripts\\/fetch-pocketbase\\.sh"));
+    expect(at("npm run test:overclock")).toBeGreaterThan(at("npm run test:coaching"));
+    expect(at("npm run test:coaching")).toBeGreaterThan(-1); // the coaching gate stays
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:overclock"]).toBe("node tests/integration/overclock-kickoff.mjs");
+    expect(readFileSync(path.join(root, "tests/integration/overclock-kickoff.mjs"), "utf8")).toContain("OVERCLOCK_PB_PORT");
   });
 
   it("lint is a hard gate (no || true on gate steps)", () => {
