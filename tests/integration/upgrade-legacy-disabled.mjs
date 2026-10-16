@@ -112,23 +112,39 @@ function sql(db, query) {
 
 // Full-table preservation snapshot/compare (excludes sqlite_% ANALYZE stats
 // and PB system tables; users compared without tokenKey/updated — those two
-// are the intentional upgrade changes).
+// are the intentional upgrade changes). Every original column, value and row is
+// compared by column name; the only column a later migration may add is listed
+// in ADDED with the value every pre-existing row must read.
 const PRESERV_PY = `
 import sqlite3, json, sys
 db, mode, snap = sys.argv[1], sys.argv[2], sys.argv[3]
 c = sqlite3.connect(db)
+ADDED = {'proball_teams': {'overclock_cost_pending': 0}}  # 1750000019: existing rows default false
 tables = [x[0] for x in c.execute("select name from sqlite_master where type='table' and name not like '\\\\_%' escape '\\\\' and name not like 'sqlite_%' and name != 'users'")]
-def dump(t):
-    return sorted((list(r) for r in c.execute('select * from "' + t + '"').fetchall()), key=repr)
+def cols(t):
+    return [x[1] for x in c.execute('pragma table_info("' + t + '")')]
+def dump(t, names):
+    return sorted((list(r) for r in c.execute('select ' + ','.join('"'+n+'"' for n in names) + ' from "' + t + '"').fetchall()), key=repr)
 ucols = [x[1] for x in c.execute('pragma table_info(users)') if x[1] not in ('tokenKey', 'updated')]
 users = sorted((list(r) for r in c.execute('select ' + ','.join('"'+n+'"' for n in ucols) + ' from users').fetchall()), key=repr)
 if mode == 'snapshot':
-    json.dump({'tables': {t: dump(t) for t in tables}, 'users': users}, open(snap, 'w'))
+    json.dump({'tables': {t: {'columns': cols(t), 'rows': dump(t, cols(t))} for t in tables}, 'users': users}, open(snap, 'w'))
     print('SNAPSHOT_OK tables=' + str(len(tables)))
 else:
     base = json.load(open(snap))
-    changed = [t for t in base['tables'] if base['tables'][t] != dump(t)]
-    print(json.dumps({'changed_tables': changed, 'users_changed': base['users'] != users, 'quick_check': c.execute('pragma quick_check').fetchone()[0]}))
+    changed, column_changes, bad_added = [], [], []
+    for t, b in base['tables'].items():
+        now = cols(t)
+        missing = [n for n in b['columns'] if n not in now]
+        added = [n for n in now if n not in b['columns']]
+        if missing or sorted(added) != sorted(ADDED.get(t, {})):
+            column_changes.append({'table': t, 'missing': missing, 'added': added})
+        if missing or b['rows'] != dump(t, b['columns']):
+            changed.append(t)
+        for n, v in ADDED.get(t, {}).items():
+            if n in added and any(r[0] != v for r in c.execute('select "' + n + '" from "' + t + '"')):
+                bad_added.append(t + '.' + n)
+    print(json.dumps({'changed_tables': changed, 'column_changes': column_changes, 'bad_added_values': bad_added, 'users_changed': base['users'] != users, 'quick_check': c.execute('pragma quick_check').fetchone()[0]}))
 `;
 
 // 499 offline fixtures copied from a valid base-created record (unique
@@ -264,6 +280,11 @@ async function main() {
     if (preservRun.status) throw new Error(`preservation check failed: ${preservRun.stderr}`);
     const preservRes = JSON.parse(preservRun.stdout.trim());
     ok("upgrade: business tables preserved (F6)", preservRes.changed_tables.length === 0, JSON.stringify(preservRes.changed_tables));
+    ok(
+      "upgrade: only proball_teams.overclock_cost_pending added, false on every existing team (F6)",
+      preservRes.column_changes.length === 0 && preservRes.bad_added_values.length === 0,
+      JSON.stringify({ columns: preservRes.column_changes, values: preservRes.bad_added_values }),
+    );
     ok("upgrade: users preserved except tokenKey/updated (F6)", !preservRes.users_changed);
     ok("upgrade: sqlite quick_check ok (F6)", preservRes.quick_check === "ok", preservRes.quick_check);
 
