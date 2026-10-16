@@ -90,6 +90,9 @@ describe("setLineup rejects an invalid lineup before any write", () => {
     ["goalkeeper five times", ["p0", "p0", "p0", "p0", "p0"], undefined, /5 different players/],
     ["duplicate outfield starter", ["p0", "p1", "p1", "p2", "p3"], undefined, /5 different players/],
     ["no goalkeeper", ["p1", "p2", "p3", "p4", "p5"], undefined, /include a goalkeeper/],
+    // Issue #124: both of the roster's goalkeepers starting.
+    ["two goalkeepers", ["p0", "p1", "p2", "p3", "p6"], undefined, /include exactly one goalkeeper/],
+    ["two goalkeepers with valid subs", ["p6", "p1", "p0", "p3", "p4"], ["p5", "p2"], /include exactly one goalkeeper/],
     ["subs false", FIVE, false, /Subs must be a list/],
     ["subs zero", FIVE, 0, /Subs must be a list/],
     ["subs empty string", FIVE, "", /Subs must be a list/],
@@ -127,11 +130,11 @@ describe("setLineup saves a valid lineup", () => {
     const steps: [string[], string[] | null | undefined][] = [
       [["p0", "p2", "p3", "p4", "p5"], undefined],
       [["p6", "p1", "p2", "p3", "p4"], null],
-      [["p0", "p1", "p2", "p3", "p6"], []],
+      [["p5", "p1", "p2", "p3", "p6"], []], // the reserve goalkeeper starts
       [["p4", "p3", "p0", "p1", "p5"], ["p6"]],
       [["p0", "p1", "p2", "p3", "p4"], ["p6", "p5"]],
       [["p0", "p1", "p2", "p3", "p4"], ["p5", "p6"]],
-      [["p0", "p6", "p5", "p3", "p1"], ["p4"]], // two goalkeepers start
+      [["p2", "p6", "p5", "p3", "p1"], ["p4"]],
       [["p2", "p0", "p4", "p5", "p1"], ["p6", "p3"]],
     ];
     for (const [starters, subs] of steps) {

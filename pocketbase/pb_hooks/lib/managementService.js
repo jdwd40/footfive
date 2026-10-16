@@ -435,15 +435,16 @@ function setLineup($app, userId, starterIds, subIds) {
         return typeof id === "string" && Object.prototype.hasOwnProperty.call(byId, id) ? byId[id] : null;
       }
       var starters = [];
-      var hasGk = false;
+      var gks = 0;
       for (var s = 0; s < starterIds.length; s++) {
         var pl = owned(starterIds[s]);
         if (!pl) reject(new BadRequestError("Invalid starter id"));
         if (starters.indexOf(pl.id) >= 0) reject(new BadRequestError("Starters must be 5 different players"));
-        if (pl.get("role") === "gk") hasGk = true;
+        if (pl.get("role") === "gk") gks++;
         starters.push(pl.id);
       }
-      if (!hasGk) reject(new BadRequestError("Starting five must include a goalkeeper"));
+      if (!gks) reject(new BadRequestError("Starting five must include a goalkeeper"));
+      if (gks > 1) reject(new BadRequestError("Starting five must include exactly one goalkeeper"));
       var subList = [];
       for (var b = 0; b < subIds.length; b++) {
         var sub = owned(subIds[b]);

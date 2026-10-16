@@ -234,6 +234,7 @@ async function main() {
     const before = playerBytes();
     const response = await submit(body);
     rejected(response);
+    if (name === "no goalkeeper") assert.match(response.data.message, /goalkeeper/i);
     assert.equal(playerBytes(), before);
   });
 
@@ -253,15 +254,46 @@ async function main() {
     assert.deepEqual(query("SELECT * FROM proball_players WHERE team != ? ORDER BY id", team.id), foreignBefore);
   });
 
-  await test("at least one goalkeeper does not impose a new exactly-one restriction", async () => {
+  function assertOneKeeper(selected) {
+    assert.equal(ownRows().filter((p) => selected.includes(p.id) && p.role === "gk").length, 1,
+      "control payload must have exactly one actual owned goalkeeper");
+  }
+  function exactlyOneRejected(response) {
+    rejected(response);
+    assert.match(response.data.message, /exactly one goalkeeper/i);
+  }
+  // Issue 124 intentionally replaces the old two-GK compatibility acceptance.
+  await test("two distinct owned goalkeepers reject without any player write", async () => {
     await configure([["UPDATE proball_players SET role = 'gk' WHERE id = ?", [starters[0]]]]);
-    const response = await submit({ starters, subs: reserves });
+    const before = playerBytes();
+    exactlyOneRejected(await submit({ starters, subs: reserves }));
+    assert.equal(playerBytes(), before);
+  });
+
+  await test("two goalkeepers at opposite starter-order endpoints reject with omitted subs", async () => {
+    await configure([["UPDATE proball_players SET role = 'gk' WHERE id = ?", [ids[1]]]]);
+    const selected = [ids[0], ids[2], ids[4], ids[5], ids[1]];
+    const before = playerBytes();
+    exactlyOneRejected(await submit({ starters: selected }));
+    assert.equal(playerBytes(), before);
+  });
+
+  await test("alternate sole starting goalkeeper accepts ordered outfield starters and reserve goalkeeper", async () => {
+    await configure([["UPDATE proball_players SET role = 'gk' WHERE id = ?", [ids[1]]]]);
+    const selected = [ids[6], ids[1], ids[3], ids[4], ids[5]];
+    const bench = reserveIds(selected).reverse();
+    assert(bench.includes(gk.id), "original goalkeeper must now be a reserve");
+    assertOneKeeper(selected);
+    const foreignBefore = query("SELECT * FROM proball_players WHERE team != ? ORDER BY id", team.id);
+    const response = await submit({ starters: selected, subs: bench });
     assert.equal(response.status, 200, JSON.stringify(response.data));
-    assert.deepEqual(lineup(), expected(starters, reserves));
+    assert.deepEqual(lineup(), expected(selected, bench));
+    assert.deepEqual(query("SELECT * FROM proball_players WHERE team != ? ORDER BY id", team.id), foreignBefore);
   });
 
   await test("failure after earlier player saves rolls back every flag/order/row", async () => {
     await configure();
+    assertOneKeeper(starters);
     const before = playerBytes();
     arm({ mode: "late-fault", team: team.id, id: "late-player" });
     const response = await submit({ starters, subs: [...reserves].reverse() });
@@ -289,6 +321,8 @@ async function main() {
     await configure();
     const a = { starters, subs: [ids[3], ids[1]] };
     const b = { starters: [ids[6], ids[5], ids[0], ids[1], ids[3]], subs: [ids[4], ids[2]] };
+    assertOneKeeper(a.starters);
+    assertOneKeeper(b.starters);
     // Without a transaction: A saves early rows, B finishes during A's later
     // pause, then A finishes its tail. Inside a transaction these stay whole.
     arm({ mode: "race", team: team.id, delays: [
@@ -304,6 +338,7 @@ async function main() {
 
   await test("successful squad change leaves already-frozen real match lineups unchanged", async () => {
     await configure();
+    assertOneKeeper(starters);
     assert.deepEqual(frozen(), frozenBefore);
     const statesBefore = query("SELECT id,state_json,seed FROM match_states ORDER BY id");
     const response = await submit({ starters, subs: [...reserves].reverse() });
