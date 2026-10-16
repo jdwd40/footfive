@@ -61,6 +61,8 @@ jobs:
         run: npm run test:lineup
       - name: Live coaching order (disposable PocketBase)
         run: npm run test:coaching
+      - name: Overclock kick-off cost (disposable PocketBase)
+        run: npm run test:overclock
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test

@@ -84,10 +84,11 @@ apply() {
   if [[ -n "$SERVICE_NAME" ]]; then
     sudo systemctl stop "$SERVICE_NAME"
   fi
-  # hooks + migrations
+  # migrations, then hooks: a running service reloads on hook changes and applies
+  # pending migrations as it starts, so hooks never arrive before their migrations
   mkdir -p "$PB_ROOT"
-  rsync -a --delete "$ROOT/pocketbase/pb_hooks/" "$PB_ROOT/pb_hooks/"
   rsync -a --delete "$ROOT/pocketbase/pb_migrations/" "$PB_ROOT/pb_migrations/"
+  rsync -a --delete "$ROOT/pocketbase/pb_hooks/" "$PB_ROOT/pb_hooks/"
   # frontend
   mkdir -p "$WEB_ROOT"
   rsync -a --delete "$ROOT/dist/" "$WEB_ROOT/"

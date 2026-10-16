@@ -643,6 +643,11 @@ function commandChargeSpend($app, userId, action, playerId, fixtureId) {
       } else if (action === "overclock") {
         // One arm per kick-off: the fresh flag stays set until kick-off consumes it.
         if (team.get("overclock_ready")) reject(new BadRequestError("Overclock is already armed for your next kick-off"));
+        // Hooks can load before migration 1750000019: without the pending field an arm
+        // would save no owed cost, and kick-off would hand out a free bonus.
+        if (!team.collection().fields.getByName("overclock_cost_pending")) {
+          reject(new BadRequestError("Overclock is unavailable until the server update completes"));
+        }
       } else {
         reject(new BadRequestError("Unknown action"));
       }
@@ -674,16 +679,10 @@ function commandChargeSpend($app, userId, action, playerId, fixtureId) {
         tx.save(scan);
         result = { ok: true, action: action, report: report, fixtureId: fx.id };
       } else {
-        // Overclock: energy cost to every starter, then the flag.
-        var players = tx.findRecordsByFilter("proball_players", "team = {:t} && is_starter = true", "", 10, 0, { t: team.id });
-        for (var i = 0; i < players.length; i++) {
-          materialisePlayerEnergy(tx, players[i]);
-          var en = players[i].get("energy") || 0;
-          players[i].set("energy", clamp(en - BALANCE.overclockEnergyCost, 0, 100));
-          players[i].set("energy_updated_at", toPbDate(Date.now()));
-          tx.save(players[i]);
-        }
+        // Overclock: the flag only. Its energy cost is owed until kick-off, where the
+        // players who actually start pay it (chargeOverclockStarters).
         team.set("overclock_ready", true);
+        team.set("overclock_cost_pending", true);
         team.set("overclock_fixture", "");
         tx.save(team);
         result = { ok: true, action: action, bonus: BALANCE.overclockBonus };
@@ -829,6 +828,29 @@ function loadTeamSnapshot($app, teamId) {
     overclock: overclock,
     treasury: team.get("treasury"),
   };
+}
+
+/**
+ * Kick-off: the players who actually start pay an armed overclock's energy cost.
+ * `players` is the final kick-off lineup (saved, default or the AI pick). Call inside the
+ * kick-off transaction before the lineup is copied into the match state or frozen: each
+ * starter's saved energy and lineup entry get the same charged value, once per player.
+ */
+function chargeOverclockStarters(tx, players) {
+  var paid = {};
+  for (var i = 0; i < players.length; i++) {
+    var p = players[i];
+    if (!p.is_starter) continue;
+    if (!Object.prototype.hasOwnProperty.call(paid, p.id)) {
+      var rec = tx.findRecordById("proball_players", p.id);
+      materialisePlayerEnergy(tx, rec);
+      rec.set("energy", clamp((rec.get("energy") || 0) - BALANCE.overclockEnergyCost, 0, 100));
+      rec.set("energy_updated_at", toPbDate(Date.now()));
+      tx.save(rec);
+      paid[p.id] = rec.get("energy");
+    }
+    p.energy = paid[p.id];
+  }
 }
 
 /**
@@ -1026,6 +1048,7 @@ if (typeof module !== "undefined") {
     getCommandChargeState: getCommandChargeState,
     teamFinances: teamFinances,
     loadTeamSnapshot: loadTeamSnapshot,
+    chargeOverclockStarters: chargeOverclockStarters,
     rewardFixture: rewardFixture,
     rewardElimination: rewardElimination,
     rewardChampion: rewardChampion,

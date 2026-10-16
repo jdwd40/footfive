@@ -92,6 +92,14 @@ test("a clean checkout of the CI-passed main head is gated first, then tested, b
   expect(existsSync(path.join(p.dir, "backups/LATEST"))).toBe(true);
 });
 
+test("apply copies migrations before the hooks that need them (hook changes reload a running service)", () => {
+  const script = readFileSync(path.join(repoRoot, "deploy/deploy.sh"), "utf8");
+  const body = script.slice(script.indexOf("\napply() {"), script.indexOf("\n}\n", script.indexOf("\napply() {")));
+  const migrations = body.indexOf('rsync -a --delete "$ROOT/pocketbase/pb_migrations/" "$PB_ROOT/pb_migrations/"');
+  expect(migrations).toBeGreaterThan(-1);
+  expect(body.indexOf('rsync -a --delete "$ROOT/pocketbase/pb_hooks/" "$PB_ROOT/pb_hooks/"')).toBeGreaterThan(migrations);
+});
+
 test("apply without an exact, checked-out, clean SHA refuses before any GitHub call, build, backup or copy", () => {
   const cases: [string, (p: ReturnType<typeof project>) => string[], string][] = [
     ["no SHA", () => ["apply"], "FULL_40_CHARACTER_SHA"],
