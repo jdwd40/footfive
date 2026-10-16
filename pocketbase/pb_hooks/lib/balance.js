@@ -139,9 +139,9 @@ var BALANCE = {
   },
 
   intensity: {
-    passive: { attack: 0.85, defence: 1.05, energyUse: 0.55, foul: 0.7, condition: 0.6 },
-    balanced: { attack: 1.0, defence: 1.0, energyUse: 1.0, foul: 1.0, condition: 1.0 },
-    aggressive: { attack: 1.15, defence: 0.9, energyUse: 1.4, foul: 1.4, condition: 1.35 },
+    passive: { attack: 0.85, defence: 1.05, energyUse: 0.55, condition: 0.6 },
+    balanced: { attack: 1.0, defence: 1.0, energyUse: 1.0, condition: 1.0 },
+    aggressive: { attack: 1.15, defence: 0.9, energyUse: 1.4, condition: 1.35 },
   },
 
   roleWeights: {
