@@ -640,7 +640,10 @@ function commandChargeSpend($app, userId, action, playerId, fixtureId) {
         if (fx.get("home_team") !== team.id && fx.get("away_team") !== team.id) {
           reject(new BadRequestError("Fixture does not involve your team"));
         }
-      } else if (action !== "overclock") {
+      } else if (action === "overclock") {
+        // One arm per kick-off: the fresh flag stays set until kick-off consumes it.
+        if (team.get("overclock_ready")) reject(new BadRequestError("Overclock is already armed for your next kick-off"));
+      } else {
         reject(new BadRequestError("Unknown action"));
       }
 
