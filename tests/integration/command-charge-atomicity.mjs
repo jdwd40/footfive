@@ -379,6 +379,92 @@ async function main() {
     assert.equal(overclockSnapshot(), before, "already-armed rejection must preserve every row, including absent charge");
     alreadyArmed(response);
   });
+
+  // Issue 122: rejected full targets preserve raw application rows, including
+  // unmaterialised energy and charge clocks. Never call a materialising GET here.
+  function fullTargetState() {
+    const tables = query("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT GLOB '_*' AND name NOT GLOB 'sqlite_*' ORDER BY name");
+    return JSON.stringify(tables.map(({ name }) => [name, query(`SELECT * FROM "${name.replaceAll('"', '""')}" ORDER BY id`)]));
+  }
+  function alreadyFull(response, field) {
+    rejected(response);
+    assert.match(response.data.message, field === "energy" ? /energy already full/i : /condition already full/i);
+  }
+  // The preceding absent-charge overclock control intentionally leaves no row.
+  // Create our own starting balance through the real API, not a hidden fixture dependency.
+  assert.equal((await request("/api/footfive/command-charge", user.token)).status, 200);
+  for (const [action, field] of [["rapid_charge", "energy"], ["field_repair", "condition"]]) {
+    await test(`${action} rejects a stored full target without changing any application row`, async () => {
+      await configure([[`UPDATE proball_players SET ${field} = 100 WHERE id = ?`, [players[0].id]]]);
+      const before = fullTargetState();
+      alreadyFull(await spend({ action, playerId: players[0].id }), field);
+      assert.equal(fullTargetState(), before);
+    });
+
+    for (const absent of [false, true]) await test(`${action} full target rejects before ${absent ? "creating absent" : "checking empty"} charge`, async () => {
+      // Restore the deleted fixture row even if baseline incorrectly creates one,
+      // so all subsequent compatibility controls have the same initial state.
+      const savedCharge = charge()[0];
+      assert(savedCharge);
+      try {
+        await configure([
+          [`UPDATE proball_players SET ${field} = 100 WHERE id = ?`, [players[0].id]],
+          ...(absent ? [["DELETE FROM command_charge WHERE user = ?", [user.id]]] : []),
+        ], 0);
+        assert.equal(charge().length, absent ? 0 : 1);
+        const before = fullTargetState();
+        alreadyFull(await spend({ action, playerId: players[0].id }), field);
+        assert.equal(fullTargetState(), before);
+      } finally {
+        if (absent) {
+          await stop();
+          const columns = Object.keys(savedCharge);
+          execute([
+            ["DELETE FROM command_charge WHERE user = ?", [user.id]],
+            [`INSERT INTO command_charge (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, Object.values(savedCharge)],
+          ]);
+          await start();
+        }
+      }
+    });
+
+    await test(`${action} partial 99 target still costs one and clamps to 100`, async () => {
+      await configure([[`UPDATE proball_players SET ${field} = 99 WHERE id = ?`, [players[0].id]]]);
+      const otherPlayers = query("SELECT * FROM proball_players WHERE id != ? ORDER BY id", players[0].id);
+      const response = await spend({ action, playerId: players[0].id });
+      assert.equal(response.status, 200, JSON.stringify(response));
+      assert.equal(response.data[field], 100);
+      assert.equal(query(`SELECT ${field} FROM proball_players WHERE id = ?`, players[0].id)[0][field], 100);
+      assert.equal(points(), 4);
+      assert.deepEqual(query("SELECT * FROM proball_players WHERE id != ? ORDER BY id", players[0].id), otherPlayers);
+    });
+
+    await test(`${action} concurrent near-full requests buy one effect and reject the now-full target`, async () => {
+      await configure([[`UPDATE proball_players SET ${field} = 99 WHERE id = ?`, [players[0].id]]], 5);
+      const otherPlayers = query("SELECT * FROM proball_players WHERE id != ? ORDER BY id", players[0].id);
+      // Both requests can afford the effect; widen overlap at native debit save.
+      arm({ collection: "command_charge", op: "update", delayMs: 120 });
+      const responses = await Promise.all([spend({ action, playerId: players[0].id }), spend({ action, playerId: players[0].id })]);
+      assert.equal(responses.filter((r) => r.status === 200).length, 1, JSON.stringify(responses));
+      alreadyFull(responses.find((r) => r.status !== 200), field);
+      assert.equal(points(), 4);
+      assert.equal(query(`SELECT ${field} FROM proball_players WHERE id = ?`, players[0].id)[0][field], 100);
+      assert.deepEqual(query("SELECT * FROM proball_players WHERE id != ? ORDER BY id", players[0].id), otherPlayers);
+    });
+  }
+
+  await test("regenerated full energy rejects and rolls back stored energy and its old stamp", async () => {
+    // A full day comfortably earns the missing point at normal production pace.
+    const oldStamp = new Date(Date.now() - 86400_000).toISOString();
+    await configure([["UPDATE proball_players SET energy = 99, energy_updated_at = ? WHERE id = ?", [oldStamp, players[0].id]]]);
+    const stored = query("SELECT * FROM proball_players WHERE id = ?", players[0].id)[0];
+    assert.equal(stored.energy, 99);
+    assert.equal(stored.energy_updated_at, oldStamp);
+    const before = fullTargetState();
+    alreadyFull(await spend({ action: "rapid_charge", playerId: players[0].id }), "energy");
+    assert.equal(fullTargetState(), before);
+  });
+
 }
 
 try { await main(); }
