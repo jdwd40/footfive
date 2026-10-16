@@ -126,7 +126,8 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const ai = t.mode === "ai";
   const next = world.nextFixture;
   const starters = draft || sq.players.filter((p) => p.is_starter).map((p) => p.id);
-  const gkIn = sq.players.some((p) => p.role === "gk" && starters.includes(p.id));
+  // The five must start exactly one goalkeeper; a saved lineup from before this rule can break it.
+  const gks = sq.players.filter((p) => p.role === "gk" && starters.includes(p.id)).length;
 
   function toggle(p: Player) {
     const cur = draft || sq!.players.filter((x) => x.is_starter).map((x) => x.id);
@@ -229,7 +230,7 @@ function Manage({ world }: { world: WorldSnapshot }) {
                 <button
                   type="button"
                   className="btn-primary"
-                  disabled={busy || draft.length !== 5 || !gkIn}
+                  disabled={busy || draft.length !== 5 || gks !== 1}
                   onClick={() =>
                     run(
                       () =>
@@ -247,8 +248,13 @@ function Manage({ world }: { world: WorldSnapshot }) {
                 <button type="button" className="btn-ghost" onClick={() => setDraft(null)}>
                   Cancel
                 </button>
-                {!gkIn ? <span className="text-sm text-amber">Include a goalkeeper.</span> : null}
+                {gks === 0 ? <span className="text-sm text-amber">Include a goalkeeper.</span> : null}
+                {gks > 1 ? <span className="text-sm text-amber">Only one goalkeeper can start — you have {gks} in your five.</span> : null}
               </div>
+            ) : gks !== 1 ? (
+              <p className="mt-3 rounded-lg border border-amber/30 bg-amber/10 p-2 text-sm text-amber" role="alert" data-testid="lineup-gk-warning">
+                Your saved line-up has {gks || "no"} goalkeepers, but the five must start exactly one. Tap Starter or Reserve to fix it, then save.
+              </p>
             ) : null}
           </section>
         </div>
