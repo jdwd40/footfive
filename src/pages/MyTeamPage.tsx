@@ -219,6 +219,9 @@ function Manage({ world }: { world: WorldSnapshot }) {
               <h2 className="panel-title">Squad</h2>
               <span className="text-xs text-muted">Five starters (one goalkeeper) and two reserves · {sq.effectNote}</span>
             </div>
+            <p className="mt-1 text-xs text-muted" data-testid="reserves-note">
+              Reserves are kept for future starting line-ups. In-match substitutions are not active.
+            </p>
             {ai ? <p className="mt-2 text-xs text-amber">Full AI chooses the five each kick-off. Your saved line-up below is kept for when you switch back.</p> : null}
             <ul className="mt-3 space-y-2">
               {sq.players.map((p) => (

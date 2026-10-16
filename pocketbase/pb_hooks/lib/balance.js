@@ -166,11 +166,6 @@ var BALANCE = {
   conditionOnYellow: 3,
   conditionOnRed: 8,
 
-  // Auto-sub thresholds
-  autoSubEnergy: 18,
-  autoSubCondition: 22,
-  maxSubstitutions: 2,
-
   // Overclock
   overclockBonus: 1.06, // +6% effective atk/def for one fixture
   overclockEnergyCost: 8, // each starter loses this energy when applied
