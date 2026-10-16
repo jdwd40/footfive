@@ -1768,6 +1768,9 @@ function coachInTransaction($app, userId, fixtureId, stance, T, markBehind) {
       throw new BadRequestError("Coaching is available while the match is being played");
     }
     if (st.phase === "shootout" || st.phase === "finished") throw new BadRequestError("Coaching has closed for this match");
+    // The engine follows the control mode frozen at kick-off: an AI side ignores manager
+    // commands for the whole match, so one must never be queued or counted.
+    if (st.teams[side].ai) throw new BadRequestError("This match started under Full AI — manual control starts from your next match");
     // The next minute has already started unsimulated: queueing now would apply the
     // command to elapsed play.
     if (!(st.nextAt > now)) {
