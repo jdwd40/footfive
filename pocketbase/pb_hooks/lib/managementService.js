@@ -628,16 +628,6 @@ function commandChargeSpend($app, userId, action, playerId, fixtureId) {
         player = findRecordOrNull(tx, "proball_players", playerId);
         if (!player) reject(new BadRequestError("Player not found"));
         if (player.get("team") !== team.id) reject(new ForbiddenError("Not your player"));
-        // A full target gains nothing, so it costs nothing (as batteries and repairs).
-        if (action === "rapid_charge") {
-          // Regeneration can fill it: materialise in this transaction (a rejection rolls it back).
-          materialisePlayerEnergy(tx, player);
-          if ((player.get("energy") || 0) >= 100) reject(new BadRequestError("Energy already full"));
-        } else {
-          var condition = player.get("condition");
-          if (condition == null) condition = 100;
-          if (condition >= 100) reject(new BadRequestError("Condition already full"));
-        }
       } else if (action === "tactical_scan") {
         if (fixtureId) {
           if (typeof fixtureId !== "string") reject(new BadRequestError("Invalid fixtureId"));
@@ -665,7 +655,8 @@ function commandChargeSpend($app, userId, action, playerId, fixtureId) {
       debitCommandCharge(tx, userId, cost, regenMs, reject);
 
       if (action === "rapid_charge") {
-        var e = player.get("energy") || 0; // materialised above
+        materialisePlayerEnergy(tx, player);
+        var e = player.get("energy") || 0;
         player.set("energy", clamp(e + BALANCE.rapidChargeEnergy, 0, 100));
         player.set("energy_updated_at", toPbDate(Date.now()));
         tx.save(player);
