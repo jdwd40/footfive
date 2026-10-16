@@ -326,6 +326,57 @@ async function main() {
     assert.equal(points(), 3);
     assert(resetAt >= before - 10 && resetAt <= Date.now(), `regen clock not reset at spend: ${saved.last_regen_at}`);
   });
+
+  // Issue 120: an armed overclock is a rejected request, never another purchase.
+  const overclockSnapshot = () => JSON.stringify({ state: state(), fixtures: query("SELECT * FROM shared_fixtures ORDER BY id") });
+  function alreadyArmed(response) {
+    assert([400, 409].includes(response.status), JSON.stringify(response));
+    assert.match(response.data.message, /overclock.*already armed/i);
+  }
+  function oneArmEffect() {
+    assert.equal(points(), 3, "one arm costs exactly two points from five");
+    const savedTeam = query("SELECT * FROM proball_teams WHERE id = ?", team.id)[0];
+    assert.equal(savedTeam.overclock_ready, 1);
+    assert.equal(savedTeam.overclock_fixture, "");
+    const squad = query("SELECT * FROM proball_players WHERE team = ?", team.id);
+    assert.equal(squad.filter((p) => p.is_starter).length, 5);
+    for (const player of squad) assert.equal(player.energy, player.is_starter ? 32 : 40,
+      "exactly eight energy per starter, reserves unchanged");
+  }
+
+  await test("first overclock arm keeps its cost/effect; second arm changes no persisted state", async () => {
+    await configure();
+    const first = await spend({ action: "overclock" });
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    oneArmEffect();
+    const before = overclockSnapshot();
+    const second = await spend({ action: "overclock" });
+    assert.equal(overclockSnapshot(), before, "repeat arm changed charge clock, energy, flag or fixture state");
+    alreadyArmed(second);
+  });
+
+  await test("concurrent first overclock arms buy exactly one effect despite balance sufficient for both", async () => {
+    await configure([], 5);
+    // Delay the real debit persistence inside the action, widening the overlap
+    // without replacing its fresh reads, transaction or effect implementation.
+    arm({ collection: "command_charge", op: "update", delayMs: 120 });
+    const responses = await Promise.all([spend({ action: "overclock" }), spend({ action: "overclock" })]);
+    assert.equal(responses.filter((r) => r.status === 200).length, 1, JSON.stringify(responses));
+    alreadyArmed(responses.find((r) => r.status !== 200));
+    oneArmEffect();
+  });
+
+  for (const missingCharge of [false, true]) await test(`already-armed overclock rejects before ${missingCharge ? "creating absent" : "checking insufficient"} charge`, async () => {
+    await configure([
+      ["UPDATE proball_teams SET overclock_ready = 1, overclock_fixture = ? WHERE id = ?", [ownFixture.id, team.id]],
+      ...(missingCharge ? [["DELETE FROM command_charge WHERE user = ?", [user.id]]] : []),
+    ], 1);
+    assert.equal(charge().length, missingCharge ? 0 : 1);
+    const before = overclockSnapshot();
+    const response = await spend({ action: "overclock" });
+    assert.equal(overclockSnapshot(), before, "already-armed rejection must preserve every row, including absent charge");
+    alreadyArmed(response);
+  });
 }
 
 try { await main(); }
