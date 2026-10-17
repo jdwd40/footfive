@@ -102,18 +102,19 @@ function Manage({ world }: { world: WorldSnapshot }) {
     setSq(s);
     setCc(c);
     setFin(f.entries.slice(0, 8));
+    return s;
   }, []);
   useEffect(() => {
     load().catch((err) => setMsg({ ok: false, text: err instanceof Error ? err.message : "Load failed" }));
   }, [load]);
 
-  async function run(fn: () => Promise<unknown>, ok: string) {
+  async function run(fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string)) {
     setBusy(true);
     setMsg(null);
     try {
       await fn();
-      await load();
-      setMsg({ ok: true, text: ok });
+      const reloaded = await load();
+      setMsg({ ok: true, text: typeof ok === "string" ? ok : ok(reloaded) });
     } catch (err) {
       setMsg({ ok: false, text: err instanceof Error ? err.message : "Action failed" });
     } finally {
@@ -123,6 +124,8 @@ function Manage({ world }: { world: WorldSnapshot }) {
 
   if (!sq) return <div className="panel h-48 animate-pulse" />;
   const t = sq.team;
+  // Older servers don't send the battery amount; the copy then names no number.
+  const restore = typeof sq.batteryRestore === "number" && Number.isFinite(sq.batteryRestore) && sq.batteryRestore > 0 ? sq.batteryRestore : null;
   const ai = t.mode === "ai";
   const next = world.nextFixture;
   const starters = draft || sq.players.filter((p) => p.is_starter).map((p) => p.id);
@@ -225,7 +228,7 @@ function Manage({ world }: { world: WorldSnapshot }) {
             {ai ? <p className="mt-2 text-xs text-amber">Full AI chooses the five each kick-off. Your saved line-up below is kept for when you switch back.</p> : null}
             <ul className="mt-3 space-y-2">
               {sq.players.map((p) => (
-                <PlayerRow key={p.id} p={p} starter={starters.includes(p.id)} busy={busy} onToggle={() => toggle(p)} run={run} />
+                <PlayerRow key={p.id} p={p} starter={starters.includes(p.id)} busy={busy} batteries={t.battery_count} restore={restore} onToggle={() => toggle(p)} run={run} />
               ))}
             </ul>
             {draft ? (
@@ -305,6 +308,9 @@ function Manage({ world }: { world: WorldSnapshot }) {
 
           <section className="panel p-4">
             <h2 className="panel-title">Garage</h2>
+            <p className="mt-1 text-xs text-muted" data-testid="battery-note">
+              Each battery adds {restore ? `up to ${restore}` : "some"} energy to one player, capped at 100%.
+            </p>
             <p className="mt-1 text-xs text-muted">
               Battery {credits(sq.batteryCost)} · repairs {sq.repairCostPerPoint}/point · from the team treasury, never your betting wallet.
             </p>
@@ -343,17 +349,26 @@ function PlayerRow({
   p,
   starter,
   busy,
+  batteries,
+  restore,
   onToggle,
   run,
 }: {
   p: Player;
   starter: boolean;
   busy: boolean;
+  batteries: number;
+  restore: number | null;
   onToggle: () => void;
-  run: (fn: () => Promise<unknown>, ok: string) => Promise<void>;
+  run: (fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string)) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const need = Math.min(30, 100 - p.condition);
+  // Report the energy the server reloaded, not a client sum, so a near-full player isn't promised the whole amount.
+  const batteryUsed = (s: Squad) => {
+    const energy = s.players.find((x) => x.id === p.id)?.energy;
+    return `Battery used on ${p.name}${restore ? ` (up to +${restore})` : ""}${energy != null ? ` — energy now ${energy}%` : ""}.`;
+  };
   return (
     <li className={`rounded-xl border p-3 ${starter ? "border-cyan/40 bg-cyan/5" : "border-line"}`}>
       <div className="flex items-center gap-2">
@@ -387,6 +402,9 @@ function PlayerRow({
           <p className="text-xs text-muted">
             Energy {p.energy}% · condition {p.condition}% · effective ATK {p.effective_attack} / DEF {p.effective_defence}
           </p>
+          <p className="text-xs text-muted" data-testid="effective-hint">
+            Effective ATK/DEF is the base stat adjusted for role, intensity, energy and condition (and Overclock when armed).
+          </p>
           <div className="flex flex-wrap gap-1">
             {(["passive", "balanced", "aggressive"] as const).map((iv) => (
               <button
@@ -407,8 +425,8 @@ function PlayerRow({
             <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy} onClick={() => run(() => footfiveApi.upgradePlayer(p.id, "defence"), `${p.name} defence upgraded.`)}>
               DEF +1 ({credits(p.upgrade_cost.defence)})
             </button>
-            <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy || p.energy >= 100} onClick={() => run(() => footfiveApi.useBattery(p.id), `Battery used on ${p.name}.`)}>
-              Use battery
+            <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy || p.energy >= 100 || batteries < 1} onClick={() => run(() => footfiveApi.useBattery(p.id), batteryUsed)}>
+              {restore ? `Battery (up to +${restore})` : "Use battery"}
             </button>
             <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy || need <= 0} onClick={() => run(() => footfiveApi.repairPlayer(p.id, need), `${p.name} repaired +${need}.`)}>
               Repair +{Math.max(need, 0)}

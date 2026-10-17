@@ -319,6 +319,8 @@ export const footfiveApi = {
       effectNote: string;
       aiRules: string[];
       batteryCost: number;
+      /** Most energy one battery adds (capped at 100). Absent from older servers. */
+      batteryRestore?: number;
       repairCostPerPoint: number;
     }>("/api/footfive/my-team"),
 

@@ -166,6 +166,11 @@ var BALANCE = {
   conditionOnYellow: 3,
   conditionOnRed: 8,
 
+  // Fitness: effective attack/defence scale by 1 - impact x (share of energy or condition
+  // missing), so a flat tank costs a player `impact` of their output (effectiveStats.fitnessFactor).
+  // The engine, scouting estimates and AI line-up choices all use this one policy.
+  fitness: { energyImpact: 0.35, conditionImpact: 0.35 },
+
   // Overclock
   overclockBonus: 1.12, // +12% effective atk/def for one fixture; the starters still pay the energy cost
   overclockEnergyCost: 8, // each starter loses this energy when applied
@@ -183,9 +188,9 @@ var BALANCE = {
   rapidChargeEnergy: 18,
   fieldRepairCondition: 15,
 
-  // Upgrade costs: base * growth^(level) where level = current attr
+  // Upgrade costs: base * growth^(level) where level = current attr (+1 per purchase)
   upgradeBaseCost: 80,
-  upgradeGrowth: 1.08,
+  upgradeGrowth: 1.04,
   attrMax: 100,
 
   // Repair: cost per Condition point restored

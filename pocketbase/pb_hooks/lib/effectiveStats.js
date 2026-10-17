@@ -14,6 +14,11 @@ function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+/** Multiplier for a 0-100 energy or condition: 1 when full, 1 - impact when empty. */
+function fitnessFactor(value, impact) {
+  return 1 - impact * (1 - value / 100);
+}
+
 /**
  * @param {object} player { attack, defence, role, energy, condition, intensity }
  * @param {object} opts { coachingStance, overclock, sentOff }
@@ -30,9 +35,9 @@ function effectivePlayerStats(player, opts) {
   var cm = coachingMod(opts.coachingStance || "balanced");
   var energy = clamp(player.energy != null ? player.energy : 100, 0, 100);
   var condition = clamp(player.condition != null ? player.condition : 100, 0, 100);
-  // Soft floor so low values hurt hard but never fully zero from one axis alone
-  var energyFactor = 0.35 + 0.65 * (energy / 100);
-  var conditionFactor = 0.3 + 0.7 * (condition / 100);
+  // Low values hurt, but never zero a player from one axis alone
+  var energyFactor = fitnessFactor(energy, BALANCE.fitness.energyImpact);
+  var conditionFactor = fitnessFactor(condition, BALANCE.fitness.conditionImpact);
   var overclock = opts.overclock ? BALANCE.overclockBonus : 1;
 
   var atk =
@@ -116,6 +121,7 @@ if (typeof module !== "undefined") {
     effectiveTeamStrength: effectiveTeamStrength,
     materialiseEnergy: materialiseEnergy,
     materialiseCommandCharge: materialiseCommandCharge,
+    fitnessFactor: fitnessFactor,
     clamp: clamp,
   };
 }

@@ -33,7 +33,11 @@ must be reported even when inconclusive. Never tune against the heldout sample.
 Pilots screened bonuses 1.12, 1.14 and 1.16. The full-fitness peer estimates were
 +4.69, +4.69 and +5.47 points respectively. Select 1.12 as the smallest plausible
 candidate. These small pilot estimates have wide intervals; final evidence and
-its report hashes are attached to the PR.
+its report hashes are attached to the PR. The realised fresh-peer gain was
++2.875 points (95% interval +1.919 to +3.831), narrowly below the initial
++3-point floor by 0.125. Both reviews accepted the disclosed bounded benefit
+without heldout retuning. These are the pre-#135 fitness results; #135 rechecks
+Overclock against its new curve.
 
 Each seed produces 36 outcomes: three opponents, three health scenarios, both
 orientations, and Off/On. Advancement includes extra time and penalties;

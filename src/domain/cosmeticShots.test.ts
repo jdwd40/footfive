@@ -28,14 +28,18 @@ const world = lib("worldService.js") as {
 const { TEAMS } = lib("teams.js");
 const { defaultStarters } = lib("tournament.js");
 
-/** Pre-#73 engine (git 2a17bda, identical to the lead's captured matchEngine-before.cjs), 200 seeds at the live 8 s pace. */
+/**
+ * Pre-#73 engine (git 2a17bda, identical to the lead's captured matchEngine-before.cjs), 200 seeds at the live 8 s pace.
+ * Issue #135 re-pinned all three for the flatter fitness curve (seeded outcomes change by design; same 200 inputs,
+ * projection and assertions): pin eef854d6… → ea5b06fd…, full e8da709c… → 318ca545…, steps 8014fab6… → 617b66e6….
+ */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
-  pin: "eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b",
+  pin: "ea5b06fd2b4bc44fcc5e49d375da92d0738b8ded6ae5feaa5afd21ed20a97ab8",
   /** Every field of every event plus the whole final state. */
-  full: "e8da709c2894b3e5b1d2c79f40082ad238d7b2905ca2cafe4a92173cd38b0909",
+  full: "318ca545ec6e9230092ad924fc05dcb2fb2c64ac71aadf36188d3da5b9844992",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "8014fab6860c030dbb20cb2019da1a0fed741158d02e373a452f75b1abd5240a",
+  steps: "617b66e621fc3d8a20dc7577f98d2df0c6731cc200257d5c6009037fb6bba90f",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };

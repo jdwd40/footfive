@@ -308,7 +308,12 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
   // Blocked-shot re-pin (f1e646ad18a3fa5c6f8318b46da0a21df7252d99ed639e3b766ad020086dad4d →
   // eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b): blocks no longer add resultHoldMs,
   // so `at` timestamps after a block shift; outcomes, actors, scores and RNG draw count are untouched.
-  const BASE_SHA256 = "eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b";
+  // Issue #135 fitness re-pin (eef854d6f94f24c999783c2d6454d144d9fd16546e66a7fcddebd0b36ca2395b →
+  // ea5b06fd2b4bc44fcc5e49d375da92d0738b8ded6ae5feaa5afd21ed20a97ab8): energy and condition now cost a player
+  // 1 - 0.35 × (share missing) instead of 0.65/0.70, so the in-match wear every side carries changes seeded outcomes.
+  // Same 200 inputs, projection and assertions. RNG call sites and implementation are unchanged; per-match draw
+  // counts may change with play.
+  const BASE_SHA256 = "ea5b06fd2b4bc44fcc5e49d375da92d0738b8ded6ae5feaa5afd21ed20a97ab8";
   const liveTiming = eng.buildTiming(8000, 1);
   type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
   // Issue #73 transport projection: cosmetic rows (`cos: 1`) are dropped and the real rows' integer transport `seq` is
