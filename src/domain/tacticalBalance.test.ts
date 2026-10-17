@@ -64,10 +64,11 @@ const authored = (i: number) => {
 
 describe("balanced v balanced manual matches are unchanged by #133", () => {
   // Captured from the pre-#133 engine (base 88b0b64); a later balance change must update these knowingly.
+  // Seed 13 refreshed from main ed72f0c (pre-#133 engine after #145/#146 fitness/overclock changes).
   const GOLDEN = [
     { seed: 11, h: 0, a: 15, rc: 2254, score: [2, 1], events: 409, hash: "e5d2e3853031bd1f779251c5f3a020401d1fab057dd59c1ec061be5e41c6a4be" },
     { seed: 12, h: 5, a: 6, rc: 2068, score: [2, 0], events: 367, hash: "283e19375049323e703ae1b7b51de620be4ae70832b8b3bf2f19619fe6c95b61" },
-    { seed: 13, h: 9, a: 2, rc: 2082, score: [0, 1], events: 365, hash: "a5674d4d455fdaa1c78c1ac49d173de6d588fa7ab5b7e30a11aef97bd43774b6" },
+    { seed: 13, h: 9, a: 2, rc: 2096, score: [0, 2], events: 367, hash: "449ba750e54bfcef17b7c62e56676f1ad0aa374c0b36ccee7e78183b797dcc1a" },
   ];
 
   it.each(GOLDEN)("seed $seed reproduces the identical event stream, score and RNG count", (g) => {
