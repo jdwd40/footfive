@@ -16,7 +16,7 @@ Login worked, but the UI never surfaced admin:
 4. **No `RequireAdmin` guard** with explicit forbidden/loading/retry states — blank risk if overview failed hard.
 5. Auth role was available from API; the bug was **routing + navigation UX**, not missing role on the account.
 
-Account `admin@admin.com` already existed with `role=admin`. Password re-asserted for verification with `must_change_password=true` (env-only).
+Account `<admin-email>` already existed with `role=admin`. Password re-asserted for verification with `must_change_password=true` (env-only).
 
 ---
 
@@ -72,7 +72,7 @@ MET MC1 MC2 AIR VIR PHL MBY GRN TRI ATL RED SWR STM ORL OUT DOG
 
 ## Remaining limitations
 
-- `admin@admin.com` currently has `must_change_password=true` after verification reset — first login must change password, then lands on `/admin`.
+- `<admin-email>` currently has `must_change_password=true` after verification reset — first login must change password, then lands on `/admin`.
 - Audit log create from CLI may still skip (non-blocking).
 
 ## Unresolved bugs

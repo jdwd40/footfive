@@ -8,7 +8,7 @@
 
 ## Deployment status
 
-**SUCCESS** — FootFive release candidate is live on the existing VPS (`dwarf-vps` / `my-vps`), isolated from other apps (including math-sprint PocketBase on `:8090`).
+**SUCCESS** — FootFive release candidate is live on the existing VPS (`<vps-host>`), isolated from other apps (including math-sprint PocketBase on `:8090`).
 
 This was a **greenfield FootFive install** (no prior FootFive `pb_data` on the VPS). Existing VPS services and data were left intact.
 

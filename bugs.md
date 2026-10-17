@@ -39,7 +39,7 @@ No blocker in the latest bounded pitch/ends QA; final review and human preview f
 ## Fixed in Phase 11
 
 - Live commentary too fast — server turbo (~200ms/min) + short frontend holds.
-- Admin login for `admin@admin.com` failed — account missing under that email; repaired.
+- Admin login for the app admin account failed — account missing under that email; repaired.
 
 ## Design rules (not bugs)
 

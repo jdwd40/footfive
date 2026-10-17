@@ -90,7 +90,7 @@
 - Kickoff speed snapshots on fixtures/match_states; live matches keep snapshot.
 - Admin control for match speed; applies to unstarted matches only.
 - Live event holds slowed (readable minor/medium/major/goal pacing); catch-up no longer default.
-- Repaired app admin `admin@admin.com` (must_change_password); password via env only.
+- Repaired app admin the app admin account (must_change_password); password via env only.
 - Details: `prompt outputs/prompt11_output.md`.
 
 ---
@@ -110,7 +110,7 @@
 
 ## 2026-07-25 — Phase 8: production deployment
 
-- First production install on VPS `my-vps` (host `dwarf-vps`).
+- First production install on the production VPS.
 - URLs: https://jdwd40.com/footfive/ (SPA), https://jdwd40.com/footfive-pb/ (PB 0.28.4 on 127.0.0.1:8091).
 - systemd `footfive-pocketbase`; nginx snippet; backups under `/var/backups/footfive/`.
 - Isolated from math-sprint PB on :8090. Shared world tournament #1 R16 verified.

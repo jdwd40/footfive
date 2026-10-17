@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # One-time: create VPS deploy key material + set GitHub Actions secrets.
-# Requires: gh auth login (repo + secrets scopes), ssh to dwarf-vps.
+# Requires: gh auth login (repo + secrets scopes), an SSH alias for the VPS.
+# Required env: VPS_HOST, VPS_PORT, VPS_USER, VPS_ALIAS (no defaults are committed).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="${GITHUB_REPO:-jdwd40/footfive}"
 KEY_DIR="${KEY_DIR:-$HOME/.ssh}"
 KEY_PATH="${KEY_PATH:-$KEY_DIR/footfive_gha_deploy}"
-VPS_HOST="${VPS_HOST:-213.165.91.221}"
-VPS_PORT="${VPS_PORT:-4020}"
-VPS_USER="${VPS_USER:-jd}"
-VPS_ALIAS="${VPS_ALIAS:-dwarf-vps}"
+VPS_HOST="${VPS_HOST:?Set VPS_HOST (VPS IP or hostname)}"
+VPS_PORT="${VPS_PORT:?Set VPS_PORT (VPS SSH port)}"
+VPS_USER="${VPS_USER:?Set VPS_USER (deploy user on the VPS)}"
+VPS_ALIAS="${VPS_ALIAS:?Set VPS_ALIAS (your ~/.ssh/config alias for the VPS)}"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh CLI required (https://cli.github.com/)"

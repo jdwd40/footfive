@@ -55,7 +55,7 @@ describe("post-login admin routing", () => {
   it("sends must_change to change-password", () => {
     const u: AuthUser = {
       id: "1",
-      email: "admin@admin.com",
+      email: "admin@example.com",
       role: "admin",
       must_change_password: true,
     };
@@ -65,7 +65,7 @@ describe("post-login admin routing", () => {
   it("sends admin to /admin when password ok", () => {
     const u: AuthUser = {
       id: "1",
-      email: "admin@admin.com",
+      email: "admin@example.com",
       role: "admin",
       must_change_password: false,
     };

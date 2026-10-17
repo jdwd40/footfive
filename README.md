@@ -63,6 +63,7 @@ Trusted server promote:
 export FOOTFIVE_PB_URL=http://127.0.0.1:8091
 export FOOTFIVE_SUPERUSER_EMAIL=...
 export FOOTFIVE_SUPERUSER_PASSWORD=...
+export FOOTFIVE_ADMIN_EMAIL=...   # operator admin email (required for --username admin)
 export FOOTFIVE_ADMIN_PASSWORD=...   # never commit
 node scripts/footfive-admin.mjs ensure-admin --username admin --confirm
 ```
