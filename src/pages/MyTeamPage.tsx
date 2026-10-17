@@ -369,6 +369,9 @@ function PlayerRow({
     const energy = s.players.find((x) => x.id === p.id)?.energy;
     return `Battery used on ${p.name}${restore ? ` (up to +${restore})` : ""}${energy != null ? ` — energy now ${energy}%` : ""}.`;
   };
+  // Why the battery button is off, shown under it; lasting reasons first so a moment of busy doesn't flicker over them.
+  const batteryOff = p.energy >= 100 ? "Energy is full — no battery needed." : batteries < 1 ? "No batteries in stock — buy one in the Garage." : busy ? "Wait for the current action to finish." : null;
+  const batteryOffId = `battery-reason-${p.id}`;
   return (
     <li className={`rounded-xl border p-3 ${starter ? "border-cyan/40 bg-cyan/5" : "border-line"}`}>
       <div className="flex items-center gap-2">
@@ -425,13 +428,24 @@ function PlayerRow({
             <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy} onClick={() => run(() => footfiveApi.upgradePlayer(p.id, "defence"), `${p.name} defence upgraded.`)}>
               DEF +1 ({credits(p.upgrade_cost.defence)})
             </button>
-            <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy || p.energy >= 100 || batteries < 1} onClick={() => run(() => footfiveApi.useBattery(p.id), batteryUsed)}>
+            <button
+              type="button"
+              className="btn-ghost !min-h-9 !px-1 text-[11px]"
+              disabled={batteryOff !== null}
+              aria-describedby={batteryOff ? batteryOffId : undefined}
+              onClick={() => run(() => footfiveApi.useBattery(p.id), batteryUsed)}
+            >
               {restore ? `Battery (up to +${restore})` : "Use battery"}
             </button>
             <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy || need <= 0} onClick={() => run(() => footfiveApi.repairPlayer(p.id, need), `${p.name} repaired +${need}.`)}>
               Repair +{Math.max(need, 0)}
             </button>
           </div>
+          {batteryOff ? (
+            <p id={batteryOffId} className="text-xs text-muted" data-testid="battery-reason">
+              {batteryOff}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </li>

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -208,5 +208,104 @@ describe("My Team battery copy follows the server's restore amount and inventory
     expect(await screen.findByTestId("team-msg")).toHaveTextContent("Battery used on Player O1 — energy now 60%.");
     for (const el of [garage, li, screen.getByTestId("team-msg")]) expect(el.textContent).not.toMatch(/undefined|NaN|null|up to|\+\d+\)|full/i);
     expect(within(li).getByRole("button", { name: "Use battery" })).toBeDisabled(); // inventory now 0
+  });
+});
+
+describe("My Team battery availability reason", () => {
+  const FIVE = ["g1", "o1", "o2", "o3", "o4"];
+  const NO_INVENTORY = "No batteries in stock — buy one in the Garage.";
+  const FULL = "Energy is full — no battery needed.";
+  const BUSY = "Wait for the current action to finish.";
+  const openRow = async (id: string) => {
+    const li = screen.getByText(`Player ${id.toUpperCase()}`).closest("li")!;
+    await userEvent.click(within(li).getByRole("button", { name: new RegExp(`Player ${id.toUpperCase()}`) }));
+    return li;
+  };
+  const batteryButton = (li: HTMLElement) => within(li).getByRole("button", { name: "Battery (up to +40)" });
+  /** The visible node the button names with aria-describedby. Not a layout or class check. */
+  function disableReason(button: HTMLElement) {
+    const id = button.getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    const reason = document.getElementById(id!);
+    expect(reason).toBeVisible();
+    expect(reason).toHaveAttribute("data-testid", "battery-reason");
+    return reason!;
+  }
+
+  it("enables Use battery when the team owns one and the player is at 50% energy", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 50 }, batteries: 1 }), squad(FIVE, { energy: { o1: 50 }, batteries: 1 }));
+    const button = batteryButton(await openRow("o1"));
+
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(footfiveApi.useBattery).not.toHaveBeenCalled();
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the last battery, reloads a still-tired player, then disables with the no-inventory reason", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 50 }, batteries: 1 }), squad(FIVE, { energy: { o1: 90 }, batteries: 0 }));
+    const li = await openRow("o1");
+
+    await userEvent.click(batteryButton(li));
+
+    expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.useBattery).toHaveBeenCalledWith("o1");
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(2);
+    expect(footfiveApi.world).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Battery used on Player O1 (up to +40) — energy now 90%.");
+    expect(within(li).getByText(/^Energy 90% · condition 100%/)).toBeInTheDocument();
+    expect(screen.getByText(/Batteries/)).toHaveTextContent("Batteries 0");
+    const button = batteryButton(li);
+    expect(button).toBeDisabled();
+    expect(disableReason(button)).toHaveTextContent(NO_INVENTORY);
+    await userEvent.click(button);
+    expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables a full player who owns one battery and associates the full reason", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 100 }, batteries: 1 }), squad(FIVE, { energy: { o1: 100 }, batteries: 1 }));
+    const button = batteryButton(await openRow("o1"));
+
+    expect(button).toBeDisabled();
+    expect(disableReason(button)).toHaveTextContent(FULL);
+    await userEvent.click(button);
+    expect(footfiveApi.useBattery).not.toHaveBeenCalled();
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables a tired player with an empty inventory and shows that reason", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 50 }, batteries: 0 }), squad(FIVE, { energy: { o1: 50 }, batteries: 0 }));
+    const button = batteryButton(await openRow("o1"));
+
+    expect(button).toBeDisabled();
+    expect(disableReason(button)).toHaveTextContent(NO_INVENTORY);
+    expect(disableReason(button)).not.toHaveTextContent(FULL);
+    await userEvent.click(button);
+    expect(footfiveApi.useBattery).not.toHaveBeenCalled();
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables Use battery while the action is in flight, then enables it again", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 50 }, batteries: 2 }), squad(FIVE, { energy: { o1: 90 }, batteries: 1 }));
+    let release!: (value: { ok: boolean }) => void;
+    vi.mocked(footfiveApi.useBattery).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    const li = await openRow("o1");
+    const button = batteryButton(li);
+    const clicked = userEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(disableReason(button)).toHaveTextContent(BUSY);
+    expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(1);
+    release({ ok: true });
+    await clicked;
+
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Battery used on Player O1 (up to +40) — energy now 90%.");
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(2);
+    expect(footfiveApi.world).toHaveBeenCalledTimes(1);
   });
 });
