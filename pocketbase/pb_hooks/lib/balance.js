@@ -167,7 +167,7 @@ var BALANCE = {
   conditionOnRed: 8,
 
   // Overclock
-  overclockBonus: 1.06, // +6% effective atk/def for one fixture
+  overclockBonus: 1.12, // +12% effective atk/def for one fixture; the starters still pay the energy cost
   overclockEnergyCost: 8, // each starter loses this energy when applied
 
   // Command Charge
