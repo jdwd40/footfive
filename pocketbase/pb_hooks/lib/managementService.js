@@ -310,6 +310,7 @@ function getSquad($app, userId) {
     managementOpen: true,
     effectNote: effectNote($app, team.id),
     batteryCost: BALANCE.batteryCost,
+    batteryRestore: BALANCE.batteryRestore,
     repairCostPerPoint: BALANCE.repairCostPerPoint,
     aiRules: AI_RULES,
   };
@@ -358,7 +359,8 @@ function aiLineup(players) {
     };
   });
   function fit(p) {
-    return ((p.attack + p.defence) / 2) * (0.35 + 0.65 * (p.energy / 100)) * (0.3 + 0.7 * (p.condition / 100));
+    var f = BALANCE.fitness;
+    return ((p.attack + p.defence) / 2) * effMod.fitnessFactor(p.energy, f.energyImpact) * effMod.fitnessFactor(p.condition, f.conditionImpact);
   }
   var gks = list.filter(function (p) {
     return p.role === "gk";

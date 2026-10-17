@@ -465,6 +465,116 @@ async function main() {
     assert.equal(fullTargetState(), before);
   });
 
+  // Issue 135: real partial battery (+40, cap 100). Not a full restore.
+  const useBattery = (playerId, actor = user) => request(`/api/footfive/players/${playerId}/battery`, actor.token, {});
+  function batterySurroundings(playerId) {
+    return {
+      treasury: query("SELECT treasury FROM proball_teams WHERE id = ?", team.id)[0].treasury,
+      charge: query("SELECT * FROM command_charge ORDER BY id"),
+      others: query("SELECT * FROM proball_players WHERE id != ? ORDER BY id", playerId),
+      matches: query("SELECT * FROM match_states ORDER BY id"),
+    };
+  }
+  function assertOneBattery(playerId, before, remaining) {
+    assert.equal(query("SELECT treasury FROM proball_teams WHERE id = ?", team.id)[0].treasury, before.treasury);
+    assert.deepEqual(query("SELECT * FROM command_charge ORDER BY id"), before.charge);
+    assert.deepEqual(query("SELECT * FROM proball_players WHERE id != ? ORDER BY id", playerId), before.others);
+    assert.deepEqual(query("SELECT * FROM match_states ORDER BY id"), before.matches);
+    assert.equal(query("SELECT battery_count FROM proball_teams WHERE id = ?", team.id)[0].battery_count, remaining);
+  }
+
+  await test("battery raises stored 20 energy to 60, consumes one, and refreshes only that stamp", async () => {
+    await configure([
+      ["UPDATE proball_players SET energy = 20 WHERE id = ?", [players[0].id]],
+      ["UPDATE proball_teams SET battery_count = 2 WHERE id = ?", [team.id]],
+    ]);
+    const beforeStamp = query("SELECT energy_updated_at FROM proball_players WHERE id = ?", players[0].id)[0].energy_updated_at;
+    const before = batterySurroundings(players[0].id);
+    const started = Date.now();
+    const response = await useBattery(players[0].id);
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(response.data.ok, true);
+    const player = query("SELECT energy, energy_updated_at FROM proball_players WHERE id = ?", players[0].id)[0];
+    assert.equal(player.energy, 60);
+    assertOneBattery(players[0].id, before, 1);
+    const refreshed = Date.parse(String(player.energy_updated_at).replace(" ", "T"));
+    assert.notEqual(player.energy_updated_at, beforeStamp);
+    assert(refreshed >= started - 2000 && refreshed <= Date.now() + 2000, player.energy_updated_at);
+  });
+
+  await test("battery caps stored 90 energy at 100 and consumes one", async () => {
+    await configure([
+      ["UPDATE proball_players SET energy = 90 WHERE id = ?", [players[0].id]],
+      ["UPDATE proball_teams SET battery_count = 2 WHERE id = ?", [team.id]],
+    ]);
+    const before = batterySurroundings(players[0].id);
+    const response = await useBattery(players[0].id);
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(query("SELECT energy FROM proball_players WHERE id = ?", players[0].id)[0].energy, 100);
+    assertOneBattery(players[0].id, before, 1);
+  });
+
+  await test("battery rejects stored full energy with no writes", async () => {
+    await configure([
+      ["UPDATE proball_players SET energy = 100 WHERE id = ?", [players[0].id]],
+      ["UPDATE proball_teams SET battery_count = 2 WHERE id = ?", [team.id]],
+    ]);
+    const before = fullTargetState();
+    const response = await useBattery(players[0].id);
+    alreadyFull(response, "energy");
+    assert.equal(fullTargetState(), before);
+  });
+
+  await test("battery rejects energy regenerated to full and rolls back the old stamp", async () => {
+    const oldStamp = new Date(Date.now() - 86400_000).toISOString();
+    await configure([
+      ["UPDATE proball_players SET energy = 99, energy_updated_at = ? WHERE id = ?", [oldStamp, players[0].id]],
+      ["UPDATE proball_teams SET battery_count = 2 WHERE id = ?", [team.id]],
+    ]);
+    const stored = query("SELECT energy, energy_updated_at FROM proball_players WHERE id = ?", players[0].id)[0];
+    assert.equal(stored.energy, 99);
+    assert.equal(stored.energy_updated_at, oldStamp);
+    const before = fullTargetState();
+    alreadyFull(await useBattery(players[0].id), "energy");
+    assert.equal(fullTargetState(), before);
+  });
+
+  await test("battery with no inventory rejects and leaves every application row unchanged", async () => {
+    await configure([
+      ["UPDATE proball_players SET energy = 20 WHERE id = ?", [players[0].id]],
+      ["UPDATE proball_teams SET battery_count = 0 WHERE id = ?", [team.id]],
+    ]);
+    const before = fullTargetState();
+    const response = await useBattery(players[0].id);
+    rejected(response);
+    assert.match(response.data.message, /no batteries/i);
+    assert.equal(fullTargetState(), before);
+  });
+
+  await test("battery on a foreign player rejects and leaves every application row unchanged", async () => {
+    await configure([["UPDATE proball_teams SET battery_count = 2 WHERE id = ?", [team.id]]]);
+    const before = fullTargetState();
+    const response = await useBattery(foreignPlayer.id);
+    rejected(response);
+    assert.match(response.data.message, /not your player/i);
+    assert.equal(fullTargetState(), before);
+  });
+
+  await test("battery team-inventory save fault rolls back the written restore", async () => {
+    await configure([
+      ["UPDATE proball_players SET energy = 20 WHERE id = ?", [players[0].id]],
+      ["UPDATE proball_teams SET battery_count = 2 WHERE id = ?", [team.id]],
+    ]);
+    const before = fullTargetState();
+    arm({ id: "battery-team", collection: "proball_teams", op: "update", record: team.id });
+    const response = await useBattery(players[0].id);
+    rejected(response);
+    const deadline = Date.now() + 1000;
+    while (!fs.readFileSync(LOG, "utf8").includes("ff18-injected:battery-team") && Date.now() < deadline) await sleep(10);
+    assert(fs.readFileSync(LOG, "utf8").includes("ff18-injected:battery-team"), "requested fault did not run");
+    assert.equal(fullTargetState(), before);
+  });
+
 }
 
 try { await main(); }

@@ -6,7 +6,7 @@ import { footfiveApi, type WorldSnapshot } from "../lib/pocketbase";
 import MyTeamPage from "./MyTeamPage";
 
 vi.mock("../lib/pocketbase", () => ({
-  footfiveApi: { world: vi.fn(), myTeam: vi.fn(), commandCharge: vi.fn(), teamFinances: vi.fn(), saveMyLineup: vi.fn() },
+  footfiveApi: { world: vi.fn(), myTeam: vi.fn(), commandCharge: vi.fn(), teamFinances: vi.fn(), saveMyLineup: vi.fn(), useBattery: vi.fn() },
 }));
 vi.mock("../components/Layout", () => ({ default: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 
@@ -16,11 +16,12 @@ const team = { id: "t1", name: "Neon United", abbreviation: "NEO", grade: "B", p
 // Roster order: two goalkeepers (g1, g2) and five outfield players.
 const ROSTER = [["g1", "gk"], ["o1", "fwd"], ["o2", "mid"], ["o3", "def"], ["o4", "mid"], ["g2", "gk"], ["o5", "fwd"]] as const;
 
-function squad(starters: string[]): Squad {
+/** The /my-team payload; `restore: null` is an older server without `batteryRestore`. */
+function squad(starters: string[], { energy = {} as Record<string, number>, batteries = 0, restore = 40 as number | null } = {}): Squad {
   return {
-    team: { ...team, treasury: 500, battery_count: 0, default_stance: "balanced" },
+    team: { ...team, treasury: 500, battery_count: batteries, default_stance: "balanced" },
     players: ROSTER.map(([id, role], i) => ({
-      id, name: `Player ${id.toUpperCase()}`, role, attack: 50, defence: 50, energy: 100, condition: 100, intensity: "balanced",
+      id, name: `Player ${id.toUpperCase()}`, role, attack: 50, defence: 50, energy: energy[id] ?? 100, condition: 100, intensity: "balanced",
       is_starter: starters.includes(id), effective_attack: 50, effective_defence: 50, sort_order: i, upgrade_cost: { attack: 10, defence: 10 },
     })),
     averages: { energy: 100, condition: 100 },
@@ -28,16 +29,23 @@ function squad(starters: string[]): Squad {
     effectNote: "Changes apply from your next kick-off",
     aiRules: [],
     batteryCost: 50,
+    ...(restore === null ? {} : { batteryRestore: restore }),
     repairCostPerPoint: 2,
   };
 }
 
 async function mount(saved: string[], afterSave = saved) {
+  await mountSquads(squad(saved), squad(afterSave));
+}
+
+/** First /my-team load, then what every reload after an action returns. */
+async function mountSquads(first: Squad, reloaded: Squad) {
   vi.mocked(footfiveApi.world).mockResolvedValue({ managedTeam: team, nextFixture: null } as unknown as WorldSnapshot);
-  vi.mocked(footfiveApi.myTeam).mockResolvedValueOnce(squad(saved)).mockResolvedValue(squad(afterSave));
+  vi.mocked(footfiveApi.myTeam).mockResolvedValueOnce(first).mockResolvedValue(reloaded);
   vi.mocked(footfiveApi.commandCharge).mockResolvedValue({ points: 0, max: 5, nextPointInMs: 0 });
   vi.mocked(footfiveApi.teamFinances).mockResolvedValue({ treasury: 500, entries: [] });
   vi.mocked(footfiveApi.saveMyLineup).mockResolvedValue({ ok: true });
+  vi.mocked(footfiveApi.useBattery).mockResolvedValue({ ok: true });
   render(<MemoryRouter><MyTeamPage /></MemoryRouter>);
   await screen.findByText("Player G1");
 }
@@ -129,5 +137,76 @@ describe("My Team line-up starts exactly one goalkeeper", () => {
     expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
     expect(screen.getByTestId("lineup-gk-warning")).toHaveTextContent("Your saved line-up has 2 goalkeepers");
     expect(footfiveApi.myTeam).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("My Team battery copy follows the server's restore amount and inventory", () => {
+  const FIVE = ["g1", "o1", "o2", "o3", "o4"];
+  /** Expand a player's row, as a manager taps their name. */
+  const openRow = async (id: string) => {
+    const li = screen.getByText(`Player ${id.toUpperCase()}`).closest("li")!;
+    await userEvent.click(within(li).getByRole("button", { name: new RegExp(`Player ${id.toUpperCase()}`) }));
+    return li;
+  };
+
+  it.each([
+    ["the live 40", 40, 60],
+    ["any other configured amount", 25, 45],
+  ])("partial: a battery on a 20%%-energy player uses %s and reports the reloaded energy", async (_name, restore, after) => {
+    await mountSquads(squad(FIVE, { energy: { o1: 20 }, batteries: 2, restore }), squad(FIVE, { energy: { o1: after }, batteries: 1, restore }));
+    expect(screen.getByTestId("battery-note")).toHaveTextContent(`Each battery adds up to ${restore} energy to one player, capped at 100%.`);
+    const li = await openRow("o1");
+    expect(within(li).getByTestId("effective-hint")).toHaveTextContent("Effective ATK/DEF is the base stat adjusted for role, intensity, energy and condition");
+    expect(within(li).getByRole("button", { name: "ATK +1 (10)" })).toBeEnabled();
+
+    await userEvent.click(within(li).getByRole("button", { name: `Battery (up to +${restore})` }));
+
+    expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.useBattery).toHaveBeenCalledWith("o1");
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent(`Battery used on Player O1 (up to +${restore}) — energy now ${after}%.`);
+    expect(within(li).getByText(new RegExp(`^Energy ${after}% · condition 100%`))).toBeInTheDocument();
+    expect(screen.getByText(/Batteries/)).toHaveTextContent("Batteries 1");
+    expect(footfiveApi.myTeam).toHaveBeenCalledTimes(2);
+  });
+
+  it("cap: a battery on a 90%-energy player reports the server's 100%, then disables for the full player", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 90 }, batteries: 2 }), squad(FIVE, { energy: { o1: 100 }, batteries: 1 }));
+    const li = await openRow("o1");
+
+    await userEvent.click(within(li).getByRole("button", { name: "Battery (up to +40)" }));
+
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Battery used on Player O1 (up to +40) — energy now 100%.");
+    expect(within(li).getByText(/^Energy 100% · condition 100%/)).toBeInTheDocument();
+    expect(within(li).getByRole("button", { name: "Battery (up to +40)" })).toBeDisabled();
+  });
+
+  it.each([
+    ["is disabled with an empty inventory", 0, 50, false],
+    ["is disabled for a full player", 3, 100, false],
+    ["stays enabled for a tired player with batteries in stock", 3, 50, true],
+  ])("Use battery %s", async (_name, batteries, energy, enabled) => {
+    await mountSquads(squad(FIVE, { energy: { o1: energy }, batteries }), squad(FIVE, { energy: { o1: energy }, batteries }));
+    const li = await openRow("o1");
+    const button = within(li).getByRole("button", { name: "Battery (up to +40)" });
+
+    if (enabled) expect(button).toBeEnabled();
+    else {
+      expect(button).toBeDisabled();
+      await userEvent.click(button);
+      expect(footfiveApi.useBattery).not.toHaveBeenCalled();
+    }
+  });
+
+  it("older server without batteryRestore: generic partial copy with no number, then the reloaded energy", async () => {
+    await mountSquads(squad(FIVE, { energy: { o1: 20 }, batteries: 1, restore: null }), squad(FIVE, { energy: { o1: 60 }, batteries: 0, restore: null }));
+    const garage = screen.getByTestId("battery-note").closest("section")!;
+    expect(screen.getByTestId("battery-note")).toHaveTextContent("Each battery adds some energy to one player, capped at 100%.");
+    const li = await openRow("o1");
+
+    await userEvent.click(within(li).getByRole("button", { name: "Use battery" }));
+
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Battery used on Player O1 — energy now 60%.");
+    for (const el of [garage, li, screen.getByTestId("team-msg")]) expect(el.textContent).not.toMatch(/undefined|NaN|null|up to|\+\d+\)|full/i);
+    expect(within(li).getByRole("button", { name: "Use battery" })).toBeDisabled(); // inventory now 0
   });
 });
