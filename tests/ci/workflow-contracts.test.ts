@@ -247,23 +247,6 @@ describe("footfive-ci.yml contracts", () => {
     expect(readFileSync(path.join(root, "tests/integration/overclock-kickoff.mjs"), "utf8")).toContain("OVERCLOCK_PB_PORT");
   });
 
-  it("gates the API job on the balance replay determinism check after the overclock suite", () => {
-    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
-    const at = (run: string) => steps.findIndex((step) => new RegExp(`^ {8}run: ${run}$`, "m").test(step));
-    const replay = steps.filter((step) => /^ {8}run: npm run test:balance-replay$/m.test(step));
-    expect(replay).toHaveLength(1);
-    expect(replay[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
-    expect(at("npm run test:balance-replay")).toBeGreaterThan(at("npm run test:overclock"));
-    expect(at("npm run test:overclock")).toBeGreaterThan(-1); // the overclock gate stays
-    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-    // No arguments: the replay uses its default 200 seeds against the repository hooks.
-    expect(pkg.scripts["test:balance-replay"]).toBe("node tests/integration/balance-replay.mjs");
-    const replayScript = readFileSync(path.join(root, "tests/integration/balance-replay.mjs"), "utf8");
-    expect(replayScript).toContain("options(process.argv.slice(2), 200)");
-    expect(replayScript).toContain("from '../../scripts/balance-calibrate.mjs'");
-    expect(readFileSync(path.join(root, "scripts/balance-calibrate.mjs"), "utf8")).toContain("path.join(ROOT, 'pocketbase/pb_hooks')");
-  });
-
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

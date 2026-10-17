@@ -22,7 +22,6 @@ try {
 }
 var BALANCE = balMod.BALANCE;
 var M = BALANCE.match;
-var coachingMod = balMod.coachingMod;
 var effectiveTeamStrength = effMod.effectiveTeamStrength;
 
 var PERIOD_END = { first_half: 45, second_half: 90, extra_time_1: 105, extra_time_2: 120 };
@@ -170,24 +169,16 @@ function strength(st, side) {
   var list = active(st, side);
   var eff = effectiveTeamStrength(list, {
     grade: t.grade,
+    coachingStance: t.stance,
     overclock: t.oc,
   });
   var numbers = Math.pow(Math.max(list.length, 1) / 5, 0.8);
   return { atk: eff.attack * numbers, def: eff.defence * numbers };
 }
 
-/**
- * Match tempo from both stances: Attack opens up chances at both ends, Defend closes them
- * down at both ends, and opposite stances cancel. It moves both sides' edge equally, so a
- * stance trades risk for reward instead of adding strength.
- */
-function tempo(st) {
-  return coachingMod(st.teams.home.stance).tempo + coachingMod(st.teams.away.stance).tempo;
-}
-
-/** Attacking edge of `side` (about 0 for evenly matched teams at a balanced tempo). */
+/** Attacking edge of `side` (about 0 for evenly matched teams). */
 function edge(st, side) {
-  return strength(st, side).atk - strength(st, OTHER[side]).def + M.edgeOffset + tempo(st);
+  return strength(st, side).atk - strength(st, OTHER[side]).def + M.edgeOffset;
 }
 
 function keeper(st, side) {
@@ -425,7 +416,8 @@ function playMinute(st, out) {
   st.counter = null;
   st.possMin[side === "home" ? 0 : 1] += 1;
 
-  var foulMul = (coachingMod(st.teams.home.stance).foul + coachingMod(st.teams.away.stance).foul) / 2;
+  var cm = BALANCE.coaching;
+  var foulMul = ((cm[st.teams.home.stance] || cm.balanced).foul + (cm[st.teams.away.stance] || cm.balanced).foul) / 2;
   if (rnd(st) < M.foulRate * foulMul) foulEvent(st, out, ctx, OTHER[side]);
 
   var c = chanceModel(st, side);

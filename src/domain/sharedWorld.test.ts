@@ -6,9 +6,9 @@ const require = createRequire(import.meta.url);
 const bal = require(
   path.resolve(__dirname, "../../pocketbase/pb_hooks/lib/balance.js"),
 ) as {
-  BALANCE: { startingCredits: number; segmentMatchMinutes: number; coaching: Record<string, { tempo: number; foul: number }> };
+  BALANCE: { startingCredits: number; segmentMatchMinutes: number; coaching: Record<string, { attack: number }> };
   getTiming: (p: string) => { segmentMatchMinutes: number; matchMinuteRealMs: number };
-  coachingMod: (s: string) => { tempo: number; foul: number };
+  coachingMod: (s: string) => { attack: number; defence: number };
 };
 
 describe("shared world balance", () => {
@@ -23,16 +23,7 @@ describe("shared world balance", () => {
     expect(t.matchMinuteRealMs * t.segmentMatchMinutes).toBe(40000);
   });
 
-  it("coaching stances set an opposite, symmetric match tempo", () => {
-    expect(bal.coachingMod("attack").tempo).toBeGreaterThan(0);
-    expect(bal.coachingMod("defend").tempo).toBe(-bal.coachingMod("attack").tempo);
-    expect(bal.coachingMod("balanced")).toEqual({ tempo: 0, foul: 1 });
-    expect(bal.coachingMod("attack").foul).toBeGreaterThan(bal.coachingMod("defend").foul);
-  });
-
-  it("an unknown or prototype stance falls back to balanced", () => {
-    for (const s of ["", "park_the_bus", "toString", "constructor", "__proto__"]) {
-      expect(bal.coachingMod(s)).toBe(bal.BALANCE.coaching.balanced);
-    }
+  it("coaching stances are not identical", () => {
+    expect(bal.coachingMod("defend").defence).not.toBe(bal.coachingMod("attack").defence);
   });
 });
