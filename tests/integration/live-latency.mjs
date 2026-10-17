@@ -6,11 +6,15 @@
  * pitch dwelt (and shuttled) between them. The cron now pumps the lease-guarded tick
  * ~1/s while a round is live. This test runs a real PocketBase at NORMAL pace
  * (FOOTFIVE_TIME_SCALE=1), lets the cron alone kick a round off — no /health, no admin
- * catch-up, no bets — then polls GET /match/:id about once a second for ~15 s and
- * asserts the newest published event is never more than LAG_LIMIT_MS behind server time.
- * Engine events come every ~1.6–3.3 s, so a perfectly published feed already shows up to
- * ~3.3 s of age between events; the limit adds the ~1 s pump interval. Unfixed, the age
- * climbs towards 60 s.
+ * catch-up, no bets — then polls GET /match/:id about once a second for ~15 s.
+ *
+ * It asserts that no event which was already due is withheld for more than LAG_LIMIT_MS
+ * (delivery lateness), and that the engine schedule is never more than LAG_LIMIT_MS
+ * overdue (no tick stall). It does NOT gate on "newest event age": the engine spaces
+ * open-play events up to ~7 s apart by design (9 s+ around goals), so that age exceeds
+ * 5 s on a perfectly timely server and made this check flaky. The age is still logged.
+ * See tests/integration/live-latency-metrics.mjs for the rationale. Unfixed (60 s cron
+ * batches), both lateness and overdue climb towards 60 s.
  *
  * Standalone:  node tests/integration/live-latency.mjs   (takes ~2 min: waits for a cron minute)
  * Env: LIVE_PB_PORT (default 8297), LIVE_LAG_LIMIT_MS (default 5000).
@@ -21,6 +25,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { analysePolls } from "./live-latency-metrics.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PB_BIN = path.join(ROOT, "pocketbase", "pocketbase");
@@ -28,7 +33,6 @@ const PORT = process.env.LIVE_PB_PORT || "8297";
 const URL = `http://127.0.0.1:${PORT}`;
 const LAG_LIMIT_MS = Number(process.env.LIVE_LAG_LIMIT_MS || 5000);
 const POLL_SECONDS = 15;
-const HARD_LIMIT_MS = 8000;
 
 let passed = 0;
 let failed = 0;
@@ -158,28 +162,45 @@ async function main() {
   // Let the match get going: kick-off scene plus a few events.
   await until("first events", async () => (await req(`/api/footfive/match/${fx.id}`, "GET", token)).data.events?.length >= 3, 20000);
 
-  const lags = [];
-  let polls = 0;
+  const polls = [];
+  let answered = 0;
   let grew = 0;
   let lastCount = 0;
   for (let i = 0; i < POLL_SECONDS; i++) {
     const r = await req(`/api/footfive/match/${fx.id}`, "GET", token);
     if (r.status === 200) {
-      polls++;
-      const evs = r.data.events || [];
-      const newest = evs.reduce((m, e) => Math.max(m, e.at || 0), 0);
-      if (r.data.fixture?.st?.ph !== "finished" && newest) lags.push(r.data.serverTimeMs - newest);
+      answered++;
+      // The engine's own schedule: when the next simulated step is due. Read straight
+      // after the poll, on the same host clock the server stamps events with.
+      const ms = one("SELECT next_segment_due_at AS due, finalised FROM match_states WHERE fixture = ?", [fx.id]);
+      const due = ms && ms.due ? Date.parse(String(ms.due).replace(" ", "T")) : NaN;
+      polls.push({
+        serverTimeMs: r.data.serverTimeMs,
+        events: r.data.events || [],
+        finished: r.data.fixture?.st?.ph === "finished",
+        overdueMs: ms && !ms.finalised && Number.isFinite(due) ? Date.now() - due : null,
+      });
       if (r.data.eventsPage?.nextSeq > lastCount) grew++;
       lastCount = r.data.eventsPage?.nextSeq ?? lastCount;
     }
     await sleep(1000);
   }
-  const max = Math.max(...lags);
-  console.log(`  lag per poll (ms): ${lags.join(", ")}`);
-  ok(`${POLL_SECONDS} polls answered`, polls === POLL_SECONDS, `polls=${polls}`);
-  const over = lags.filter((l) => l > LAG_LIMIT_MS).length;
-  // Allow one poll inside a long natural gap (goal celebration, card) but never a stale feed: unfixed, the age climbs ~1 s per poll.
-  ok(`newest event ≤ ${LAG_LIMIT_MS} ms behind server time (≤1 poll over, none over ${HARD_LIMIT_MS})`, lags.length >= POLL_SECONDS - 2 && over <= 1 && max <= HARD_LIMIT_MS, `max=${max} over=${over}`);
+  const m = analysePolls(polls, { limitMs: LAG_LIMIT_MS });
+  console.log(`  newest-event age per poll (ms, includes natural engine gaps; not gated): ${m.ages.join(", ")}`);
+  console.log(`  delivery lateness per new event (ms): ${m.late.map((x) => x.lateMs).join(", ")}`);
+  console.log(`  schedule overdue per poll (ms): ${m.overdue.join(", ")}`);
+  ok(`${POLL_SECONDS} polls answered`, answered === POLL_SECONDS, `polls=${answered}`);
+  ok(
+    `no due event withheld > ${LAG_LIMIT_MS} ms (${m.delivered} events delivered in window)`,
+    // ≥1 keeps it non-vacuous; cadence is gated by "events arrive steadily" below.
+    m.delivered >= 1 && m.deliveryOk,
+    `maxLate=${m.maxLate} delivered=${m.delivered}`,
+  );
+  ok(
+    `engine schedule never > ${LAG_LIMIT_MS} ms overdue (no tick stall)`,
+    m.overdue.length >= POLL_SECONDS - 2 && m.scheduleOk,
+    `maxOverdue=${m.maxOverdue} samples=${m.overdue.length}`,
+  );
   ok("events arrive steadily, not in one batch", grew >= Math.floor(POLL_SECONDS / 3), `polls with new events=${grew}`);
   const w = one("SELECT processing_status FROM world WHERE key = 'main'");
   ok("no stuck lease", w.processing_status !== "error", JSON.stringify(w));
