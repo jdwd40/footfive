@@ -223,10 +223,13 @@ async function ensureAdmin(username, confirm) {
   if (!password || password.length < 6) {
     throw new Error("Set FOOTFIVE_ADMIN_PASSWORD (min 6 chars) — never pass on CLI");
   }
-  // Prefer explicit email; default to admin@admin.com for operator bootstrap
-  const email =
-    process.env.FOOTFIVE_ADMIN_EMAIL ||
-    (uname === "admin" ? "admin@admin.com" : `${uname}@footfive.local`);
+  // The operator admin email is never committed: --username admin requires
+  // FOOTFIVE_ADMIN_EMAIL; other usernames default to <username>@footfive.local.
+  const envEmail = (process.env.FOOTFIVE_ADMIN_EMAIL || "").trim();
+  if (uname === "admin" && !envEmail) {
+    throw new Error("Set FOOTFIVE_ADMIN_EMAIL for --username admin (the admin email is not committed)");
+  }
+  const email = envEmail || `${uname}@footfive.local`;
   const token = await superuserToken();
 
   // Allow bootstrap passwords as short as 7 (PB default min is 8)
@@ -261,7 +264,7 @@ async function ensureAdmin(username, confirm) {
   }
 
   // If email missing but footfive.local admin exists, rebind email (idempotent repair)
-  if (!user && email === "admin@admin.com") {
+  if (!user && uname === "admin" && email !== "admin@footfive.local") {
     const legacy = await findUserByEmail(token, "admin@footfive.local");
     if (legacy) user = legacy;
   }

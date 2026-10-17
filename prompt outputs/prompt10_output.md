@@ -16,7 +16,7 @@
 | Round | r16 **live** (started 16:14:59Z) |
 | Fixtures | 7 live + 1 finished (later all stuck near sim_minute 95) |
 | Match states | `state_json` / `events_json` **null** for live rows |
-| Users | 1 (djohn944@gmail.com admin) |
+| Users | 1 (operator admin, email redacted) |
 | between_round_minutes | missing |
 
 ---
@@ -89,7 +89,7 @@
 | Login verified | `/api/footfive/auth/login` + admin overview 200 |
 | Password min | temporarily 7 on users.password for bootstrap |
 
-Existing operator `djohn944@gmail.com` remains admin.
+Existing operator account (email redacted) remains admin.
 
 CLI: `scripts/footfive-admin.mjs ensure-admin --username admin --confirm` with `FOOTFIVE_ADMIN_PASSWORD`.
 

@@ -46,16 +46,16 @@ Not primarily a poll-interval bug.
 
 | Item | Result |
 |---|---|
-| Before | No `admin@admin.com` (only `admin@footfive.local` / djohn) |
+| Before | No `<admin-email>` (only `admin@footfive.local` / legacy operator) |
 | Root cause of login fail | Account did not exist under that email |
-| After | Single user `admin@admin.com`, role `admin`, enabled |
+| After | Single user `<admin-email>`, role `admin`, enabled |
 | Password | Set via env on server only (not in git/logs/audit body) |
 | `must_change_password` | **true** |
 | Login verified | `auth-with-password` success |
 | Admin overview | **200** |
 | Unauth admin | **401** |
 
-Legacy `admin@footfive.local` record **rebound** to `admin@admin.com` (idempotent, no duplicate).
+Legacy `admin@footfive.local` record **rebound** to `<admin-email>` (idempotent, no duplicate).
 
 ---
 
@@ -63,7 +63,7 @@ Legacy `admin@footfive.local` record **rebound** to `admin@admin.com` (idempoten
 
 - Migration `1750000012_match_speed_snapshot.js`
 - Hooks: `balance.js`, `worldService.js`, `adminService.js`, `matchEngine.js`
-- CLI: `scripts/footfive-admin.mjs ensure-admin` defaults email to `admin@admin.com`
+- CLI: `scripts/footfive-admin.mjs ensure-admin` uses `FOOTFIVE_ADMIN_EMAIL` (required for `--username admin`)
 
 ---
 
@@ -85,7 +85,7 @@ Legacy `admin@footfive.local` record **rebound** to `admin@admin.com` (idempoten
 | Lint `src/` | 0 errors |
 | Production build | pass |
 | Dist secret scan | clean |
-| Prod login admin@admin.com | OK |
+| Prod login <admin-email> | OK |
 | Prod set speed 15 | OK |
 
 ---
@@ -120,4 +120,4 @@ None release-blocking for speed or admin login.
 
 ## Recommended next step
 
-Log in as `admin@admin.com`, complete password change, confirm admin match-speed panel and slower live commentary on the **next** scheduled round after current QF ends.
+Log in as `<admin-email>`, complete password change, confirm admin match-speed panel and slower live commentary on the **next** scheduled round after current QF ends.

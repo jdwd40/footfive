@@ -144,6 +144,9 @@ jobs:
   deploy:
     name: Deploy to VPS
     needs: [gate, test-and-build]
+    environment:
+      name: production
+      url: https://jdwd40.com/footfive/
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

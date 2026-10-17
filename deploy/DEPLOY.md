@@ -6,7 +6,7 @@ Do **not** upgrade PocketBase. Do **not** wipe `pb_data`.
 
 | Item | Value |
 |---|---|
-| Host | `dwarf-vps` / `my-vps` |
+| Host | `<vps-host>` (operator SSH alias; see repository secrets) |
 | SPA | https://jdwd40.com/footfive/ |
 | API | https://jdwd40.com/footfive-pb/ → `127.0.0.1:8091` |
 | App root | `/home/jd/footfive` |
@@ -53,6 +53,7 @@ Frontend `VITE_POCKETBASE_URL` at **build time** must be the public API origin (
 export FOOTFIVE_PB_URL=http://127.0.0.1:8091
 export FOOTFIVE_SUPERUSER_EMAIL=...
 export FOOTFIVE_SUPERUSER_PASSWORD=...
+export FOOTFIVE_ADMIN_EMAIL=...   # operator admin email (required for --username admin)
 export FOOTFIVE_ADMIN_PASSWORD=...   # stdin/env only; never commit
 node /home/jd/footfive/scripts/footfive-admin.mjs ensure-admin --username admin --confirm
 ```
@@ -78,7 +79,7 @@ Weak bootstrap passwords force `must_change_password=true`.
 ### App admin account
 
 ```bash
-export FOOTFIVE_ADMIN_EMAIL=admin@admin.com
+export FOOTFIVE_ADMIN_EMAIL=...   # operator-chosen admin email; required for --username admin
 export FOOTFIVE_ADMIN_PASSWORD=...   # never commit
 node scripts/footfive-admin.mjs ensure-admin --username admin --confirm
 ```
@@ -138,17 +139,17 @@ Workflow: `.github/workflows/deploy.yml` — runs only for a commit that **FootF
 
 | Secret | Example |
 |---|---|
-| `VPS_HOST` | `213.165.91.221` |
-| `VPS_PORT` | `4020` |
-| `VPS_USER` | `jd` |
+| `VPS_HOST` | `<vps-ip-or-hostname>` |
+| `VPS_PORT` | `<ssh-port>` |
+| `VPS_USER` | `<deploy-user>` |
 | `VPS_SSH_PRIVATE_KEY` | ed25519 private key (pubkey in VPS `authorized_keys`) |
-| `VPS_KNOWN_HOSTS` | Trusted host-key lines for `[213.165.91.221]:4020` (see below) |
+| `VPS_KNOWN_HOSTS` | Trusted host-key lines for `[<vps-host>]:<ssh-port>` (see below) |
 
 `VPS_KNOWN_HOSTS` pins the VPS host identity; the deploy workflow refuses to
 run without it and never falls back to runtime `ssh-keyscan`
 (trust-on-first-use). Provision it out-of-band by an operator who already
 trusts the host — e.g. from an existing verified SSH session or the VPS
-console, run `ssh-keyscan -p 4020 213.165.91.221` and cross-check the
+console, run `ssh-keyscan -p "$VPS_PORT" "$VPS_HOST"` and cross-check the
 fingerprints against `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on
 the VPS, then store the verified lines (hashed or plain, one per line) as the
 secret value. Never commit the value to the repo; rotate it if the VPS host
