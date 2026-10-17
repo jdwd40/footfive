@@ -119,10 +119,13 @@ var BALANCE = {
   shootoutSaveRate: 0.28,
   shootoutStandardRounds: 5,
 
+  // A stance sets the tempo of the whole match, not player stats: both teams' tempo is added
+  // to both sides' attacking edge (matchEngine). Attack opens up chances at both ends, Defend
+  // closes them down at both ends; foul scales the foul rate.
   coaching: {
-    defend: { attack: 0.82, defence: 1.18, foul: 0.9 },
-    balanced: { attack: 1.0, defence: 1.0, foul: 1.0 },
-    attack: { attack: 1.18, defence: 0.82, foul: 1.15 },
+    defend: { tempo: -22, foul: 0.9 },
+    balanced: { tempo: 0, foul: 1.0 },
+    attack: { tempo: 22, foul: 1.15 },
   },
 
   gradeStrength: {
@@ -138,10 +141,12 @@ var BALANCE = {
     "C-": 50,
   },
 
+  // Per-player intensity: aggressive presses harder now (more attack, same defence) but tires
+  // faster; passive gives up attack and some defence now to save energy and condition.
   intensity: {
-    passive: { attack: 0.85, defence: 1.05, energyUse: 0.55, condition: 0.6 },
+    passive: { attack: 0.8, defence: 0.95, energyUse: 0.55, condition: 0.6 },
     balanced: { attack: 1.0, defence: 1.0, energyUse: 1.0, condition: 1.0 },
-    aggressive: { attack: 1.15, defence: 0.9, energyUse: 1.4, condition: 1.35 },
+    aggressive: { attack: 1.25, defence: 1.0, energyUse: 1.4, condition: 1.35 },
   },
 
   roleWeights: {
@@ -253,8 +258,11 @@ function clampMatchMinuteSeconds(sec) {
   return n;
 }
 
+/** Stance settings; an unknown or missing stance plays as Balanced. */
 function coachingMod(stance) {
-  return BALANCE.coaching[stance] || BALANCE.coaching.balanced;
+  return Object.prototype.hasOwnProperty.call(BALANCE.coaching, stance)
+    ? BALANCE.coaching[stance]
+    : BALANCE.coaching.balanced;
 }
 
 function upgradeCost(currentAttr) {
