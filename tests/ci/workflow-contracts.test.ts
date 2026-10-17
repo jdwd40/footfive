@@ -381,3 +381,21 @@ describe("PocketBase downloads are checksum-verified", () => {
     expect(downloaders).toEqual(["scripts/fetch-pocketbase.sh"]);
   });
 });
+
+describe("public-readiness workflow guards", () => {
+  const fable = readFileSync(path.join(root, ".github/workflows/fable-review.yml"), "utf8");
+  it("deploy job runs in the production environment", () => {
+    const d = job(deploy, "deploy");
+    expect(d).toMatch(/\n {4}environment:\n {6}name: production\n {6}url: https:\/\/jdwd40\.com\/footfive\/\n/);
+  });
+  it("fable review only reacts to owner comments and never cancels from skipped runs", () => {
+    const head = fable.slice(0, fable.indexOf("\njobs:\n"));
+    expect(head).not.toMatch(/^concurrency:/m);
+    const verify = job(fable, "verify");
+    expect(code(verify)).toContain("github.event.comment.user.login == github.repository_owner");
+    expect(verify).toMatch(/\n {4}concurrency:\n {6}group: fable-review-/);
+    // Never checks out or executes PR head code with the write-capable token.
+    expect(verify).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(verify).not.toMatch(/github\.event\.pull_request\.head/);
+  });
+});
