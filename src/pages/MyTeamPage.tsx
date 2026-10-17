@@ -269,6 +269,9 @@ function Manage({ world }: { world: WorldSnapshot }) {
           <section className="panel p-4">
             <h2 className="panel-title">Kick-off tactics</h2>
             <p className="mt-1 text-xs text-muted">How your team starts each match in My settings. In a live match you can change it from the touchline (limited commands).</p>
+            <p className="mt-1 text-xs text-muted" data-testid="stance-hint">
+              Attack opens up chances at both ends — useful when chasing a game. Defend slows chances at both ends — useful protecting a lead. Balanced is neutral.
+            </p>
             <div className="mt-2 grid grid-cols-3 gap-1.5">
               {(["defend", "balanced", "attack"] as Stance[]).map((s) => (
                 <button
@@ -421,6 +424,9 @@ function PlayerRow({
               </button>
             ))}
           </div>
+          <p className="text-xs text-muted" data-testid="intensity-hint">
+            Aggressive presses harder now but wears energy and condition faster. Passive saves fitness but gives up some immediate performance.
+          </p>
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
             <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy} onClick={() => run(() => footfiveApi.upgradePlayer(p.id, "attack"), `${p.name} attack upgraded.`)}>
               ATK +1 ({credits(p.upgrade_cost.attack)})
