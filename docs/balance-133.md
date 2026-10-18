@@ -27,6 +27,16 @@ Energy drain and condition wear are unchanged: Aggressive buys immediate
 pressure with more wear; Passive saves fitness at an immediate performance cost.
 Overclock, fitness curves, purchase costs and timing are unchanged by #133.
 
+## Calibration status — 2026-10-18
+
+The numerical results recorded below and in the original #133 / PR #144
+experiments were measured before #134 (Overclock) and #135 (fitness and upgrade
+prices). They describe that earlier configuration. The combined effect of
+#133, #134 and #135 has not been re-checked with many-seed simulations; in
+particular, the earlier intensity and coaching effect sizes are not validated
+for the current combination. A fresh balance check on main is planned after
+PR #150 merges.
+
 ## Calibration method
 
 `scripts/balance-calibrate.mjs` uses explicit manual teams, both orientations
@@ -76,8 +86,9 @@ An additional 2,000-match authored-team AI calibration gave:
 AI teams already attack when tied in extra time, so the stronger tempo effect
 settles more of those matches before penalties. These AI fixtures are an
 additional distribution check, not a substitute for the manual experiments.
-Final fitness/intensity conclusions must be checked again when #135 changes
-the fitness economy. #134 and #135 also need to preserve the tactical trade-off.
+These are historical measurements from before #134 and #135, as noted above.
+Current combined fitness, intensity and Overclock effects still need the
+post-merge balance check.
 
 For repeatability/resume checks, run:
 
