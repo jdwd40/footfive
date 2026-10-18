@@ -8,7 +8,7 @@ import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
-import { countdown, eventTime, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
+import { countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
 import { startPolling } from "../lib/polling";
@@ -346,7 +346,7 @@ export default function MatchPage() {
           <section className="panel p-3">
             <div className="mb-2 flex items-baseline justify-between gap-2">
               <h2 className="panel-title">Match events</h2>
-              <span className="text-xs text-muted">Times are the match clock</span>
+              <span className="text-xs text-muted">Match minutes</span>
             </div>
             <EventFeed
               events={seen}
@@ -597,7 +597,7 @@ function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: Mat
         const big = e.t === "goal" || e.t === "penalty_goal" || e.t === "red_card" || e.t === "match_end" || e.t === "shootout_end";
         return (
           <li key={e.seq} className={`flex items-start gap-2 rounded px-1 py-0.5 ${big ? "bg-lime/10" : ""}`}>
-            <span className="w-11 shrink-0 tabular text-xs text-muted" data-testid="event-time">{eventTime(e)}</span>
+            <span className="w-11 shrink-0 tabular text-xs text-muted" data-testid="event-time" title={eventClockTime(e) || undefined}>{eventTime(e)}</span>
             {side ? <Abbr team={side} away={e.side === "away"} /> : <span className="w-[2.6rem] shrink-0" />}
             <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>{e.text}</span>
             {REPLAYABLE.has(e.t) ? (
@@ -626,7 +626,7 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
     setMsg("");
     try {
       const r = await footfiveApi.coaching(view.fixture.id, s);
-      setMsg(`${s[0].toUpperCase() + s.slice(1)} from minute ${r.fromMinute}.`);
+      setMsg(`${s[0].toUpperCase() + s.slice(1)} from ${minuteLabel(r.fromMinute)}.`);
       onDone();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Command failed");

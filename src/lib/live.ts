@@ -141,11 +141,21 @@ export function clockText(sec: number | null) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-/** The event's time on the same mm:ss clock the pitch shows (its published clock), so the two read alike. Shootout kicks: "P". */
+/** Canonical football minute: engine `min` and coaching `fromMinute`. Not elapsed mm:ss. */
+export function minuteLabel(minute: number): string {
+  return `${minute}′`;
+}
+
+/** Published elapsed clock for one event. Empty when that event has no clock. */
+export function eventClockTime(e: MatchEvent): string {
+  const s = e.st?.clk?.s;
+  return s == null ? "" : clockText(Math.max(0, Math.floor(s)));
+}
+
+/** Event-list label. Shootout events stay "P"; every other event uses its canonical minute. */
 export function eventTime(e: MatchEvent): string {
   if (e.t.startsWith("shootout")) return "P";
-  const s = e.st?.clk?.s;
-  return s == null ? `${e.min}′` : clockText(Math.max(0, Math.floor(s)));
+  return minuteLabel(e.min);
 }
 
 /** Short broadcast label + tone for a public phase. */

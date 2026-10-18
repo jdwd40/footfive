@@ -1,6 +1,7 @@
 import { render, screen, act, cleanup, fireEvent, within } from "@testing-library/react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { minuteLabel } from "../lib/live";
 import type { MatchEvent, MatchView } from "../lib/pocketbase";
 
 /** Mirrors MatchPage MATCH_POLL_MS (the page is imported dynamically after mocks). */
@@ -600,12 +601,60 @@ describe("MatchPage labels and timing (#78)", () => {
     expect(screen.queryByText("Live feed")).toBeNull();
     expect(within(screen.getByRole("region", { name: "Other matches" })).getByTestId("ticker-badge")).toHaveTextContent("Around the grounds");
   });
-  it("event times use the pitch clock's mm:ss and the list says so", async () => {
+  it("event labels use the canonical minute and keep the elapsed clock on the time", async () => {
     const now = Date.now();
     const at = (s: number) => ({ ...st!, clk: { s, run: 1 as const } });
     await mount(view([{ ...ev(1, now - 30000, "Early"), t: "shot", min: 13, st: at(754.6) }], null, now));
-    expect(screen.getByTestId("event-time").textContent).toBe("12:34");
-    expect(screen.getByText("Times are the match clock")).toBeTruthy();
+    const time = screen.getByTestId("event-time");
+    expect(time.textContent).toBe("13′");
+    expect(time.getAttribute("title")).toBe("12:34");
+    expect(screen.getByText("Match minutes")).toBeTruthy();
+  });
+  it("minute 59, coaching 59 and a 60:05 card share the engine minute with the raw ticker", async () => {
+    const now = Date.now();
+    const at = (s: number) => ({ ...st!, clk: { s, run: 1 as const } });
+    const tick = "HOM 0–0 AWA — Red card: Poe (HOM), 61′.";
+    const events: MatchEvent[] = [
+      { ...ev(1, now - 80000, "Kick-off"), t: "kickoff", min: 0, st: at(0) },
+      { ...ev(2, now - 70000, "Shot in minute 59"), t: "shot", min: 59, st: at(58 * 60 + 20) },
+      { ...ev(3, now - 60000, "Red card"), t: "red_card", min: 61, major: 1, tick, st: at(3605) },
+      { ...ev(4, now - 50000, "Half-time"), t: "half_time", min: 45, st: at(2700) },
+      { ...ev(5, now - 40000, "Ninety up"), t: "end_of_normal_time", min: 90, st: at(5400) },
+      { ...ev(6, now - 30000, "ET half-time"), t: "et_half_time", min: 105, st: at(6300) },
+      { ...ev(7, now - 20000, "After extra time"), t: "match_end", min: 120, st: at(7200) },
+      { ...ev(8, now - 10000, "Spot kick"), t: "shootout_kick", min: 120, st: at(7200) },
+    ];
+    const v = view(events, null, now);
+    v.managedSide = "home";
+    v.coach = { stance: "balanced", pending: false, ai: false, used: 0, max: 3, cooldownUntil: 0 };
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockResolvedValue({ ok: true, stance: "attack", fromMinute: 59, used: 1, max: 3 });
+    const row = (fragment: string) => within(within(screen.getByTestId("event-feed")).getByText(fragment).closest("li")!).getByTestId("event-time");
+    try {
+      await mount(v);
+      expect(row("Shot in minute 59").textContent).toBe(minuteLabel(59));
+      expect(row("Shot in minute 59").getAttribute("title")).toBe("58:20");
+      expect(row("Red card").textContent).toBe("61′");
+      expect(row("Red card").getAttribute("title")).toBe("60:05");
+      expect(screen.getByTestId("ticker-current").textContent).toContain(tick);
+      expect(screen.getByTestId("ticker-current").textContent).not.toContain("60:05");
+      expect(row("Kick-off").textContent).toBe("0′");
+      expect(row("Kick-off").getAttribute("title")).toBe("00:00");
+      expect(row("Half-time").textContent).toBe("45′");
+      expect(row("Half-time").getAttribute("title")).toBe("45:00");
+      expect(row("Ninety up").textContent).toBe("90′");
+      expect(row("Ninety up").getAttribute("title")).toBe("90:00");
+      expect(row("ET half-time").textContent).toBe("105′");
+      expect(row("ET half-time").getAttribute("title")).toBe("105:00");
+      expect(row("After extra time").textContent).toBe("120′");
+      expect(row("After extra time").getAttribute("title")).toBe("120:00");
+      expect(row("Spot kick").textContent).toBe("P");
+      expect(row("Spot kick").getAttribute("title")).toBe("120:00");
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "attack" })));
+      expect(screen.getByText(`Attack from ${minuteLabel(59)}.`)).toBeTruthy();
+    } finally {
+      coaching.mockRestore();
+    }
   });
   it("before kick-off Match events explains what will appear", async () => {
     const now = Date.now();
