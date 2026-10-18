@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { footfiveApi, type FixtureMarkets, type Market } from "../lib/pocketbase";
+import { NOT_OFFERED, UNOFFERED_HINT, formatOdds, selectionLabel } from "../lib/priceLabel";
 import { startPolling } from "../lib/polling";
 import { useSlip } from "./BetSlip";
 
@@ -97,8 +98,11 @@ function MarketBlock({
   selected: string | null;
   onPick: (s: NonNullable<Market["sel"]>[number]) => void;
 }) {
+  const hintId = useId();
   const sel = m.sel || [];
   const exact = m.key === "exact";
+  const open = !disabled;
+  const unoffered = open && sel.some((s) => !formatOdds(s.odds));
   return (
     <section>
       <div className="mb-1 flex items-baseline justify-between gap-2">
@@ -108,22 +112,35 @@ function MarketBlock({
         </span>
       </div>
       <div className={`grid gap-1.5 ${exact ? "grid-cols-4 sm:grid-cols-6" : sel.length === 3 ? "grid-cols-3" : sel.length === 4 ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2"}`}>
-        {sel.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            className="btn-odds"
-            disabled={disabled || !s.odds}
-            aria-pressed={selected === s.id}
-            onClick={() => onPick(s)}
-            title={s.label}
-            data-testid={`odds-${m.key}-${s.id}`}
-          >
-            <span className="max-w-full truncate text-[11px] font-semibold opacity-80">{exact ? s.short : s.short}</span>
-            <span className="tabular text-sm">{s.odds ? s.odds.toFixed(2) : "–"}</span>
-          </button>
-        ))}
+        {sel.map((s) => {
+          const priced = !!formatOdds(s.odds);
+          const bare = open && !priced;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              className={priced ? "btn-odds" : "btn-odds min-w-0 w-full"}
+              disabled={disabled || !s.odds}
+              aria-pressed={selected === s.id}
+              aria-label={bare ? `${s.label}, ${NOT_OFFERED}` : undefined}
+              aria-describedby={bare ? hintId : undefined}
+              onClick={() => onPick(s)}
+              title={s.label}
+              data-testid={`odds-${m.key}-${s.id}`}
+            >
+              <span className="max-w-full truncate text-[11px] font-semibold opacity-80">{exact ? s.short : s.short}</span>
+              <span className={priced ? "tabular text-sm" : "max-w-full text-center text-[11px] font-semibold leading-tight whitespace-normal"}>
+                {selectionLabel(s.odds, open)}
+              </span>
+            </button>
+          );
+        })}
       </div>
+      {unoffered ? (
+        <p id={hintId} className="mt-1 text-[11px] leading-tight text-muted" data-testid="unoffered-hint">
+          {UNOFFERED_HINT}
+        </p>
+      ) : null}
     </section>
   );
 }

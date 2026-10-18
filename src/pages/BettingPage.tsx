@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import { useSlip } from "../components/BetSlip";
 import { Kit } from "../components/Team";
 import { countdown, credits, ukTime, useLive } from "../lib/live";
-import { footfiveApi, type Bet, type FixtureCard, type MyBets, type WideMarkets } from "../lib/pocketbase";
+import { footfiveApi, type Bet, type FixtureCard, type Market, type MyBets, type WideMarkets } from "../lib/pocketbase";
+import { NOT_OFFERED, UNOFFERED_HINT, formatOdds, selectionLabel } from "../lib/priceLabel";
 import { startPolling } from "../lib/polling";
 
 const STATUS: Record<Bet["status"], { label: string; cls: string }> = {
@@ -187,7 +188,10 @@ function BetRow({ b }: { b: Bet }) {
 
 function FixtureRow({ f }: { f: FixtureCard }) {
   const { setPick, pick } = useSlip();
+  const hintId = useId();
   const closed = f.odds?.closed;
+  const open = !!f.odds && !closed;
+  const unoffered = open && (formatOdds(f.odds?.home) == null || formatOdds(f.odds?.away) == null);
   const label = `${f.home.abbreviation} v ${f.away.abbreviation}`;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line p-2">
@@ -208,13 +212,17 @@ function FixtureRow({ f }: { f: FixtureCard }) {
         {(["home", "away"] as const).map((side) => {
           const odds = f.odds?.[side];
           const team = side === "home" ? f.home : f.away;
+          const priced = !!formatOdds(odds);
+          const bare = open && !priced;
           return (
             <button
               key={side}
               type="button"
-              className="btn-odds flex-1 sm:w-20 sm:flex-none"
+              className={priced ? "btn-odds flex-1 sm:w-20 sm:flex-none" : "btn-odds min-w-0 flex-1 sm:w-20 sm:flex-none"}
               disabled={!!closed || !odds}
               aria-pressed={pick?.fixtureId === f.id && pick.market === "winner" && pick.selection === side}
+              aria-label={bare ? `${team.name}, ${NOT_OFFERED}` : undefined}
+              aria-describedby={bare ? hintId : undefined}
               onClick={() =>
                 odds &&
                 setPick({
@@ -230,7 +238,9 @@ function FixtureRow({ f }: { f: FixtureCard }) {
               }
             >
               <span className="text-[11px] opacity-80">{team.abbreviation}</span>
-              <span className="tabular text-sm">{odds ? odds.toFixed(2) : "–"}</span>
+              <span className={priced ? "tabular text-sm" : "max-w-full text-center text-[11px] font-semibold leading-tight whitespace-normal"}>
+                {selectionLabel(odds, open)}
+              </span>
             </button>
           );
         })}
@@ -238,7 +248,60 @@ function FixtureRow({ f }: { f: FixtureCard }) {
           More
         </Link>
       </div>
+      {unoffered ? (
+        <p id={hintId} className="w-full text-[11px] leading-tight text-muted" data-testid="unoffered-hint">
+          {UNOFFERED_HINT}
+        </p>
+      ) : null}
       {closed ? <p className="w-full text-xs text-amber">{closed}</p> : null}
+    </div>
+  );
+}
+
+function WideMarket({ m }: { m: Market }) {
+  const { setPick } = useSlip();
+  const hintId = useId();
+  const selections = m.sel || [];
+  const open = !m.closed;
+  const unoffered = open && selections.some((s) => !formatOdds(s.odds));
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="text-sm font-bold">{m.title}</h3>
+        {m.closesAt ? <span className="text-[11px] text-muted">Closes {ukTime(m.closesAt)} UK</span> : null}
+      </div>
+      <p className="text-xs text-muted">{m.rules}</p>
+      <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        {selections.map((s) => {
+          const priced = !!formatOdds(s.odds);
+          const bare = open && !priced;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              className={priced ? "btn-odds !flex-row !justify-between gap-2 px-2" : "btn-odds min-w-0 !flex-row !justify-between gap-2 px-2"}
+              disabled={!open || !s.odds}
+              aria-label={bare ? `${s.label}, ${NOT_OFFERED}` : undefined}
+              aria-describedby={bare ? hintId : undefined}
+              onClick={() => open && s.odds && setPick({ market: m.key, marketTitle: m.title, rules: m.rules, selection: s.id, label: s.label, odds: s.odds })}
+              title={s.label}
+            >
+              <span className="truncate font-display text-xs" title={s.label}>
+                {s.short}
+              </span>
+              <span className={priced ? "tabular text-sm" : "min-w-0 text-center text-[11px] font-semibold leading-tight whitespace-normal"}>
+                {selectionLabel(s.odds, open)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {unoffered ? (
+        <p id={hintId} className="mt-1 text-[11px] leading-tight text-muted" data-testid="unoffered-hint">
+          {UNOFFERED_HINT}
+        </p>
+      ) : null}
+      {m.closed ? <p className="mt-1 text-xs text-amber">{m.closed}</p> : null}
     </div>
   );
 }
@@ -305,30 +368,7 @@ function WideBets({ wide }: { wide: WideMarkets }) {
               </button>
             </div>
           ) : (
-            <div key={m.key}>
-              <div className="flex items-baseline justify-between gap-2">
-                <h3 className="text-sm font-bold">{m.title}</h3>
-                {m.closesAt ? <span className="text-[11px] text-muted">Closes {ukTime(m.closesAt)} UK</span> : null}
-              </div>
-              <p className="text-xs text-muted">{m.rules}</p>
-              <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-                {(m.sel || []).map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="btn-odds !flex-row !justify-between gap-2 px-2"
-                    disabled={!s.odds}
-                    onClick={() => s.odds && setPick({ market: m.key, marketTitle: m.title, rules: m.rules, selection: s.id, label: s.label, odds: s.odds })}
-                    title={s.label}
-                  >
-                    <span className="truncate font-display text-xs" title={s.label}>
-                      {s.short}
-                    </span>
-                    <span className="tabular text-sm">{s.odds ? s.odds.toFixed(2) : "–"}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <WideMarket key={m.key} m={m} />
           ),
         )}
       </div>
