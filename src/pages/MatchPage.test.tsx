@@ -81,6 +81,119 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("commentary").textContent).toBe("Current pass");
   });
 
+  it("retires one event's caption during dwell, then shows the next event even with the same words", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const realNow = performance.now.bind(performance);
+    let extra = 0;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => realNow() + extra);
+    try {
+      const now = Date.now();
+      const words = "Same words";
+      const events = [ev(1, now - 4000, words), ev(2, now + 30000, words)];
+      const { footfiveApi } = await import("../lib/pocketbase");
+      vi.mocked(footfiveApi.match).mockResolvedValue(view(events, null, now));
+      await mount(view(events, null, now));
+      const line = () => screen.getByTestId("commentary").textContent;
+      expect(line()).toBe(words);
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+      extra += 3000;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(line()).toBe(words); // still inside the short lifetime
+      extra += 3000;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(line()).toBe("…"); // baseline: the old page kept this line for the whole dwell
+      await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 80)));
+      expect(line()).toBe("…"); // same seq polled again does not restart it
+      vi.setSystemTime(now + 30000 + 2000);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(line()).toBe(words); // new seq, same words, shown promptly
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+      extra += 6000;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(line()).toBe("…");
+      vi.setSystemTime(now);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(line()).toBe("…"); // rewind onto the first seq does not announce it again
+    } finally {
+      spy.mockRestore();
+    }
+  }, 15000);
+
+  it("keeps an expired shot neutral until the goal is revealed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const realNow = performance.now.bind(performance);
+    let extra = 0;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => realNow() + extra);
+    try {
+      const now = Date.now();
+      const scored = { ...st!, sc: [1, 0] as [number, number] };
+      const shot = { ...ev(1, now - 30000, "Shoots!"), t: "shot", ball: [85, 32] as [number, number] };
+      const goal = { ...ev(2, now + 20000, "GOAL!"), t: "goal", target: [100, 32] as [number, number], st: scored };
+      await mount(view([shot, goal], null, now));
+      expect(screen.getByTestId("commentary").textContent).toBe("Shoots!");
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+      extra += 6000;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.getByTestId("commentary").textContent).toBe("…");
+      vi.setSystemTime(now + 20000 + 1500 + 0.15 * 3800);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.getByTestId("commentary").textContent).toBe("…");
+      expect(screen.getByTestId("commentary").textContent).not.toContain("GOAL");
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+      vi.setSystemTime(now + 20000 + 1500 + 0.35 * 3800);
+      await act(() => new Promise((r) => setTimeout(r, 400)));
+      expect(screen.getByTestId("commentary").textContent).toBe("GOAL!");
+      expect(screen.getByTestId("match-score").textContent).toBe("1–0");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("replays a line without restarting the live caption, and a new fixture may show that seq again", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const realNow = performance.now.bind(performance);
+    let extra = 0;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => realNow() + extra);
+    try {
+      const now = Date.now();
+      const goal = { ...ev(1, now - 60000, "GOAL ONE"), t: "goal", target: [100, 32] as [number, number] };
+      const { footfiveApi } = await import("../lib/pocketbase");
+      const { default: MatchPage } = await import("./MatchPage");
+      vi.mocked(footfiveApi.match).mockImplementation(async (id: string) => {
+        const v = view(id === "fx1" ? [goal, ev(2, now - 3000, "Live line")] : [ev(1, now - 3000, "Live line")], null, now);
+        v.fixture = { ...v.fixture, id };
+        return v;
+      });
+      await act(async () => {
+        render(
+          <MemoryRouter initialEntries={["/match/fx1"]}>
+            <Link to="/match/fx2">Switch fixture</Link>
+            <Routes>
+              <Route path="/match/:fixtureId" element={<MatchPage />} />
+            </Routes>
+          </MemoryRouter>,
+        );
+      });
+      expect(screen.getByTestId("commentary").textContent).toBe("Live line");
+      extra += 6000;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.getByTestId("commentary").textContent).toBe("…");
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Replay: GOAL ONE"));
+      });
+      expect(screen.getByTestId("commentary").textContent).toBe("GOAL ONE");
+      extra += 20000;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.getByTestId("commentary").textContent).toBe("…");
+      await act(async () => {
+        fireEvent.click(screen.getByText("Switch fixture"));
+      });
+      expect(screen.getByTestId("commentary").textContent).toBe("Live line");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("scoreboard shows the score of the event under the playhead, not the newest", async () => {
     const now = Date.now();
     const scored = { ...st!, sc: [1, 0] as [number, number] };
@@ -384,8 +497,9 @@ describe("MatchPage retained history and fixture ticker", () => {
     expect(screen.getByTestId("commentary")).toHaveTextContent("History 2");
     expect(screen.getByTestId("event-feed").querySelectorAll("li")).toHaveLength(2);
     await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
-    expect(screen.getByTestId("commentary")).toHaveTextContent("History 2");
+    expect(screen.getByTestId("commentary").textContent).not.toContain("History 605");
     await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
+    expect(screen.getByTestId("commentary").textContent).toBe("…");
     expect(match).toHaveBeenCalledTimes(5); // slow drain is single-flight
     await act(async () => resolvePage(page(events.slice(302, 602), now, true)));
     expect(match.mock.calls.map((args) => args[1])).toEqual([0, 2, 302, 2, 302, 602]);

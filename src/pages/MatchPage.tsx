@@ -46,6 +46,40 @@ function advanceClock(clock: number | null, target: number, prevTarget: number |
   return Math.min(target, c + dt * (behind > 250 ? 1 + Math.max(CATCHUP_RATE - 1, behind / CATCHUP_TARGET_MS) : 1));
 }
 
+/** Live caption lifetime from the first moment that event seq is actually shown. Dwell after this is an ellipsis. */
+const CAPTION_MS = 5000;
+
+/** One visit's live captions, keyed by event seq. A clock rewind or a repeat poll must not start the lifetime again.
+ * Replay text is passed in and is not recorded. A fixture id change clears the visit. The reveal gate still selects the previous event until its result is ready. */
+function CommentaryLine({ fixtureId, replayCaption, seq, text, idle }: {
+  fixtureId: string;
+  replayCaption: string | null;
+  seq: number | null;
+  text: string | null;
+  idle: string;
+}) {
+  const mem = useRef<{ id: string; shown: Map<number, number> }>({ id: fixtureId, shown: new Map() });
+  const [, bump] = useState(0);
+  if (mem.current.id !== fixtureId) mem.current = { id: fixtureId, shown: new Map() };
+  const record = replayCaption == null && seq != null;
+  if (record && !mem.current.shown.has(seq)) mem.current.shown.set(seq, performance.now());
+  const started = record ? mem.current.shown.get(seq)! : null;
+  useEffect(() => {
+    if (!record || started == null) return;
+    const left = CAPTION_MS - (performance.now() - started);
+    if (left <= 0) return;
+    const id = window.setTimeout(() => bump((n) => n + 1), left);
+    return () => window.clearTimeout(id);
+  }, [fixtureId, seq, replayCaption, started, record]);
+  const age = started == null ? 0 : performance.now() - started;
+  const body = replayCaption != null ? replayCaption : text && started != null && age < CAPTION_MS ? text : seq != null ? "…" : idle;
+  return (
+    <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
+      {body}
+    </p>
+  );
+}
+
 /** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
   const sysReduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -284,7 +318,9 @@ export default function MatchPage() {
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
   // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
-  const text = current && !liveRevealed && ph?.prev ? ph.prev.text : current?.text;
+  const holding = !!(current && !liveRevealed && ph?.prev);
+  const presentedSeq = current ? (holding ? ph!.prev!.seq : current.seq) : null;
+  const presentedText = holding ? ph!.prev!.text : current?.text ?? null;
   // Events as the playhead has shown them: nothing newer, and the current one only once its result is revealed.
   const seen = ph ? events.filter((e) => e.seq < ph.cur.seq || (liveRevealed && e.seq === ph.cur.seq)) : [];
   const recent: TickerItem[] = seen.filter((e) => e.major).slice(-30).reverse().map((e) => ({
@@ -328,9 +364,13 @@ export default function MatchPage() {
               <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} hud={st ? <Hud fx={shown.fixture} now={now} /> : null} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
-                {replay ? replay.scene.caption : current ? text : fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
-              </p>
+              <CommentaryLine
+                fixtureId={fx.id}
+                replayCaption={replay ? replay.scene.caption : null}
+                seq={presentedSeq}
+                text={presentedText}
+                idle={fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
+              />
               <div className="flex gap-1" role="group" aria-label="Highlights">
                 {(["full", "off"] as const).map((p) => (
                   <button key={p} type="button" className={`chip ${pref === p ? "chip-lime" : "chip-muted"}`} onClick={() => setPref(p)} aria-pressed={pref === p}>
