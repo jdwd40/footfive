@@ -82,6 +82,7 @@ test("battery success stays outside the expanded squad on mobile and desktop", a
       };
     } else if (path === "/api/footfive/command-charge") body = { points: 3, max: 5, nextPointInMs: 0 };
     else if (path === "/api/footfive/my-team/finances") body = { treasury: 500, entries: [] };
+    else if (path === "/api/footfive/my-team/tactical-scan" && method === "GET") body = { scans: [] };
     else if (path === "/api/footfive/players/p0/battery" && method === "POST") {
       actions.push(`${method} ${path}`);
       used = true;

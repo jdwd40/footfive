@@ -236,6 +236,28 @@ async function main() {
       assert.equal(scans.length, 1);
       assert.equal(scans[0].fixture_id, ownFixture.id);
       assert.deepEqual(JSON.parse(scans[0].report_json), response.data.report);
+      const beforeView = state();
+      const scanId = scans[0].id;
+      const unauth = await request("/api/footfive/my-team/tactical-scan");
+      assert.equal(unauth.status, 401, JSON.stringify(unauth.data));
+      const owner = await request("/api/footfive/my-team/tactical-scan", user.token);
+      assert.equal(owner.status, 200, JSON.stringify(owner.data));
+      assert.ok(Array.isArray(owner.data.scans));
+      assert.equal(owner.data.scans.length, 1);
+      assert.equal(owner.data.scans[0].id, scanId);
+      assert.equal(owner.data.scans[0].fixtureId, ownFixture.id);
+      assert.deepEqual(owner.data.scans[0].report, response.data.report);
+      const other = await request("/api/footfive/my-team/tactical-scan", freshUser.token);
+      assert.equal(other.status, 200, JSON.stringify(other.data));
+      assert.ok(Array.isArray(other.data.scans));
+      assert.equal(other.data.scans.some((row) => row.id === scanId), false);
+      const spoof = await request(`/api/footfive/my-team/tactical-scan?user=${encodeURIComponent(user.id)}`, freshUser.token);
+      assert.equal(spoof.status, 200, JSON.stringify(spoof.data));
+      assert.ok(Array.isArray(spoof.data.scans));
+      assert.equal(spoof.data.scans.some((row) => row.id === scanId), false);
+      assert.deepEqual(state(), beforeView);
+      assert.equal(points(), 4);
+      assert.ok(!query("SELECT consumed FROM tactical_scans WHERE id = ?", scanId)[0].consumed);
     }
     if (action === "overclock") {
       // Issue 121: arming owes the energy cost; the actual kick-off starters pay it.
