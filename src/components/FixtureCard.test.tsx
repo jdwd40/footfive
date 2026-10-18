@@ -123,3 +123,89 @@ describe("FixtureCard prices", () => {
     expect(screen.queryByText(UNOFFERED_HINT)).toBeNull();
   });
 });
+
+describe("FixtureCard shootout offer", () => {
+  afterEach(() => cleanup());
+
+  const prices = { home: 2.51, away: 1.5, closed: null };
+  const pens = { sc: [1, 1] as [number, number], so: null, ph: "shootout", clk: { s: 0, run: 0 as const }, pos: 50, x: [[], []] as [number[], number[]], d: 0 as const, win: null, by: null };
+
+  it("hides prices through a shootout when the published market is not closed", () => {
+    const onBet = vi.fn();
+    renderCards(<FixtureCard fx={card({ odds: prices, st: pens })} now={0} stale={false} onBet={onBet} />);
+    const btn = screen.getByTestId("bet-fixture");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent("Penalties");
+    expect(btn).toHaveAttribute("title", "Prices hidden during penalties");
+    expect(btn.textContent).not.toContain("2.51");
+    expect(btn.textContent).not.toContain("1.50");
+    expect(screen.queryByTestId("unoffered-hint")).toBeNull();
+    expect(screen.getByText("PENS")).toBeTruthy();
+    expect(screen.getByTestId("score-home").textContent).toBe("1");
+    expect(screen.getByTestId("watch-match")).toHaveTextContent("Watch live");
+    fireEvent.click(btn);
+    expect(onBet).not.toHaveBeenCalled();
+    cleanup();
+    renderCards(<FixtureCard fx={card({ odds: { home: 2.51, away: null, closed: null }, st: pens })} now={0} stale={false} onBet={onBet} />);
+    expect(screen.getByTestId("bet-fixture")).toHaveTextContent("Penalties");
+    expect(screen.queryByTestId("unoffered-hint")).toBeNull();
+    expect(screen.queryByText(NOT_OFFERED)).toBeNull();
+  });
+
+  it("keeps an actual closed reason as Suspended during a shootout", () => {
+    const onBet = vi.fn();
+    const reason = "Penalty kick in progress";
+    renderCards(
+      <FixtureCard
+        fx={card({ odds: { home: 2.51, away: 1.5, closed: reason }, st: { ...pens, d: 1 as const } })}
+        now={0}
+        stale={false}
+        onBet={onBet}
+      />,
+    );
+    const btn = screen.getByTestId("bet-fixture");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent("Suspended");
+    expect(btn).toHaveAttribute("title", reason);
+    expect(btn.textContent).not.toContain("2.51");
+    expect(btn.textContent).not.toContain("Penalties");
+    fireEvent.click(btn);
+    expect(onBet).not.toHaveBeenCalled();
+  });
+
+  it("keeps Your match ahead of the shootout label", () => {
+    renderCards(<FixtureCard fx={card({ odds: prices, st: pens })} now={0} stale={false} onBet={vi.fn()} blocked />);
+    const btn = screen.getByTestId("bet-fixture");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent("Your match");
+    expect(btn).toHaveAttribute("title", "You manage a team in this fixture");
+    expect(btn.textContent).not.toContain("2.51");
+    expect(screen.queryByText("Penalties", { selector: "button" })).toBeNull();
+  });
+
+  it("still opens an extra-time price and calls back", () => {
+    const onBet = vi.fn();
+    const fx = card({ odds: { home: 1.88, away: 1.88, closed: null }, st: { ...pens, ph: "extra_time_2", d: 0 as const, clk: { s: 6300, run: 1 as const } } });
+    renderCards(<FixtureCard fx={fx} now={0} stale={false} onBet={onBet} />);
+    const btn = screen.getByTestId("bet-fixture");
+    expect(btn).toBeEnabled();
+    expect(btn).toHaveTextContent("1.88");
+    fireEvent.click(btn);
+    expect(onBet).toHaveBeenCalledTimes(1);
+    expect(onBet).toHaveBeenCalledWith(fx);
+  });
+
+  it("still omits the bet control after full time", () => {
+    const fx = card({ status: "finished", odds: prices, st: { ...pens, ph: "finished", d: 0 as const } });
+    renderCards(<FixtureCard fx={fx} now={0} stale={false} onBet={vi.fn()} />);
+    expect(screen.queryByTestId("bet-fixture")).toBeNull();
+    expect(screen.queryByText("2.51")).toBeNull();
+  });
+
+  it("keeps a missing odds payload on its existing copy during a shootout", () => {
+    renderCards(<FixtureCard fx={card({ odds: null, st: pens })} now={0} stale={false} onBet={vi.fn()} />);
+    expect(screen.queryByTestId("bet-fixture")).toBeNull();
+    expect(screen.getByTestId("odds-missing")).toHaveTextContent(NO_CURRENT_PRICE);
+    expect(screen.getByText("PENS")).toBeTruthy();
+  });
+});
