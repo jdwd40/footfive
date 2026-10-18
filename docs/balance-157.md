@@ -41,6 +41,28 @@ Aggressive-free value). So the bonus went from 1.12 to 1.10.
 - Before = main 4a49b28 (same engine and balance files as 31c6ae1).
   After = this branch.
 
+### Coaching-model limitation and independent check (2026-10-18)
+
+The two harnesses cap coaching at four changes but do **not** enforce the
+production five-match-minute recharge. The 10,000-seed coaching rows below
+therefore describe that simplified policy, rather than exact production command
+acceptance.
+
+Fable independently compared the same 3,000 seed blocks with and without that
+recharge, on both base and proposed hooks. Enforcing it removed all short-gap
+commands and moved every measured coaching result by at most 0.3 percentage
+points. With the recharge enforced, Overclock + coaching won 10.1% of runs on
+base hooks and 8.8% on the proposed hooks; Aggressive + Overclock + coaching won
+12.2% and 9.3%, respectively. The base Overclock + coaching row does not use
+Aggressive, so its 10.1% result also applies to the Aggressive-only intermediate
+step and supports the conditional Overclock change.
+
+This smaller paired review check corroborates the decision; it does not replace
+the 10,000-seed tables or establish a precise production tournament title rate.
+The run harness also uses a beaten-opponent fatigue proxy, rather than simulating
+the other side of a full tournament bracket. The complete check and its limits
+are recorded in the [initial Fable review of PR #160](https://github.com/jdwd40/footfive/pull/160#issuecomment-6254131598).
+
 ## Results: single tie, B-grade mirror (adv %, W/D/L at 90', goals for–against)
 
 | Setup | Before | After |
