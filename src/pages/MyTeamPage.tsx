@@ -45,6 +45,27 @@ function times(n: number): string {
 type SavedScan = { id: string; fixtureId: string; report: TacticalScanReport; created: string };
 type ShownScan = { id: string | null; report: TacticalScanReport; created: string | null };
 
+/** Display groups. Exact role strings only; anything else is utility/unknown. Payload order is kept inside each group. */
+const ROLE_GROUPS = [
+  ["gk", "Goalkeepers"],
+  ["def", "Defence"],
+  ["mid", "Midfield"],
+  ["att", "Attack"],
+  ["other", "Utility / unknown"],
+] as const;
+
+function groupPlayers(players: Player[]): Array<{ id: string; label: string; players: Player[] }> {
+  const buckets = new Map<string, Player[]>(ROLE_GROUPS.map(([id]) => [id, []]));
+  for (const p of players) {
+    const id = p.role === "gk" || p.role === "def" || p.role === "mid" || p.role === "att" ? p.role : "other";
+    buckets.get(id)!.push(p);
+  }
+  return ROLE_GROUPS.flatMap(([id, label]) => {
+    const rows = buckets.get(id)!;
+    return rows.length ? [{ id, label, players: rows }] : [];
+  });
+}
+
 function snapshotReport(value: unknown): TacticalScanReport | null {
   if (!value || typeof value !== "object") return null;
   const r = value as Record<string, unknown>;
@@ -196,6 +217,7 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null); // starter ids while editing
+  const [incoming, setIncoming] = useState<string | null>(null); // reserve chosen to swap in; not saved
   const [savedScans, setSavedScans] = useState<SavedScan[]>([]);
   const [shownScan, setShownScan] = useState<ShownScan | null>(null);
   const [scanNote, setScanNote] = useState<string | null>(null);
@@ -288,15 +310,22 @@ function Manage({ world }: { world: WorldSnapshot }) {
     }
   }
 
-  async function run(fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string)) {
+  async function run(fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string), reloadFail?: string): Promise<boolean> {
     setBusy(true);
     setMsg(null);
+    let accepted = false;
     try {
       await fn();
+      accepted = true;
       const reloaded = await load();
       setMsg({ ok: true, text: typeof ok === "string" ? ok : ok(reloaded) });
+      return true;
     } catch (err) {
-      setMsg({ ok: false, text: err instanceof Error ? err.message : "Action failed" });
+      setMsg({
+        ok: false,
+        text: accepted && reloadFail ? reloadFail : err instanceof Error ? err.message : "Action failed",
+      });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -319,10 +348,30 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const starters = draft || sq.players.filter((p) => p.is_starter).map((p) => p.id);
   // The five must start exactly one goalkeeper; a saved lineup from before this rule can break it.
   const gks = sq.players.filter((p) => p.role === "gk" && starters.includes(p.id)).length;
+  const incomingPlayer = incoming ? sq.players.find((p) => p.id === incoming) ?? null : null;
+  const groups = groupPlayers(sq.players);
 
   function toggle(p: Player) {
     const cur = draft || sq!.players.filter((x) => x.is_starter).map((x) => x.id);
-    setDraft(cur.includes(p.id) ? cur.filter((x) => x !== p.id) : cur.length < 5 ? [...cur, p.id] : cur);
+    const chosen = incoming;
+    if (chosen && cur.includes(p.id)) {
+      const next = cur.slice();
+      next[cur.indexOf(p.id)] = chosen;
+      setDraft(next);
+      setIncoming(null);
+      return;
+    }
+    if (cur.includes(p.id)) {
+      setIncoming(null);
+      setDraft(cur.filter((x) => x !== p.id));
+      return;
+    }
+    if (cur.length < 5) {
+      setIncoming(null);
+      setDraft([...cur, p.id]);
+      return;
+    }
+    if (cur.length === 5) setIncoming((id) => (id === p.id ? null : p.id));
   }
 
   return (
@@ -414,32 +463,57 @@ function Manage({ world }: { world: WorldSnapshot }) {
               Reserves are kept for future starting line-ups. In-match substitutions are not active.
             </p>
             {ai ? <p className="mt-2 text-xs text-amber">Full AI chooses the five each kick-off. Your saved line-up below is kept for when you switch back.</p> : null}
-            <ul className="mt-3 space-y-2">
-              {sq.players.map((p) => (
-                <PlayerRow key={p.id} p={p} starter={starters.includes(p.id)} busy={busy} batteries={t.battery_count} restore={restore} onToggle={() => toggle(p)} run={run} />
+            <div className="mt-3 space-y-3">
+              {groups.map((group) => (
+                <section key={group.id} data-testid={`squad-group-${group.id}`}>
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-muted">{group.label}</h3>
+                  <ul className="mt-2 space-y-2">
+                    {group.players.map((p) => (
+                      <PlayerRow
+                        key={p.id}
+                        p={p}
+                        starter={starters.includes(p.id)}
+                        incoming={incoming === p.id}
+                        replacing={incomingPlayer != null && starters.includes(p.id)}
+                        busy={busy}
+                        batteries={t.battery_count}
+                        restore={restore}
+                        onToggle={() => toggle(p)}
+                        onCancelSwap={() => setIncoming(null)}
+                        run={run}
+                      />
+                    ))}
+                  </ul>
+                </section>
               ))}
-            </ul>
+            </div>
             {draft ? (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   className="btn-primary"
                   disabled={busy || draft.length !== 5 || gks !== 1}
-                  onClick={() =>
-                    run(
+                  onClick={() => {
+                    const five = draft;
+                    void run(
                       () =>
                         footfiveApi.saveMyLineup(
-                          draft,
-                          sq.players.filter((p) => !draft.includes(p.id)).map((p) => p.id),
+                          five,
+                          sq.players.filter((p) => !five.includes(p.id)).map((p) => p.id),
                         ),
                       "Line-up saved — applies from your next kick-off.",
-                    ).then(() => setDraft(null))
-                  }
+                      "Line-up saved, but the squad could not refresh.",
+                    ).then((saved) => {
+                      if (!saved) return;
+                      setDraft(null);
+                      setIncoming(null);
+                    });
+                  }}
                   data-testid="save-lineup"
                 >
                   Save line-up ({draft.length}/5)
                 </button>
-                <button type="button" className="btn-ghost" onClick={() => setDraft(null)}>
+                <button type="button" className="btn-ghost" onClick={() => { setDraft(null); setIncoming(null); }}>
                   Cancel
                 </button>
                 {gks === 0 ? <span className="text-sm text-amber">Include a goalkeeper.</span> : null}
@@ -665,19 +739,25 @@ function Bar({ v, cls }: { v: number; cls: string }) {
 function PlayerRow({
   p,
   starter,
+  incoming,
+  replacing,
   busy,
   batteries,
   restore,
   onToggle,
+  onCancelSwap,
   run,
 }: {
   p: Player;
   starter: boolean;
+  incoming: boolean;
+  replacing: boolean;
   busy: boolean;
   batteries: number;
   restore: number | null;
   onToggle: () => void;
-  run: (fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string)) => Promise<void>;
+  onCancelSwap: () => void;
+  run: (fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string), reloadFail?: string) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
   const need = Math.min(30, 100 - p.condition);
@@ -694,11 +774,11 @@ function PlayerRow({
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className={`chip ${starter ? "chip-lime" : "chip-muted"} !min-h-8 shrink-0`}
+          className={`chip ${starter ? "chip-lime" : incoming ? "chip-magenta" : "chip-muted"} !min-h-8 shrink-0`}
           onClick={onToggle}
           disabled={busy}
-          aria-pressed={starter}
-          title={starter ? "In the five — tap to rest" : "Reserve — tap to start"}
+          aria-pressed={starter || incoming}
+          title={replacing ? "In the five — tap to replace" : starter ? "In the five — tap to rest" : incoming ? "Coming in — tap to start" : "Reserve — tap to start"}
         >
           {starter ? "Starter" : "Reserve"}
         </button>
@@ -717,6 +797,14 @@ function PlayerRow({
           </div>
         </div>
       </div>
+      {incoming ? (
+        <div className="mt-2 text-sm text-cyan" data-testid="swap-prompt" role="status">
+          <p>Choose the starter {p.name} replaces. Nothing is saved until you save the line-up.</p>
+          <button type="button" className="btn-ghost mt-1 !min-h-9" disabled={busy} onClick={onCancelSwap} data-testid="cancel-swap">
+            Cancel swap
+          </button>
+        </div>
+      ) : null}
       {open ? (
         <div className="mt-2 space-y-2 border-t border-line pt-2">
           <p className="text-xs text-muted">
