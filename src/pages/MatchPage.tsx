@@ -360,7 +360,7 @@ export default function MatchPage() {
         </div>
 
         <aside className="space-y-3">
-          {view.coach ? <Coaching view={view} onDone={() => void refreshMatch.current?.()} /> : null}
+          {view.coach ? <Coaching key={fx.id} view={view} onDone={() => void refreshMatch.current?.()} /> : null}
           <section className="panel p-3">
             <h2 className="panel-title mb-2">Statistics</h2>
             <Stats st={st} view={view} />
@@ -612,24 +612,53 @@ function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: Mat
   );
 }
 
+type CommandStance = "defend" | "balanced" | "attack";
+type AcceptedCommand = { stance: CommandStance; fromMinute: number; used: number; max: number };
+
+function commandStance(s: string): CommandStance | null {
+  return s === "defend" || s === "balanced" || s === "attack" ? s : null;
+}
+
+function stanceLabel(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
 function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
   const c = view.coach!;
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [accepted, setAccepted] = useState<AcceptedCommand | null>(null);
   const now = useNow(1000);
-  const left = c.max - c.used;
+  // The accepted response is the usage truth until a snapshot has used at least that many.
+  // A failed refresh never arrives; a stale one must not put the spent command back.
+  const caughtUp = !accepted || c.used >= accepted.used;
+  const used = caughtUp ? c.used : accepted.used;
+  const max = caughtUp ? c.max : accepted.max;
+  const left = max - used;
   const cooling = c.cooldownUntil > now;
   const ph = view.fixture.st?.ph;
   const open = ph && phaseInfo(view.fixture.st).live && ph !== "shootout";
-  async function send(s: "defend" | "balanced" | "attack") {
+  const queued = !caughtUp ? accepted.stance : c.pending ? commandStance(c.stance) : null;
+  const active = caughtUp && !c.pending ? commandStance(c.stance) : null;
+  // fromMinute belongs to the accepted command. A later snapshot can queue the same stance at a higher used count.
+  const queuedMinute = accepted && queued === accepted.stance && (!caughtUp || c.used === accepted.used) ? accepted.fromMinute : null;
+  const instruction = queued
+    ? `Queued: ${stanceLabel(queued)}${queuedMinute == null ? "" : ` from ${minuteLabel(queuedMinute)}`}.`
+    : active
+      ? `Active: ${stanceLabel(active)}.`
+      : "";
+  async function send(s: CommandStance) {
     setBusy(true);
-    setMsg("");
+    setNote(null);
     try {
       const r = await footfiveApi.coaching(view.fixture.id, s);
-      setMsg(`${s[0].toUpperCase() + s.slice(1)} from ${minuteLabel(r.fromMinute)}.`);
+      if (!r.ok) throw new Error("Command failed");
+      const stance = commandStance(r.stance) ?? s;
+      setAccepted({ stance, fromMinute: r.fromMinute, used: r.used, max: r.max });
+      setNote({ tone: "ok", text: `${stanceLabel(stance)} accepted from ${minuteLabel(r.fromMinute)}.` });
       onDone();
     } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Command failed");
+      setNote({ tone: "err", text: err instanceof Error ? err.message : "Command failed" });
     } finally {
       setBusy(false);
     }
@@ -639,7 +668,7 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
       <div className="flex items-baseline justify-between">
         <h2 className="panel-title">Touchline</h2>
         <span className="text-xs text-muted tabular">
-          {left}/{c.max} commands left
+          {left}/{max} commands left
         </span>
       </div>
       {c.ai ? (
@@ -652,6 +681,16 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
         </p>
       ) : (
         <>
+          {note?.tone === "ok" ? (
+            <p className="mt-1 text-sm text-cyan" role="status" aria-live="polite" data-testid="coaching-feedback">
+              {note.text}
+            </p>
+          ) : null}
+          {note?.tone === "err" ? (
+            <p className="mt-1 text-sm text-amber" role="alert" data-testid="coaching-feedback">
+              {note.text}
+            </p>
+          ) : null}
           <p className="mt-1 text-xs text-muted" data-testid="coaching-hint">
             Attack opens up chances at both ends; Defend slows chances at both ends.
           </p>
@@ -660,20 +699,19 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
               <button
                 key={s}
                 type="button"
-                className={`btn-ghost !min-h-10 !px-1 text-xs ${c.stance === s ? "!border-cyan !bg-cyan/20 text-cyan" : ""}`}
-                disabled={busy || !open || left <= 0 || cooling || c.stance === s}
+                className={`btn-ghost !min-h-10 !px-1 text-xs ${active === s ? "!border-cyan !bg-cyan/20 text-cyan" : ""}`}
+                disabled={busy || !open || left <= 0 || cooling || active === s || queued === s}
                 onClick={() => send(s)}
-                aria-pressed={c.stance === s}
+                aria-pressed={active === s}
               >
                 {s}
               </button>
             ))}
           </div>
-          <p className="mt-2 text-xs text-muted">
-            {c.pending ? "Change queued — applies from the next minute. " : ""}
+          <p className="mt-2 text-xs text-muted" data-testid="coaching-state">
+            {instruction ? `${instruction} ` : ""}
             {cooling ? `Recharging: ${countdown(c.cooldownUntil - now)}. ` : ""}Commands affect future play only.
           </p>
-          {msg ? <p className="mt-1 text-sm text-cyan">{msg}</p> : null}
         </>
       )}
     </section>
