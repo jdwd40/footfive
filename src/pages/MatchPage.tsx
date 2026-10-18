@@ -8,7 +8,7 @@ import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
-import { countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
+import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
 import { startPolling } from "../lib/polling";
@@ -121,6 +121,9 @@ export default function MatchPage() {
   const [stay, setStay] = useState(false);
   const refreshMatch = useRef<(() => Promise<unknown>) | null>(null);
   const clockRef = useRef<{ clock: number | null; target: number | null; seq: number | null }>({ clock: null, target: null, seq: null });
+  // Display floor for this fixture visit. It outlives a HUD gap and is cleared only when the route fixture changes.
+  const clockHold = useRef<{ id: string; sec: number }>({ id: fixtureId, sec: 0 });
+  if (clockHold.current.id !== fixtureId) clockHold.current = { id: fixtureId, sec: 0 };
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
   const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
 
@@ -317,6 +320,12 @@ export default function MatchPage() {
 
   const fx = view.fixture;
   const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
+  const clockNow = serverNow();
+  // Ignore a render that still holds the previous fixture: that view must not seed the new visit.
+  if (fx.id === fixtureId && st && st.ph !== "shootout" && st.ph !== "finished") {
+    const raw = clockSeconds(st, shown.fixture.at, clockNow, fx.minuteMs);
+    if (raw != null && raw > clockHold.current.sec) clockHold.current.sec = raw;
+  }
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
   const current = replay ? null : ph?.cur;
   // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
@@ -363,7 +372,7 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} hud={st ? <Hud fx={shown.fixture} now={now} /> : null} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} hud={st ? <Hud fx={shown.fixture} now={clockNow} minSec={clockHold.current.sec} /> : null} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <CommentaryLine
@@ -422,7 +431,7 @@ export default function MatchPage() {
 }
 
 /** Broadcast-style strip on the pitch: score and clock as the lagged pitch shows them, plus the shootout score and who is kicking, so none of it is ever out of view with the play. Reads `shown` state only. */
-function Hud({ fx, now }: { fx: MatchView["fixture"]; now: number }) {
+function Hud({ fx, now, minSec }: { fx: MatchView["fixture"]; now: number; minSec: number }) {
   const st = fx.st!;
   const so = st.so;
   const kicker = st.ph === "shootout" && so?.next ? (so.next === "home" ? fx.home : fx.away) : null;
@@ -431,7 +440,7 @@ function Hud({ fx, now }: { fx: MatchView["fixture"]; now: number }) {
       <span className="tabular" data-testid="hud-score">
         {fx.home.abbreviation} {st.sc[0]}–{st.sc[1]} {fx.away.abbreviation}
       </span>
-      {st.ph === "shootout" ? null : <MatchClock fx={fx} now={now} />}
+      {st.ph === "shootout" ? null : <MatchClock fx={fx} now={now} minSec={minSec} />}
       {so ? (
         <span className="text-magenta" data-testid="hud-pens">
           PENS {so.h}–{so.a}

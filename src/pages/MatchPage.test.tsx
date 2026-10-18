@@ -98,6 +98,146 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("commentary").textContent).toBe("Current pass");
   });
 
+  it("holds the displayed clock across a lower snapshot and a server step back, then advances", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Whole-second fixtures: ignore the smoothed global offset. The browser proof covers the real offset.
+    const live = await import("../lib/live");
+    const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
+    try {
+      const now = Date.now();
+      const timed = (s: number, ph = "first_half") => ({ ...st!, ph, clk: { s, run: 1 as const } });
+      const pace = (v: MatchView) => {
+        v.fixture = { ...v.fixture, minuteMs: 60000 };
+        return v;
+      };
+      const clock = () => screen.getByLabelText("Match clock").textContent;
+      const { footfiveApi } = await import("../lib/pocketbase");
+      vi.mocked(footfiveApi.match).mockReset();
+      const first = { ...ev(1, now - 10000, "Opening"), st: timed(20) };
+      await mount(pace(view([first], null, now)));
+      expect(clock()).toBe("00:30");
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+      const lower = { ...ev(2, now - 6000, "Next"), st: timed(20) };
+      vi.mocked(footfiveApi.match).mockResolvedValue(pace(view([first, lower], null, now)));
+      await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 80)));
+      expect(clock()).toBe("00:30");
+      vi.setSystemTime(now - 2000);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(clock()).toBe("00:30");
+      vi.setSystemTime(now + 6000);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(clock()).toBe("00:32");
+    } finally {
+      serverClock.mockRestore();
+    }
+  }, 10000);
+
+  it("keeps the display floor while a late batch rewinds the playhead and while the HUD is absent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const live = await import("../lib/live");
+    const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
+    try {
+      const now = Date.now();
+      const timed = (s: number) => ({ ...st!, clk: { s, run: 1 as const } });
+      const pace = (v: MatchView) => {
+        v.fixture = { ...v.fixture, minuteMs: 60000 };
+        return v;
+      };
+      const clock = () => screen.getByLabelText("Match clock").textContent;
+      const old = { ...ev(1, now - 30000, "Old pass"), st: timed(10) };
+      const { footfiveApi } = await import("../lib/pocketbase");
+      const match = vi.mocked(footfiveApi.match);
+      match.mockReset();
+      match.mockResolvedValueOnce(pace(view([old], null, now)));
+      match.mockResolvedValueOnce(pace(view([old, { ...ev(2, now - 8000, "Late one"), st: timed(10) }, { ...ev(3, now - 4000, "Late three"), st: timed(10) }], null, now)));
+      await mount();
+      expect(clock()).toBe("00:40");
+      expect(screen.getByTestId("commentary").textContent).toBe("Old pass");
+      await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 100)));
+      expect(screen.getByTestId("commentary").textContent).toBe("Late one");
+      expect(clock()).toBe("00:40");
+      vi.setSystemTime(now - 40000);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.queryByLabelText("Match clock")).toBeNull();
+      vi.setSystemTime(now - 15000);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(clock()).toBe("00:40");
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+    } finally {
+      serverClock.mockRestore();
+    }
+  }, 15000);
+
+  it("lets a new fixture start on a lower clock and does not turn a missing clock into 00:00", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const live = await import("../lib/live");
+    const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
+    try {
+      const now = Date.now();
+      const timed = (s: number) => ({ ...st!, clk: { s, run: 1 as const } });
+      const { footfiveApi } = await import("../lib/pocketbase");
+      const { default: MatchPage } = await import("./MatchPage");
+      vi.mocked(footfiveApi.match).mockReset();
+      vi.mocked(footfiveApi.match).mockImplementation(async (id: string) => {
+        const at = id === "fx1" ? now - 20000 : now - 5000;
+        const s = id === "fx1" ? 10 : 5;
+        const v = view([{ ...ev(1, at, id === "fx1" ? "First" : "Second"), st: timed(s) }], null, now);
+        v.fixture = { ...v.fixture, id, minuteMs: 60000 };
+        return v;
+      });
+      await act(async () => {
+        render(
+          <MemoryRouter initialEntries={["/match/fx1"]}>
+            <Link to="/match/fx2">Switch fixture</Link>
+            <Routes>
+              <Route path="/match/:fixtureId" element={<MatchPage />} />
+            </Routes>
+          </MemoryRouter>,
+        );
+      });
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:30");
+      await act(async () => {
+        fireEvent.click(screen.getByText("Switch fixture"));
+      });
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:10");
+      cleanup();
+      const blank = view([ev(1, now - 3000, "No clock")], null, now);
+      blank.fixture = { ...blank.fixture, minuteMs: 60000 };
+      await mount(blank);
+      expect(screen.getByLabelText("Match clock").textContent).toBe("");
+    } finally {
+      serverClock.mockRestore();
+    }
+  });
+
+  it("seeds the visit floor from the synced clock, not the loading frame", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const live = await import("../lib/live");
+    let skew = 30000;
+    const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now() + skew);
+    try {
+      const { footfiveApi } = await import("../lib/pocketbase");
+      vi.mocked(footfiveApi.match).mockReset();
+      let release!: (v: MatchView) => void;
+      vi.mocked(footfiveApi.match).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+      await mount();
+      expect(screen.getByTestId("match-loading")).toBeTruthy();
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      const now = Date.now();
+      const opening = { ...ev(1, now - 10000, "Opening"), st: { ...st!, clk: { s: 20, run: 1 as const } } };
+      const v = view([opening], null, now);
+      v.fixture = { ...v.fixture, minuteMs: 60000 };
+      skew = 0;
+      await act(async () => { release(v); });
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:30");
+      vi.setSystemTime(now + 1000);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:31");
+    } finally {
+      serverClock.mockRestore();
+    }
+  }, 10000);
+
   it("drops SAVED once the save is over and does not resurrect it on a later pass", async () => {
     const { sceneFor } = await import("../domain/scenes");
     const now = Date.now();
