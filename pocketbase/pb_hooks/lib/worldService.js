@@ -1553,10 +1553,8 @@ function matchView($app, fixtureId, sinceSeq, userId, throughMs) {
   };
 }
 
-function numbered(p, i, all) {
-  var prior = 0;
-  for (var j = 0; j < i; j++) if (all[j].role === "gk" && all[j].is_starter) prior++;
-  return { name: p.name, role: p.role, is_starter: p.is_starter, no: p.role === "gk" && p.is_starter ? 1 : i + 2 - prior };
+function numbered(p, i) {
+  return { name: p.name, role: p.role, is_starter: p.is_starter, no: p.role === "gk" && p.is_starter ? 1 : i + 2 };
 }
 
 // ------------------------------------------------------------------ public scoreboard

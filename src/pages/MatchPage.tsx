@@ -583,8 +583,6 @@ function ShootoutBoard({ view, events }: { view: MatchView; events: MatchEvent[]
 function Stats({ st, view }: { st: PubState | null; view: MatchView }) {
   if (!st) return <p className="text-sm text-muted">Statistics appear at kick-off.</p>;
   const fx = view.fixture;
-  const published = st.clk?.s;
-  const earlyPossession = (st.ph === "pre" || st.ph === "first_half") && typeof published === "number" && Number.isFinite(published) && published < 60;
   return (
     <div className="space-y-1.5 text-sm" data-testid="stats">
       <div className="flex justify-between text-xs font-bold">
@@ -592,20 +590,14 @@ function Stats({ st, view }: { st: PubState | null; view: MatchView }) {
         <span className="text-muted">Possession</span>
         <Abbr team={fx.away} away />
       </div>
-      {earlyPossession ? (
-        <p className="text-xs text-muted">First minute</p>
-      ) : (
-        <>
-          <div className="flex h-2 overflow-hidden rounded-full bg-panel-2">
-            <div style={{ width: `${st.pos}%`, background: fx.home.primary_color }} />
-            <div style={{ width: `${100 - st.pos}%`, background: "#f4f7ff" }} />
-          </div>
-          <div className="flex justify-between tabular text-xs text-muted">
-            <span>{st.pos}%</span>
-            <span>{100 - st.pos}%</span>
-          </div>
-        </>
-      )}
+      <div className="flex h-2 overflow-hidden rounded-full bg-panel-2">
+        <div style={{ width: `${st.pos}%`, background: fx.home.primary_color }} />
+        <div style={{ width: `${100 - st.pos}%`, background: "#f4f7ff" }} />
+      </div>
+      <div className="flex justify-between tabular text-xs text-muted">
+        <span>{st.pos}%</span>
+        <span>{100 - st.pos}%</span>
+      </div>
       {STAT_ROWS.map(([label, i]) => (
         <div key={label} className="grid grid-cols-[2rem_1fr_2rem] items-center text-center tabular">
           <span className="font-bold">{st.x[0][i]}</span>
