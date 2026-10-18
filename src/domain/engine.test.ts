@@ -270,6 +270,42 @@ describe("market rules", () => {
     expect(mkt.settleFixtureBet("margin", "away3", res(0, 3, "away"))).toBe("won");
     expect(mkt.settleFixtureBet("margin", "home2", res(2, 2, "home"))).toBe("lost");
   });
+
+  it("offers a one-goal margin at the same cutoff and settles it with the existing rule", () => {
+    const sides = {
+      model: { lh: 0.02, la: 0.02 },
+      home: { name: "Home City", abbr: "HOM" },
+      away: { name: "Doge City", abbr: "DOG" },
+    };
+    const pre = mkt.fixtureMarkets({ status: "scheduled", kickoffAt: 1_000_000, ...sides }, null, 0, 0);
+    const offered = pre.markets.find((m: { key: string }) => m.key === "margin").sel;
+    expect(offered.map((s: { id: string }) => s.id)).toEqual(["home1", "home2", "home3", "away1", "away2", "away3"]);
+    for (const id of ["home1", "away1", "home2", "away3"]) {
+      const row = offered.find((s: { id: string }) => s.id === id);
+      expect(row.odds).toBeGreaterThanOrEqual(1.01);
+      expect(mkt.findSelection(pre, "margin", id)).toMatchObject({ odds: row.odds });
+    }
+    const late = mkt.fixtureMarkets(
+      { status: "live", kickoffAt: 0, ...sides },
+      { sc: [0, 3], ph: "second_half", x: [[], []], d: 0 },
+      90,
+      1,
+    );
+    const rare = late.markets.find((m: { key: string }) => m.key === "margin").sel;
+    const home1 = rare.find((s: { id: string }) => s.id === "home1");
+    const away3 = rare.find((s: { id: string }) => s.id === "away3");
+    expect(mkt.MIN_P).toBe(0.002);
+    expect(home1.odds).toBeNull();
+    expect(mkt.findSelection(late, "margin", "home1")).toEqual({ closed: "Selection unavailable" });
+    expect(away3.odds).toBeGreaterThanOrEqual(1.01);
+    expect(mkt.findSelection(late, "margin", "away3")).toMatchObject({ odds: away3.odds });
+    expect(mkt.settleFixtureBet("margin", "home1", res(1, 0, "home"))).toBe("won");
+    expect(mkt.settleFixtureBet("margin", "home1", res(2, 0, "home"))).toBe("lost");
+    expect(mkt.settleFixtureBet("margin", "home1", res(1, 1, "home"))).toBe("lost");
+    expect(mkt.settleFixtureBet("margin", "away1", res(0, 1, "away"))).toBe("won");
+    expect(mkt.settleFixtureBet("margin", "home2", res(3, 1, "home"))).toBe("won");
+    expect(mkt.settleFixtureBet("margin", "away3", res(0, 3, "away"))).toBe("won");
+  });
   it("next goal 'none' wins at full time with no further goal", () => {
     expect(mkt.settleFixtureBet("next_goal", "none", res(1, 0, "home"))).toBe("won");
     expect(mkt.settleFixtureBet("next_goal", "home", res(1, 0, "home"))).toBe("lost");

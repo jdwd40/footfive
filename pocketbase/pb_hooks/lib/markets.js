@@ -7,7 +7,7 @@
  *  exact       Final football score after extra time; shootout goals excluded.
  *  next_goal   Next goal after the bet is accepted (shootouts excluded); "none" wins if no
  *              further goal is scored in normal or extra time.
- *  margin      Team wins by exactly 2 / exactly 3 on the final football score (incl. extra
+ *  margin      Team wins by exactly 1, 2, or 3 on the final football score (incl. extra
  *              time, excl. shootout). A match decided on penalties has a margin of 0.
  *  round_first First team to score in the round (shootouts excluded). Refunded if the whole
  *              round has no eligible goal. Goals timed in the same millisecond: earlier fixture.
@@ -115,8 +115,10 @@ function fixtureMarkets(fx, st, minute, now) {
 
   var margins = [];
   [
+    ["home", 1],
     ["home", 2],
     ["home", 3],
+    ["away", 1],
     ["away", 2],
     ["away", 3],
   ].forEach(function (m) {
