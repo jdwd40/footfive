@@ -131,18 +131,28 @@ describe("My Team line-up starts exactly one goalkeeper", () => {
     expect(screen.queryByTestId("lineup-gk-warning")).not.toBeInTheDocument();
   });
 
-  it("keeps a rejected save's error and the warning for the unchanged saved line-up", async () => {
-    await mount(["g1", "o1", "o2", "o3", "g2"]);
-    vi.mocked(footfiveApi.saveMyLineup).mockRejectedValue(new Error("Starting five must include exactly one goalkeeper"));
+  it("keeps a rejected save editable, then clears the draft after a later success", async () => {
+    await mount(["g1", "o1", "o2", "o3", "g2"], ["g1", "o1", "o2", "o3", "o4"]);
+    vi.mocked(footfiveApi.saveMyLineup).mockRejectedValueOnce(new Error("Starting five must include exactly one goalkeeper"));
 
     await tap("g2", "o4");
     await userEvent.click(save());
 
     expect(await screen.findByTestId("team-msg")).toHaveTextContent("Starting five must include exactly one goalkeeper");
-    // As before, a failed save closes the draft; the unchanged saved five is still flagged.
-    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
-    expect(screen.getByTestId("lineup-gk-warning")).toHaveTextContent("Your saved line-up has 2 goalkeepers");
+    expect(save()).toHaveTextContent("Save line-up (5/5)");
+    expect(save()).toBeEnabled();
+    expect(screen.queryByTestId("lineup-gk-warning")).not.toBeInTheDocument();
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledWith(["g1", "o1", "o2", "o3", "o4"], ["g2", "o5"]);
     expect(footfiveApi.myTeam).toHaveBeenCalledTimes(1);
+
+    vi.mocked(footfiveApi.saveMyLineup).mockResolvedValueOnce({ ok: true });
+    await userEvent.click(save());
+
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(2);
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Line-up saved — applies from your next kick-off.");
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("lineup-gk-warning")).not.toBeInTheDocument();
   });
 });
 
@@ -729,5 +739,229 @@ describe("My Team action availability", () => {
     expect(screen.getByTestId("save-lineup")).toHaveTextContent("Save line-up (4/5)");
     expect(footfiveApi.world).toHaveBeenCalledTimes(1);
     expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+});
+
+describe("My Team line-up swaps and role groups", () => {
+  const namesIn = (groupId: string) =>
+    within(screen.getByTestId(`squad-group-${groupId}`)).getAllByRole("listitem").map((li) => li.textContent?.match(/Player [A-Z0-9]+/)?.[0]);
+
+  function lineupSquad(rows: Array<{ id: string; role: string; starter: boolean }>): Squad {
+    const base = squad(rows.filter((row) => row.starter).map((row) => row.id));
+    return {
+      ...base,
+      players: rows.map((row, i) => ({
+        id: row.id,
+        name: `Player ${row.id.toUpperCase()}`,
+        role: row.role,
+        attack: 50,
+        defence: 50,
+        energy: 100,
+        condition: 100,
+        intensity: "balanced",
+        is_starter: row.starter,
+        effective_attack: 50,
+        effective_defence: 50,
+        sort_order: i,
+        upgrade_cost: { attack: 10, defence: 10 },
+      })),
+    };
+  }
+
+  it("groups each role in roster order and leaves the saved starter order unchanged", async () => {
+    const rows = [
+      { id: "a2", role: "att", starter: true },
+      { id: "g1", role: "gk", starter: true },
+      { id: "u1", role: "util", starter: false },
+      { id: "d1", role: "def", starter: true },
+      { id: "m1", role: "mid", starter: true },
+      { id: "f1", role: "fwd", starter: false },
+      { id: "a1", role: "att", starter: false },
+      { id: "d2", role: "def", starter: true },
+      { id: "z1", role: "GK", starter: false },
+      { id: "m2", role: "mid", starter: false },
+    ];
+    const grouped = lineupSquad(rows);
+    await mountSquads(grouped, grouped);
+
+    expect(namesIn("gk")).toEqual(["Player G1"]);
+    expect(namesIn("def")).toEqual(["Player D1", "Player D2"]);
+    expect(namesIn("mid")).toEqual(["Player M1", "Player M2"]);
+    expect(namesIn("att")).toEqual(["Player A2", "Player A1"]);
+    expect(namesIn("other")).toEqual(["Player U1", "Player F1", "Player Z1"]);
+    expect(screen.getByTestId("squad-group-other")).toHaveTextContent("Utility / unknown");
+    for (const id of ["gk", "def", "mid", "att", "other"]) {
+      const group = screen.getByTestId(`squad-group-${id}`);
+      expect(group.tagName).toBe("SECTION");
+      expect(group.closest("li")).toBeNull();
+      expect(group.querySelector(":scope > ul > li")).not.toBeNull();
+    }
+    expect(screen.getByTestId("reserves-note")).toHaveTextContent("In-match substitutions are not active.");
+
+    await userEvent.click(chip("f1"));
+    const f1 = screen.getByText("Player F1").closest("li")!;
+    const prompt = within(f1).getByTestId("swap-prompt");
+    const nextRow = screen.getByText("Player Z1").closest("li")!;
+    expect(screen.getAllByTestId("swap-prompt")).toHaveLength(1);
+    expect(prompt).toHaveAttribute("role", "status");
+    expect(prompt).toHaveTextContent("Choose the starter Player F1 replaces.");
+    expect(within(f1).getByTestId("cancel-swap")).toHaveTextContent("Cancel swap");
+    expect(within(f1).getByTitle(/tap to start/).compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(prompt.compareDocumentPosition(nextRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("squad-group-other")).toContainElement(prompt);
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+    const m1 = screen.getByText("Player M1").closest("li")!;
+    await userEvent.click(within(m1).getByTitle("In the five — tap to replace"));
+    expect(screen.queryByTestId("swap-prompt")).not.toBeInTheDocument();
+    await userEvent.click(save());
+
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledWith(["a2", "g1", "d1", "f1", "d2"], ["u1", "m1", "a1", "z1", "m2"]);
+  });
+
+  it("keeps the default roster's within-group order and hides an empty attack group", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"]);
+
+    expect(namesIn("gk")).toEqual(["Player G1", "Player G2"]);
+    expect(namesIn("def")).toEqual(["Player O3"]);
+    expect(namesIn("mid")).toEqual(["Player O2", "Player O4"]);
+    expect(namesIn("other")).toEqual(["Player O1", "Player O5"]);
+    expect(screen.queryByTestId("squad-group-att")).not.toBeInTheDocument();
+  });
+
+  it("replaces one starter from a chosen reserve and posts that five once", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"], ["g1", "o1", "o5", "o3", "o4"]);
+
+    await userEvent.click(chip("o5"));
+    const o5 = screen.getByText("Player O5").closest("li")!;
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+    expect(within(o5).getByTestId("swap-prompt")).toHaveTextContent("Choose the starter Player O5 replaces. Nothing is saved until you save the line-up.");
+    expect(within(o5).getByTestId("swap-prompt")).toHaveAttribute("role", "status");
+    expect(chip("o5")).toHaveAttribute("aria-pressed", "true");
+    const o2 = screen.getByText("Player O2").closest("li")!;
+    expect(within(o2).getByTitle("In the five — tap to replace")).toHaveAttribute("aria-pressed", "true");
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+
+    await userEvent.click(within(o2).getByTitle("In the five — tap to replace"));
+
+    expect(screen.queryByTestId("swap-prompt")).not.toBeInTheDocument();
+    expect(chip("o5")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("o2")).toHaveAttribute("aria-pressed", "false");
+    expect(save()).toHaveTextContent("Save line-up (5/5)");
+    expect(save()).toBeEnabled();
+    await userEvent.click(save());
+
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledWith(["g1", "o1", "o5", "o3", "o4"], ["o2", "g2"]);
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Line-up saved — applies from your next kick-off.");
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+  });
+
+  it("changes or cancels the incoming reserve without writing a line-up", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"]);
+
+    await userEvent.click(chip("o5"));
+    await userEvent.click(chip("o5"));
+    expect(screen.queryByTestId("swap-prompt")).not.toBeInTheDocument();
+
+    await userEvent.click(chip("o5"));
+    await userEvent.click(chip("g2"));
+    expect(screen.getByTestId("swap-prompt")).toHaveTextContent("Player G2");
+    expect(screen.getByTestId("swap-prompt").textContent).not.toContain("Player O5");
+    expect(chip("g2")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("o5")).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(screen.getByTestId("cancel-swap"));
+    expect(screen.queryByTestId("swap-prompt")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+    expect(chip("g1")).toHaveAttribute("title", "In the five — tap to rest");
+    expect(chip("o5")).toHaveAttribute("title", "Reserve — tap to start");
+  });
+
+  it("keeps an invalid goalkeeper swap unsaved, then restores it on cancel", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"]);
+
+    await userEvent.click(chip("g2"));
+    const o4 = screen.getByText("Player O4").closest("li")!;
+    await userEvent.click(within(o4).getByTitle("In the five — tap to replace"));
+
+    expect(save()).toBeDisabled();
+    expect(screen.getByText("Only one goalkeeper can start — you have 2 in your five.")).toBeInTheDocument();
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+    await userEvent.click(save());
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("swap-prompt")).not.toBeInTheDocument();
+    expect(screen.queryByText(/goalkeeper can start|Include a goalkeeper/)).not.toBeInTheDocument();
+    expect(chip("o4")).toHaveAttribute("title", "In the five — tap to rest");
+    expect(chip("g2")).toHaveAttribute("title", "Reserve — tap to start");
+  });
+
+  it("lets a goalkeeper swap be corrected and then saved", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"], ["g1", "o1", "o2", "o3", "o5"]);
+
+    await userEvent.click(chip("g2"));
+    const o4 = screen.getByText("Player O4").closest("li")!;
+    await userEvent.click(within(o4).getByTitle("In the five — tap to replace"));
+    expect(save()).toBeDisabled();
+
+    await userEvent.click(chip("o5"));
+    const g2 = screen.getByText("Player G2").closest("li")!;
+    await userEvent.click(within(g2).getByTitle("In the five — tap to replace"));
+    expect(save()).toBeEnabled();
+    expect(screen.queryByText(/goalkeeper can start|Include a goalkeeper/)).not.toBeInTheDocument();
+    await userEvent.click(save());
+
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledWith(["g1", "o1", "o2", "o3", "o5"], ["o4", "g2"]);
+  });
+
+  it("says when a saved line-up could not be reloaded and does not post it again", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"]);
+    await tap("o4", "o5");
+    vi.mocked(footfiveApi.myTeam).mockRejectedValueOnce(new Error("refresh down"));
+    await userEvent.click(save());
+
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Line-up saved, but the squad could not refresh.");
+    expect(save()).toHaveTextContent("Save line-up (5/5)");
+    expect(chip("o5")).toHaveAttribute("title", "In the five — tap to rest");
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledWith(["g1", "o1", "o2", "o3", "o5"], ["o4", "g2"]);
+  });
+
+  it("keeps Full AI from saving a swap by itself and still says substitutions are inactive", async () => {
+    const ai = squad(["g1", "o1", "o2", "o3", "o4"]);
+    ai.team = { ...ai.team, mode: "ai" };
+    ai.aiRules = ["Picks the five fittest players."];
+    await mountSquads(ai, ai);
+
+    expect(screen.getByText("Full AI chooses the five each kick-off. Your saved line-up below is kept for when you switch back.")).toBeInTheDocument();
+    expect(screen.getByTestId("reserves-note")).toHaveTextContent("In-match substitutions are not active.");
+    await userEvent.click(chip("o5"));
+    expect(screen.getByTestId("swap-prompt")).toBeInTheDocument();
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeDisabled();
+  });
+
+  it("disables line-up chips while a save is in flight", async () => {
+    await mount(["g1", "o1", "o2", "o3", "o4"], ["g1", "o1", "o5", "o3", "o4"]);
+    let release!: (value: { ok: true }) => void;
+    vi.mocked(footfiveApi.saveMyLineup).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+
+    await userEvent.click(chip("o5"));
+    const o2 = screen.getByText("Player O2").closest("li")!;
+    await userEvent.click(within(o2).getByTitle("In the five — tap to replace"));
+    await userEvent.click(save());
+
+    expect(chip("g1")).toBeDisabled();
+    expect(screen.queryByTestId("cancel-swap")).not.toBeInTheDocument();
+    release({ ok: true });
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Line-up saved — applies from your next kick-off.");
+    expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
+    expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
   });
 });
