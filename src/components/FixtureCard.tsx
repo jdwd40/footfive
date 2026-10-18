@@ -67,7 +67,8 @@ export default function FixtureCard({
   const winner = finished ? (st?.win ?? fx.result?.winner ?? null) : null;
   const preKick = !st;
   const toKick = fx.kickoffAt - now;
-  const oddsOpen = !!fx.odds && !fx.odds.closed && !blocked;
+  const shootout = st?.ph === "shootout";
+  const oddsOpen = !!fx.odds && !fx.odds.closed && !blocked && !shootout;
   const hintId = useId();
   const unoffered = oddsOpen && (formatOdds(fx.odds?.home) == null || formatOdds(fx.odds?.away) == null);
 
@@ -136,15 +137,20 @@ export default function FixtureCard({
               type="button"
               className="btn-odds !min-h-10 !flex-row gap-2 px-3 text-xs"
               disabled={!oddsOpen || stale}
-              onClick={() => onBet(fx)}
+              onClick={() => {
+                if (!oddsOpen || stale) return;
+                onBet(fx);
+              }}
               aria-describedby={unoffered ? hintId : undefined}
-              title={blocked ? "You manage a team in this fixture" : fx.odds.closed || "Bet on this match"}
+              title={blocked ? "You manage a team in this fixture" : fx.odds.closed || (shootout ? "Prices hidden during penalties" : "Bet on this match")}
               data-testid="bet-fixture"
             >
               {blocked ? (
                 "Your match"
               ) : fx.odds.closed ? (
                 <span className="text-[11px] font-semibold">Suspended</span>
+              ) : shootout ? (
+                <span className="text-[11px] font-semibold">Penalties</span>
               ) : (
                 <>
                   <span className={formatOdds(fx.odds.home) ? "tabular" : "text-[11px] leading-tight"}>{selectionLabel(fx.odds.home, true)}</span>
