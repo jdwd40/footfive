@@ -174,6 +174,8 @@ export type MyBets = {
   settledStaked: number;
   settledReturned: number;
   net: number;
+  /** Sum of this user's open and locked stakes. Absent on a payload from before that field. */
+  pendingStaked?: number;
   topUp: { amount: number; floor: number; available: boolean; nextAt: number | null; rule: string };
 };
 

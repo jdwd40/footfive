@@ -230,3 +230,45 @@ describe("BettingPage prices", () => {
     expect(add).toHaveTextContent("15.04");
   });
 });
+
+describe("BettingPage wallet", () => {
+  beforeEach(() => {
+    h.live = liveWith([]);
+    vi.mocked(footfiveApi.wideMarkets).mockReset().mockResolvedValue(wide([]));
+    vi.mocked(footfiveApi.topUp).mockReset();
+  });
+
+  afterEach(() => cleanup());
+
+  function wallet(over: Partial<MyBets>): MyBets {
+    return { ...EMPTY_BETS, ...over };
+  }
+
+  it("shows a pending 50 beside a 950 balance and then the settled result", async () => {
+    vi.mocked(footfiveApi.myBets).mockReset().mockResolvedValue(wallet({ credits: 950, pendingStaked: 50, settledStaked: 0, settledReturned: 0, net: 0 }));
+    renderPage();
+    expect(await screen.findByTestId("wallet-balance")).toHaveTextContent("950");
+    expect(screen.getByTestId("wallet-pending").textContent).toBe("Pending stakes 50");
+    expect(screen.getByText("Settled bets in the latest 100 history")).toBeTruthy();
+    const box = screen.getByTestId("wallet");
+    expect(within(box).getByText("Settled stakes").parentElement).toHaveTextContent("0");
+    expect(within(box).getByText("Returned").parentElement).toHaveTextContent("0");
+    expect(within(box).getByText("Net").parentElement).toHaveTextContent("+0");
+    cleanup();
+    vi.mocked(footfiveApi.myBets).mockResolvedValue(wallet({ credits: 1050, pendingStaked: 0, settledStaked: 50, settledReturned: 100, net: 50 }));
+    renderPage();
+    expect(await screen.findByTestId("wallet-balance")).toHaveTextContent("1,050");
+    expect(screen.getByTestId("wallet-pending").textContent).toBe("Pending stakes 0");
+    const settled = screen.getByTestId("wallet");
+    expect(within(settled).getByText("Settled stakes").parentElement).toHaveTextContent("50");
+    expect(within(settled).getByText("Returned").parentElement).toHaveTextContent("100");
+    expect(within(settled).getByText("Net").parentElement).toHaveTextContent("+50");
+  });
+
+  it("shows an ellipsis when a legacy payload has no pending total", async () => {
+    vi.mocked(footfiveApi.myBets).mockReset().mockResolvedValue(EMPTY_BETS);
+    renderPage();
+    expect((await screen.findByTestId("wallet-pending")).textContent).toBe("Pending stakes …");
+    expect(screen.getByTestId("wallet-balance")).toHaveTextContent("1,000");
+  });
+});
