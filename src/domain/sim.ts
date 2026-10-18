@@ -91,13 +91,18 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
 }
 
-/** Result badges that outlive their scene: SAVED!, WOODWORK, WIDE/OVER/BLOCKED and every shootout reveal stay 2.5 s (real ms, however short the new scene) into the next one. Match goals have the banner, cards their own type-specific text. */
-const LINGER_MS = 2500;
+/** Result badges that outlive their scene: SAVED!, WOODWORK, WIDE/OVER/BLOCKED and every shootout reveal stay 2.5 s (real ms) after that scene ends, and only into a next scene that actually starts inside that window. Match goals have the banner, cards their own type-specific text. */
+export const LINGER_MS = 2500;
 /** WON IT stays this long (real ms, into the winner's dwell) from the moment the challenge winner has the ball. */
 export const WON_MS = 1500;
 const LINGERING = new Set(["save", "wood", "miss", "over", "block"]);
 function lingers(prev: Scene | undefined, scene: Scene, t: number) {
   return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || LINGERING.has(prev.flash));
+}
+
+/** Small result chips only. A goal, celebration or card keeps its own flash for the whole scene. */
+function transientFlash(scene: Scene): boolean {
+  return !!scene.flash && (scene.type === "shootout_kick" || LINGERING.has(scene.flash));
 }
 
 /** Dwell choreography: the carrier jogs on and lays the ball off to a mate every cycle, so a wait between events reads as passing, not a long solo carry. */
@@ -201,7 +206,9 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       p.y += Math.cos(nowMs / IDLE_TAU + ph) * IDLE_AMP * 0.5;
     }
   }
-  const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : scene.flash ?? null;
+  const ownMs = elapsedMs != null ? elapsedMs : t * scene.ms;
+  const ownFlash = scene.flash && (!transientFlash(scene) || ownMs < scene.ms + LINGER_MS) ? scene.flash : null;
+  const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : ownFlash;
   const sinceWon = scene.won !== undefined ? (elapsedMs ?? t * scene.ms) - scene.won * scene.ms : -1;
   const won = scene.side && sinceWon >= 0 && sinceWon < WON_MS ? scene.side : null;
   // No ref actor: he trails play — ten behind the ball, and on the half of the pitch the ball is not on, sliding smoothly

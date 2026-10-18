@@ -444,8 +444,22 @@ describe("frameAt", () => {
     const sv = sceneFor(save, [70, 30], 15000)!;
     const pass: Scene = { key: "l-1", seq: save.seq + 1, type: "pass", ms: 1500, ball: [sv.ball[sv.ball.length - 1], [50, 32], [60, 32]], actors: [], caption: "" };
     const at = (elapsed: number, prev?: Scene) => frameAt(pass, elapsed / pass.ms, m.lineups, undefined, 0, undefined, prev).flash;
-    // Its own scene never drops it, however late the next event lands.
+    const badgeTailMs = 2500; // same window as sim LINGER_MS; local so this file still loads where that export does not exist yet
+    // Own scene keeps the chip for the same 2.5 s after it ends, then drops it. A 20 s gap must not leave SAVED up.
     expect(frameAt(sv, 1 + 2000 / sv.ms, m.lineups).flash).toBe("save");
+    expect(frameAt(sv, 1 + badgeTailMs / sv.ms, m.lineups).flash).toBeNull();
+    expect(frameAt(sv, 1 + 20000 / sv.ms, m.lineups).flash).toBeNull();
+    // Reduced motion and a replay tail hold t at 1; elapsedMs is the clock that expires the chip.
+    expect(frameAt(sv, 1, m.lineups, undefined, 0, undefined, undefined, sv.ms + 1000).flash).toBe("save");
+    expect(frameAt(sv, 1, m.lineups, undefined, 0, undefined, undefined, sv.ms + 900).flash).toBe("save");
+    expect(frameAt(sv, 1, m.lineups, undefined, 0, undefined, undefined, sv.ms + badgeTailMs).flash).toBeNull();
+    expect(frameAt(pass, 0, m.lineups).flash).toBeNull();
+    const goal: Scene = { ...sv, type: "goal", flash: "goal" };
+    const card: Scene = { ...sv, type: "red_card", flash: "card" };
+    const shootout: Scene = { ...sv, type: "shootout_kick", flash: "save" };
+    expect(frameAt(goal, 1 + 20000 / goal.ms, m.lineups).flash).toBe("goal");
+    expect(frameAt(card, 1 + 20000 / card.ms, m.lineups).flash).toBe("card");
+    expect(frameAt(shootout, 1 + 20000 / shootout.ms, m.lineups).flash).toBeNull();
     expect(at(0, sv)).toBe("save");
     expect(at(2400, sv)).toBe("save"); // past the 1.5 s pass's own end: the window is real ms, not scene progress
     expect(at(2500, sv)).toBeNull();
