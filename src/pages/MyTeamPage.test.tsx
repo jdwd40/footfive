@@ -6,7 +6,7 @@ import { footfiveApi, type WorldSnapshot } from "../lib/pocketbase";
 import MyTeamPage from "./MyTeamPage";
 
 vi.mock("../lib/pocketbase", () => ({
-  footfiveApi: { world: vi.fn(), myTeam: vi.fn(), commandCharge: vi.fn(), teamFinances: vi.fn(), saveMyLineup: vi.fn(), useBattery: vi.fn() },
+  footfiveApi: { world: vi.fn(), myTeam: vi.fn(), commandCharge: vi.fn(), teamFinances: vi.fn(), saveMyLineup: vi.fn(), useBattery: vi.fn(), spendCommandCharge: vi.fn() },
 }));
 vi.mock("../components/Layout", () => ({ default: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 
@@ -39,10 +39,10 @@ async function mount(saved: string[], afterSave = saved) {
 }
 
 /** First /my-team load, then what every reload after an action returns. */
-async function mountSquads(first: Squad, reloaded: Squad) {
+async function mountSquads(first: Squad, reloaded: Squad, charge = { points: 0, max: 5, nextPointInMs: 0 }) {
   vi.mocked(footfiveApi.world).mockResolvedValue({ managedTeam: team, nextFixture: null } as unknown as WorldSnapshot);
   vi.mocked(footfiveApi.myTeam).mockResolvedValueOnce(first).mockResolvedValue(reloaded);
-  vi.mocked(footfiveApi.commandCharge).mockResolvedValue({ points: 0, max: 5, nextPointInMs: 0 });
+  vi.mocked(footfiveApi.commandCharge).mockResolvedValue(charge);
   vi.mocked(footfiveApi.teamFinances).mockResolvedValue({ treasury: 500, entries: [] });
   vi.mocked(footfiveApi.saveMyLineup).mockResolvedValue({ ok: true });
   vi.mocked(footfiveApi.useBattery).mockResolvedValue({ ok: true });
@@ -307,5 +307,85 @@ describe("My Team battery availability reason", () => {
     expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
     expect(footfiveApi.myTeam).toHaveBeenCalledTimes(2);
     expect(footfiveApi.world).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("My Team management help", () => {
+  const FIVE = ["g1", "o1", "o2", "o3", "o4"];
+  const openRow = async (id: string) => {
+    const li = screen.getByText(`Player ${id.toUpperCase()}`).closest("li")!;
+    await userEvent.click(within(li).getByRole("button", { name: new RegExp(`Player ${id.toUpperCase()}`) }));
+    return li;
+  };
+
+  it("explains energy, condition and the actions from an older payload, and keeps the 1 and 2 costs", async () => {
+    await mountSquads(squad(FIVE), squad(FIVE), { points: 1, max: 5, nextPointInMs: 0 });
+    const scan = screen.getByRole("button", { name: "Tactical scan (1)" });
+    const overclock = screen.getByRole("button", { name: "Overclock (2)" });
+    expect(scan).toBeEnabled();
+    expect(overclock).toBeDisabled();
+    await userEvent.click(screen.getByText("What do these do?"));
+    expect(screen.getByTestId("scan-help").textContent).toMatch(/Tactical scan \(1 Charge\)/);
+    expect(screen.getByTestId("scan-help").textContent).toMatch(/no boost/);
+    expect(screen.getByTestId("overclock-help").textContent).toMatch(/five who actually start/);
+    expect(screen.getByTestId("overclock-help").textContent).toMatch(/an energy cost/);
+    expect(screen.queryByText(/approxAttack|Team strength about/)).toBeNull();
+    const li = await openRow("o1");
+    await userEvent.click(within(li).getByText("Why these numbers?"));
+    expect(within(li).queryByTestId("stat-breakdown")).toBeNull();
+    expect(within(li).getByTestId("energy-help").textContent).toMatch(/recovers automatically/);
+    expect(within(li).getByTestId("condition-help").textContent).toMatch(/Repair restores it/);
+    expect(within(li).getByTestId("estimate-help").textContent).toMatch(/chance tempo/);
+    expect(within(li).getByTestId("estimate-help").textContent).toMatch(/individual ATK\/DEF/);
+    expect(within(li).getByTestId("stat-help").textContent).not.toMatch(/NaN|undefined/);
+    expect(screen.getByTestId("charge-help").textContent).not.toMatch(/NaN|undefined/);
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+
+  it("shows the server factors and uses the server Charge costs for the labels and the disable checks", async () => {
+    const base = squad(FIVE, { energy: { o1: 64 } });
+    const explained = {
+      ...base,
+      managementHelp: { overclockBonus: 1.2, overclockEnergyCost: 9, overclockChargeCost: 3, tacticalScanChargeCost: 2 },
+      players: base.players.map((p) => p.id === "o1"
+        ? {
+          ...p,
+          condition: 23,
+          effective_attack: 31.2,
+          effective_defence: 28.4,
+          effective_modifiers: {
+            base: { attack: 50, defence: 50 },
+            role: { attack: 0.85, defence: 0.85 },
+            intensity: { attack: 1, defence: 1 },
+            energy: 0.874,
+            condition: 0.7305,
+            overclock: 1.12,
+          },
+        }
+        : p),
+    };
+    await mountSquads(explained, explained, { points: 2, max: 5, nextPointInMs: 0 });
+    expect(screen.getByRole("button", { name: "Tactical scan (2)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Overclock (3)" })).toBeDisabled();
+    await userEvent.click(screen.getByText("What do these do?"));
+    expect(screen.getByTestId("overclock-help").textContent).toContain("×1.2 (+20%)");
+    expect(screen.getByTestId("overclock-help").textContent).toContain("9 energy");
+    expect(screen.getByTestId("scan-help").textContent).toContain("(2 Charge)");
+    expect(screen.queryByText(/Team strength about/)).toBeNull();
+    const li = await openRow("o1");
+    await userEvent.click(within(li).getByText("Why these numbers?"));
+    const table = within(li).getByTestId("stat-breakdown");
+    expect(table.textContent).toContain("Role (FWD)");
+    expect(table.textContent).toContain("×0.85");
+    expect(table.textContent).toContain("Energy 64%");
+    expect(table.textContent).toContain("Condition 23%");
+    expect(table.textContent).toContain("Overclock (armed)");
+    expect(table.textContent).toContain("×1.12");
+    expect(table.textContent).toContain("31.2");
+    expect(table.textContent).toContain("28.4");
+    expect(table.textContent).not.toMatch(/tactics/i);
+    expect(within(li).getByTestId("overclock-preview-help").textContent).toMatch(/kick-off by the five who actually start/);
+    expect(within(li).getByTestId("estimate-help").textContent).toMatch(/individual ATK\/DEF/);
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
   });
 });
