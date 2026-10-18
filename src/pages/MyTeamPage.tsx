@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import { Kit, TeamLabel } from "../components/Team";
 import { countdown, credits, ukTime, useNow } from "../lib/live";
-import { footfiveApi, type EffectiveModifiers, type ManagementHelp, type TeamPublic, type WorldSnapshot } from "../lib/pocketbase";
+import { footfiveApi, type EffectiveModifiers, type ManagementHelp, type TacticalScan, type TacticalScanReport, type TeamPublic, type WorldSnapshot } from "../lib/pocketbase";
 
 type Squad = Awaited<ReturnType<typeof footfiveApi.myTeam>>;
 type Player = Squad["players"][number];
@@ -32,6 +32,74 @@ function helpFrom(h: ManagementHelp | undefined): ManagementHelp | null {
 /** Display only. Server factors stay exact; this trims binary noise such as 0.7130000000000001. */
 function times(n: number): string {
   return `×${Number(n.toFixed(4))}`;
+}
+
+type SavedScan = { id: string; fixtureId: string; report: TacticalScanReport; created: string };
+type ShownScan = { id: string | null; report: TacticalScanReport; created: string | null };
+
+function snapshotReport(value: unknown): TacticalScanReport | null {
+  if (!value || typeof value !== "object") return null;
+  const r = value as Record<string, unknown>;
+  return {
+    teamName: typeof r.teamName === "string" ? r.teamName : "",
+    grade: typeof r.grade === "string" ? r.grade : "",
+    approxAttack: typeof r.approxAttack === "number" ? r.approxAttack : Number.NaN,
+    approxDefence: typeof r.approxDefence === "number" ? r.approxDefence : Number.NaN,
+    energyRange: r.energyRange as TacticalScanReport["energyRange"],
+    conditionRange: r.conditionRange as TacticalScanReport["conditionRange"],
+    confidence: typeof r.confidence === "string" ? r.confidence : "",
+  };
+}
+
+function sameReport(a: TacticalScanReport, b: TacticalScanReport): boolean {
+  return a.teamName === b.teamName
+    && a.grade === b.grade
+    && a.approxAttack === b.approxAttack
+    && a.approxDefence === b.approxDefence
+    && a.confidence === b.confidence
+    && JSON.stringify(a.energyRange) === JSON.stringify(b.energyRange)
+    && JSON.stringify(a.conditionRange) === JSON.stringify(b.conditionRange);
+}
+
+/** Server order, at most the five the GET already limited. Incomplete rows are skipped. */
+function savedFrom(data: { scans?: TacticalScan[] } | null): SavedScan[] {
+  if (!data || !Array.isArray(data.scans)) return [];
+  const out: SavedScan[] = [];
+  for (const row of data.scans) {
+    const report = snapshotReport(row?.report);
+    if (!report || typeof row?.id !== "string") continue;
+    out.push({
+      id: row.id,
+      fixtureId: typeof row.fixtureId === "string" ? row.fixtureId : "",
+      report,
+      created: typeof row.created === "string" ? row.created : "",
+    });
+    if (out.length === 5) break;
+  }
+  return out;
+}
+
+function statText(n: number): string {
+  return typeof n === "number" && Number.isFinite(n) ? String(n) : "unavailable";
+}
+
+/** Reversed or malformed ranges stay unavailable. The client does not swap or clamp them. */
+function rangeText(range: unknown): string {
+  if (!Array.isArray(range) || range.length !== 2) return "unavailable";
+  const [lo, hi] = range;
+  if (typeof lo !== "number" || typeof hi !== "number" || !Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) return "unavailable";
+  return `${lo}–${hi}%`;
+}
+
+function createdLabel(created: string | null): string | null {
+  if (!created) return null;
+  const parsed = Date.parse(created.includes("T") ? created : created.replace(" ", "T"));
+  if (!Number.isFinite(parsed)) return "time unavailable";
+  const d = new Date(parsed);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${hh}:${mm} UTC`;
 }
 
 export default function MyTeamPage() {
@@ -120,6 +188,12 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null); // starter ids while editing
+  const [savedScans, setSavedScans] = useState<SavedScan[]>([]);
+  const [shownScan, setShownScan] = useState<ShownScan | null>(null);
+  const [scanNote, setScanNote] = useState<string | null>(null);
+  // Matches a purchase to its saved row. Never rendered.
+  const purchaseMatch = useRef<{ fixtureId: string; report: TacticalScanReport } | null>(null);
+  const scanGen = useRef(0);
   const now = useNow(1000);
 
   const load = useCallback(async () => {
@@ -132,6 +206,65 @@ function Manage({ world }: { world: WorldSnapshot }) {
   useEffect(() => {
     load().catch((err) => setMsg({ ok: false, text: err instanceof Error ? err.message : "Load failed" }));
   }, [load]);
+
+  const refreshScans = useCallback(async () => {
+    const token = ++scanGen.current;
+    try {
+      const data = await footfiveApi.tacticalScans();
+      if (token !== scanGen.current) return;
+      const list = savedFrom(data);
+      setSavedScans(list);
+      setScanNote(null);
+      setShownScan((cur) => {
+        const pending = purchaseMatch.current;
+        if (!cur || cur.id || !pending || pending.fixtureId === "") return cur;
+        const match = list.find((s) => s.fixtureId === pending.fixtureId && sameReport(s.report, pending.report));
+        if (!match) return cur;
+        return { id: match.id, report: pending.report, created: match.created || null };
+      });
+    } catch (err) {
+      if (token !== scanGen.current) return;
+      setScanNote(err instanceof Error ? err.message : "Could not load saved scans");
+    }
+  }, []);
+  useEffect(() => {
+    void refreshScans();
+  }, [refreshScans]);
+
+  async function buyScan() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await footfiveApi.spendCommandCharge("tactical_scan");
+      const report = snapshotReport(res.report);
+      if (!res.ok || !report) throw new Error("Scan did not return a report");
+      scanGen.current += 1;
+      purchaseMatch.current = { fixtureId: typeof res.fixtureId === "string" ? res.fixtureId : "", report };
+      setShownScan({ id: null, report, created: null });
+      setScanNote(null);
+      try {
+        await load();
+        setMsg({ ok: true, text: "Tactical scan ready." });
+      } catch {
+        setMsg({ ok: false, text: "Saved the scan, but the squad could not refresh." });
+      }
+      await refreshScans();
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : "Action failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function selectSaved(s: SavedScan) {
+    purchaseMatch.current = null;
+    setShownScan({ id: s.id, report: s.report, created: s.created || null });
+  }
+
+  function clearScan() {
+    purchaseMatch.current = null;
+    setShownScan(null);
+  }
 
   async function run(fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string)) {
     setBusy(true);
@@ -329,7 +462,7 @@ function Manage({ world }: { world: WorldSnapshot }) {
               <div className="h-full bg-gradient-to-r from-cyan to-magenta" style={{ width: `${(cc.points / Math.max(cc.max, 1)) * 100}%` }} />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < scanCost} onClick={() => run(() => footfiveApi.spendCommandCharge("tactical_scan"), "Tactical scan ready.")}>
+              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < scanCost} onClick={() => void buyScan()}>
                 Tactical scan ({scanCost})
               </button>
               <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < overclockCost || t.overclock_ready} onClick={() => run(() => footfiveApi.spendCommandCharge("overclock"), "Overclock armed for your next kick-off.")}>
@@ -347,6 +480,57 @@ function Manage({ world }: { world: WorldSnapshot }) {
                 {overclockBonus != null ? `effective ATK/DEF ×${overclockBonus} (+${Number(((overclockBonus - 1) * 100).toFixed(1))}%)` : "a boost to effective ATK/DEF"}. At that kick-off each of the five who actually start pays {overclockEnergy != null ? `${overclockEnergy} energy` : "an energy cost"}. Arming does not spend that energy, and it does not change a match already being played.
               </p>
             </details>
+            <div className="mt-2 text-xs" data-testid="scan-reports">
+              <h3 className="font-semibold text-white">Tactical scans</h3>
+              {shownScan ? (
+                <div data-testid="scan-report" className="mt-1 rounded-lg border border-line p-2">
+                  <p className="font-semibold text-white">
+                    {shownScan.report.teamName || "Opponent unavailable"}{" "}
+                    <span className="font-normal text-muted">Grade {shownScan.report.grade || "unavailable"}</span>
+                  </p>
+                  <p>
+                    Approx attack {statText(shownScan.report.approxAttack)} · Approx defence {statText(shownScan.report.approxDefence)}
+                  </p>
+                  <p>
+                    Energy {rangeText(shownScan.report.energyRange)} · Condition {rangeText(shownScan.report.conditionRange)}
+                  </p>
+                  <p>
+                    Confidence {shownScan.report.confidence || "unavailable"}
+                    {createdLabel(shownScan.created) ? ` · ${createdLabel(shownScan.created)}` : ""}
+                  </p>
+                  <p className="text-muted">Reports are snapshots taken at purchase and do not update live.</p>
+                  <button type="button" className="btn-ghost mt-1 !min-h-9 text-[11px]" onClick={clearScan}>
+                    Hide report
+                  </button>
+                </div>
+              ) : null}
+              {savedScans.length > 0 ? (
+                <ul data-testid="scan-list" className="mt-2 space-y-1">
+                  {savedScans.map((s) => (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        aria-pressed={shownScan?.id === s.id}
+                        className={`btn-ghost !min-h-9 w-full text-left text-[11px] ${shownScan?.id === s.id ? "!border-cyan text-cyan" : ""}`}
+                        onClick={() => selectSaved(s)}
+                      >
+                        {s.report.teamName || "Opponent unavailable"} · Grade {s.report.grade || "unavailable"}
+                        {createdLabel(s.created) ? ` · ${createdLabel(s.created)}` : ""}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {!shownScan && savedScans.length === 0 && !scanNote ? <p data-testid="scan-empty">No saved tactical scans.</p> : null}
+              {scanNote ? (
+                <p data-testid="scan-error" role="alert" className="mt-2 text-amber">
+                  {scanNote}{" "}
+                  <button type="button" className="btn-ghost !min-h-9 text-[11px]" onClick={() => void refreshScans()}>
+                    Retry
+                  </button>
+                </p>
+              ) : null}
+            </div>
           </section>
 
           <section className="panel p-4">

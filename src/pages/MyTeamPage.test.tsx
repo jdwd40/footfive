@@ -1,12 +1,12 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { footfiveApi, type WorldSnapshot } from "../lib/pocketbase";
+import { footfiveApi, type TacticalScan, type TacticalScanReport, type WorldSnapshot } from "../lib/pocketbase";
 import MyTeamPage from "./MyTeamPage";
 
 vi.mock("../lib/pocketbase", () => ({
-  footfiveApi: { world: vi.fn(), myTeam: vi.fn(), commandCharge: vi.fn(), teamFinances: vi.fn(), saveMyLineup: vi.fn(), useBattery: vi.fn(), spendCommandCharge: vi.fn() },
+  footfiveApi: { world: vi.fn(), myTeam: vi.fn(), commandCharge: vi.fn(), teamFinances: vi.fn(), saveMyLineup: vi.fn(), useBattery: vi.fn(), spendCommandCharge: vi.fn(), tacticalScans: vi.fn() },
 }));
 vi.mock("../components/Layout", () => ({ default: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 
@@ -38,14 +38,20 @@ async function mount(saved: string[], afterSave = saved) {
   await mountSquads(squad(saved), squad(afterSave));
 }
 
-/** First /my-team load, then what every reload after an action returns. */
-async function mountSquads(first: Squad, reloaded: Squad, charge = { points: 0, max: 5, nextPointInMs: 0 }) {
+/** First /my-team load, then what every reload after an action returns. Saved scans stay off this load. */
+async function mountSquads(
+  first: Squad,
+  reloaded: Squad,
+  charge = { points: 0, max: 5, nextPointInMs: 0 },
+  scans: () => Promise<{ scans: TacticalScan[] }> = async () => ({ scans: [] }),
+) {
   vi.mocked(footfiveApi.world).mockResolvedValue({ managedTeam: team, nextFixture: null } as unknown as WorldSnapshot);
   vi.mocked(footfiveApi.myTeam).mockResolvedValueOnce(first).mockResolvedValue(reloaded);
   vi.mocked(footfiveApi.commandCharge).mockResolvedValue(charge);
   vi.mocked(footfiveApi.teamFinances).mockResolvedValue({ treasury: 500, entries: [] });
   vi.mocked(footfiveApi.saveMyLineup).mockResolvedValue({ ok: true });
   vi.mocked(footfiveApi.useBattery).mockResolvedValue({ ok: true });
+  vi.mocked(footfiveApi.tacticalScans).mockImplementation(scans);
   render(<MemoryRouter><MyTeamPage /></MemoryRouter>);
   await screen.findByText("Player G1");
 }
@@ -387,5 +393,186 @@ describe("My Team management help", () => {
     expect(within(li).getByTestId("overclock-preview-help").textContent).toMatch(/kick-off by the five who actually start/);
     expect(within(li).getByTestId("estimate-help").textContent).toMatch(/individual ATK\/DEF/);
     expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+});
+
+describe("My Team tactical scan reports", () => {
+  const FIVE = ["g1", "o1", "o2", "o3", "o4"];
+  const CHARGE = { points: 5, max: 5, nextPointInMs: 0 };
+
+  function report(teamName: string, approxAttack: number, extra: Partial<TacticalScanReport> = {}): TacticalScanReport {
+    return {
+      teamName,
+      grade: "A",
+      approxAttack,
+      approxDefence: 48,
+      energyRange: [40, 80],
+      conditionRange: [30, 31],
+      confidence: "medium",
+      ...extra,
+    };
+  }
+  function row(id: string, teamName: string, approxAttack: number, created: string, fixtureId = `fx-${id}`, extra: Partial<TacticalScanReport> = {}): TacticalScan {
+    return { id, fixtureId, created, report: report(teamName, approxAttack, extra) };
+  }
+
+  it("shows a saved report without spending, in server order, and keeps a reversed range unavailable", async () => {
+    const scans = [
+      row("s1", "First Side", 61, "2026-10-18 15:04:00.000Z"),
+      row("s2", "Second Side", 62, "2026-10-17 15:04:00.000Z"),
+      row("s3", "Third Side", 63, "2026-10-19 15:04:00.000Z"),
+      row("s4", "Fourth Side", 64, "2026-10-16 15:04:00.000Z", "fx-s4", { energyRange: "bad" as unknown as TacticalScanReport["energyRange"] }),
+      row("s5", "Fifth Side", 65, "2026-10-15 15:04:00.000Z", "fx-s5", { energyRange: [80, 20] }),
+    ];
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE, async () => ({ scans }));
+
+    const list = screen.getByTestId("scan-list");
+    const labels = within(list).getAllByRole("button").map((b) => b.textContent || "");
+    expect(labels.map((label) => label.slice(0, 6))).toEqual(["First ", "Second", "Third ", "Fourth", "Fifth "]);
+    expect(list.textContent).toContain("18 Oct 2026, 15:04 UTC");
+    expect(list.textContent).not.toContain("fx-s1");
+    await userEvent.click(within(list).getByRole("button", { name: /Fifth Side/ }));
+    const panel = screen.getByTestId("scan-report");
+    expect(panel).toHaveTextContent("Fifth Side");
+    expect(panel).toHaveTextContent("Grade A");
+    expect(panel).toHaveTextContent("Approx attack 65");
+    expect(panel).toHaveTextContent("Approx defence 48");
+    expect(panel).toHaveTextContent("Energy unavailable");
+    expect(panel).toHaveTextContent("Condition 30–31%");
+    expect(panel).toHaveTextContent("Reports are snapshots taken at purchase and do not update live.");
+    expect(screen.getByTestId("scan-reports")).toHaveTextContent("Tactical scans");
+    expect(panel).toHaveTextContent("Confidence medium");
+    expect(panel.textContent).not.toMatch(/80\s*[–-]\s*20|20\s*[–-]\s*80/);
+    expect(panel.textContent).not.toContain("fx-s5");
+    await userEvent.click(within(list).getByRole("button", { name: /Fourth Side/ }));
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Energy unavailable");
+    expect(screen.getByTestId("scan-report").textContent).not.toContain("bad");
+    expect(document.body.textContent).not.toContain("fx-s5");
+    await userEvent.click(within(list).getByRole("button", { name: /First Side/ }));
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Energy 40–80%");
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Condition 30–31%");
+    await userEvent.click(within(screen.getByTestId("scan-report")).getByRole("button", { name: "Hide report" }));
+    expect(screen.queryByTestId("scan-report")).not.toBeInTheDocument();
+    expect(screen.getByTestId("scan-list").textContent).toContain("Fifth Side");
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+
+  it("switches the displayed snapshot only when a saved row is chosen", async () => {
+    const alpha = row("a", "Alpha", 21, "2026-10-18 10:00:00.000Z");
+    const bravo = row("b", "Bravo", 22, "2026-10-18 11:00:00.000Z");
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE, async () => ({ scans: [alpha, bravo] }));
+    await userEvent.click(screen.getByRole("button", { name: /Bravo/ }));
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Approx attack 22");
+    await userEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Approx attack 21");
+    expect(screen.getByTestId("scan-report")).not.toHaveTextContent("Approx attack 22");
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+
+  it("shows the purchased snapshot when the squad reload fails, and does not buy it again", async () => {
+    const bought = report("Just Bought", 77);
+    vi.mocked(footfiveApi.spendCommandCharge).mockResolvedValue({ ok: true, action: "tactical_scan", fixtureId: "hidden-fixture", report: bought });
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE);
+    vi.mocked(footfiveApi.myTeam).mockRejectedValueOnce(new Error("reload down"));
+    await userEvent.click(screen.getByRole("button", { name: "Tactical scan (1)" }));
+    const panel = await screen.findByTestId("scan-report");
+    expect(panel).toHaveTextContent("Just Bought");
+    expect(panel).toHaveTextContent("Approx attack 77");
+    expect(panel.textContent).not.toContain("hidden-fixture");
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Saved the scan, but the squad could not refresh.");
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledWith("tactical_scan");
+    expect(screen.getByTestId("scan-reports").textContent?.match(/Approx attack 77/g)).toHaveLength(1);
+  });
+
+  it("keeps the purchased snapshot when an older or different saved list arrives", async () => {
+    let releaseOld!: (value: { scans: TacticalScan[] }) => void;
+    const oldList = new Promise<{ scans: TacticalScan[] }>((resolve) => { releaseOld = resolve; });
+    let calls = 0;
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE, () => {
+      calls += 1;
+      if (calls === 1) return oldList;
+      return Promise.resolve({
+        scans: [row("new", "Just Bought", 99, "2026-10-18 16:00:00.000Z", "hidden-fixture"), row("old", "Old Side", 11, "2026-10-17 16:00:00.000Z")],
+      });
+    });
+    vi.mocked(footfiveApi.spendCommandCharge).mockResolvedValue({
+      ok: true,
+      action: "tactical_scan",
+      fixtureId: "hidden-fixture",
+      report: report("Just Bought", 77),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Tactical scan (1)" }));
+    const attackField = (node: HTMLElement) => node.textContent?.match(/Approx attack \d+/)?.[0];
+    const panel = await screen.findByTestId("scan-report");
+    expect(attackField(panel)).toBe("Approx attack 77");
+    const oldRow = await screen.findByRole("button", { name: /Old Side/ });
+    await userEvent.click(oldRow);
+    expect(attackField(screen.getByTestId("scan-report"))).toBe("Approx attack 11");
+    await act(async () => {
+      releaseOld({ scans: [row("old", "Old Side", 1, "2026-10-17 16:00:00.000Z")] });
+      await Promise.resolve();
+    });
+    expect(footfiveApi.tacticalScans).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Old Side");
+    expect(attackField(screen.getByTestId("scan-report"))).toBe("Approx attack 11");
+    expect(screen.getByTestId("scan-list").textContent?.indexOf("Just Bought")).toBeLessThan(screen.getByTestId("scan-list").textContent?.indexOf("Old Side") ?? -1);
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("hidden-fixture");
+  });
+
+  it("shows a scan-list error with retry and still lets a battery action finish", async () => {
+    let calls = 0;
+    await mountSquads(
+      squad(FIVE, { energy: { o1: 50 }, batteries: 2 }),
+      squad(FIVE, { energy: { o1: 90 }, batteries: 1 }),
+      CHARGE,
+      () => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(new Error("list down"));
+        return Promise.resolve({ scans: [] });
+      },
+    );
+    expect(await screen.findByTestId("scan-error")).toHaveTextContent("list down");
+    expect(screen.queryByTestId("team-msg")).not.toBeInTheDocument();
+    const li = screen.getByText("Player O1").closest("li")!;
+    await userEvent.click(within(li).getByRole("button", { name: /Player O1/ }));
+    await userEvent.click(within(li).getByRole("button", { name: "Battery (up to +40)" }));
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Battery used on Player O1 (up to +40) — energy now 90%.");
+    expect(footfiveApi.useBattery).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByTestId("scan-error")).not.toBeInTheDocument());
+    expect(screen.getByTestId("scan-empty")).toHaveTextContent("No saved tactical scans.");
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+    expect(footfiveApi.tacticalScans).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the purchased snapshot when the saved-list request fails, and retry does not buy again", async () => {
+    let calls = 0;
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE, () => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve({ scans: [] });
+      if (calls === 2) return Promise.reject(new Error("list down"));
+      return Promise.resolve({ scans: [row("new", "Just Bought", 77, "2026-10-18 16:00:00.000Z", "hidden-fixture")] });
+    });
+    vi.mocked(footfiveApi.spendCommandCharge).mockResolvedValue({
+      ok: true,
+      action: "tactical_scan",
+      fixtureId: "hidden-fixture",
+      report: report("Just Bought", 77),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Tactical scan (1)" }));
+    expect(await screen.findByTestId("scan-report")).toHaveTextContent("Approx attack 77");
+    expect(await screen.findByTestId("scan-error")).toHaveTextContent("list down");
+    expect(screen.getByTestId("team-msg")).toHaveTextContent("Tactical scan ready.");
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByTestId("scan-error")).not.toBeInTheDocument());
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Approx attack 77");
+    expect(screen.getByTestId("scan-reports").textContent?.match(/Approx attack 77/g)).toHaveLength(1);
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("18 Oct 2026, 16:00 UTC");
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("hidden-fixture");
   });
 });

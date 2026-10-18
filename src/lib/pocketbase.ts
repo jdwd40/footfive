@@ -289,6 +289,50 @@ export type ManagementHelp = {
   tacticalScanChargeCost: number;
 };
 
+/** Opponent snapshot stored when a tactical scan is purchased. */
+export type TacticalScanReport = {
+  teamName: string;
+  grade: string;
+  approxAttack: number;
+  approxDefence: number;
+  energyRange: [number, number];
+  conditionRange: [number, number];
+  confidence: string;
+};
+
+/** One own row from GET /api/footfive/my-team/tactical-scan. fixtureId is for matching only. */
+export type TacticalScan = {
+  id: string;
+  fixtureId: string;
+  report: TacticalScanReport;
+  created: string;
+};
+
+/** Body of an accepted tactical_scan spend. The report is the purchase snapshot. */
+export type TacticalScanSpend = {
+  ok: true;
+  action: "tactical_scan";
+  report: TacticalScanReport;
+  fixtureId: string;
+};
+
+function spendCommandCharge(
+  action: "tactical_scan",
+  playerId?: string,
+  fixtureId?: string,
+): Promise<TacticalScanSpend>;
+function spendCommandCharge(
+  action: string,
+  playerId?: string,
+  fixtureId?: string,
+): Promise<Record<string, unknown>>;
+function spendCommandCharge(action: string, playerId?: string, fixtureId?: string): Promise<TacticalScanSpend | Record<string, unknown>> {
+  return api<TacticalScanSpend | Record<string, unknown>>("/api/footfive/command-charge/spend", {
+    method: "POST",
+    body: JSON.stringify({ action, playerId, fixtureId }),
+  });
+}
+
 export const footfiveApi = {
   serverTime: () => api<{ serverTime: string; serverTimeMs: number }>("/api/footfive/server-time"),
   live: () => api<LiveView>("/api/footfive/live"),
@@ -399,15 +443,9 @@ export const footfiveApi = {
       "/api/footfive/command-charge",
     ),
 
-  spendCommandCharge: (
-    action: string,
-    playerId?: string,
-    fixtureId?: string,
-  ) =>
-    api<Record<string, unknown>>("/api/footfive/command-charge/spend", {
-      method: "POST",
-      body: JSON.stringify({ action, playerId, fixtureId }),
-    }),
+  spendCommandCharge,
+
+  tacticalScans: () => api<{ scans: TacticalScan[] }>("/api/footfive/my-team/tactical-scan"),
 
   recordsOverview: () => api<Record<string, unknown>>("/api/footfive/records/overview"),
   recordsTeams: () =>
