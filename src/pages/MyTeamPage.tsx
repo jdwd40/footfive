@@ -828,7 +828,7 @@ function PlayerRow({
             ))}
           </div>
           <p className="text-xs text-muted" data-testid="intensity-hint">
-            Aggressive presses harder now but wears energy and condition faster. Passive saves fitness but gives up some immediate performance.
+            Aggressive presses harder now but leaves a little more space at the back and wears energy and condition faster. Passive saves fitness but gives up some immediate performance.
           </p>
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
             <button type="button" className="btn-ghost !min-h-9 !px-1 text-[11px]" disabled={busy} onClick={() => run(() => footfiveApi.upgradePlayer(p.id, "attack"), `${p.name} attack upgraded.`)}>

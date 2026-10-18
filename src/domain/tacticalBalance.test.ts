@@ -170,17 +170,21 @@ describe("stance tempo", () => {
 describe("intensity", () => {
   const player = (intensity: Intensity) => ({ attack: 70, defence: 70, role: "mid", energy: 100, condition: 100, intensity });
 
-  it("aggressive presses harder now, passive gives up immediate attack and some defence", () => {
+  it("aggressive presses harder now at a small defensive cost, passive gives up immediate attack and some defence", () => {
     const [p, b, a] = (["passive", "balanced", "aggressive"] as Intensity[]).map((i) => eff.effectivePlayerStats(player(i), {}));
     expect(a.attack).toBeGreaterThan(b.attack);
     expect(b.attack).toBeGreaterThan(p.attack);
-    expect(a.defence).toBe(b.defence);
+    // #157: aggressive gives up a little defence (0.95), so it is a trade rather than a free buff.
+    expect(a.defence).toBeLessThan(b.defence);
+    expect(a.defence).toBeCloseTo(b.defence * BALANCE.intensity.aggressive.defence, 0); // stats are rounded to 0.1
     expect(b.defence).toBeGreaterThan(p.defence);
     const own = (i: Intensity) => rates(side("subject", { intensity: i }), side("opp"));
     expect(own("aggressive").home).toBeGreaterThan(own("balanced").home);
     expect(own("passive").home).toBeLessThan(own("balanced").home);
-    // Fresh legs: no defensive cost at kick-off (the extra attack also wins a little more of the ball).
-    expect(own("aggressive").away).toBeLessThanOrEqual(own("balanced").away);
+    // #157: aggressive now concedes a little more at kick-off, but still nets more than it gives up.
+    const [ag, ba] = [own("aggressive"), own("balanced")];
+    expect(ag.away).toBeGreaterThan(ba.away);
+    expect(ag.home - ba.home).toBeGreaterThan(ag.away - ba.away);
     expect(own("passive").away).toBeGreaterThan(own("balanced").away);
   });
 

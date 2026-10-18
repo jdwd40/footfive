@@ -22,7 +22,8 @@ The engine and the kickoff odds model use the same `chanceModel`/`goalRates`
 path. This is a risk/reward choice, not a promised win-probability bonus.
 
 Intensity still changes individual performance and wear. Aggressive attack and
-defence multipliers are 1.25/1.0, Passive 0.8/0.95, and Balanced remains 1/1.
+defence multipliers were set to 1.25/1.0 here (changed to 1.2/0.95 by #157, see
+`docs/balance-157.md`), Passive 0.8/0.95, and Balanced remains 1/1.
 Energy drain and condition wear are unchanged: Aggressive buys immediate
 pressure with more wear; Passive saves fitness at an immediate performance cost.
 Overclock, fitness curves, purchase costs and timing are unchanged by #133.
@@ -34,8 +35,8 @@ experiments were measured before #134 (Overclock) and #135 (fitness and upgrade
 prices). They describe that earlier configuration. The combined effect of
 #133, #134 and #135 has not been re-checked with many-seed simulations; in
 particular, the earlier intensity and coaching effect sizes are not validated
-for the current combination. A fresh balance check on main is planned after
-PR #150 merges.
+for the current combination. The post-merge combined check was done for #157
+(`docs/balance-157.md`).
 
 ## Calibration method
 

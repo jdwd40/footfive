@@ -12,7 +12,7 @@ policy. The selection algorithm, role constraints, sort order and tie handling a
 unchanged; a fatigued player's ranking can change because fitness weighs less.
 The engine, squad/scouting estimates and new kickoff prices use the shared
 library. Drain, persistent wear, natural regeneration, repair amounts, Command
-Charge effects and Overclock's 1.12 bonus/eight-energy cost are unchanged.
+Charge effects and Overclock's 1.12 bonus/eight-energy cost are unchanged (#157 later set the bonus to 1.10).
 
 ## Upgrades and batteries
 

@@ -141,12 +141,13 @@ var BALANCE = {
     "C-": 50,
   },
 
-  // Per-player intensity: aggressive presses harder now (more attack, same defence) but tires
-  // faster; passive gives up attack and some defence now to save energy and condition.
+  // Per-player intensity: aggressive presses harder now (more attack, a little less defence)
+  // and tires faster; passive gives up attack and some defence now to save energy and
+  // condition. #157: aggressive 1.25/1.0 -> 1.2/0.95 so it is a trade, not a free buff.
   intensity: {
     passive: { attack: 0.8, defence: 0.95, energyUse: 0.55, condition: 0.6 },
     balanced: { attack: 1.0, defence: 1.0, energyUse: 1.0, condition: 1.0 },
-    aggressive: { attack: 1.25, defence: 1.0, energyUse: 1.4, condition: 1.35 },
+    aggressive: { attack: 1.2, defence: 0.95, energyUse: 1.4, condition: 1.35 },
   },
 
   roleWeights: {
@@ -177,7 +178,7 @@ var BALANCE = {
   fitness: { energyImpact: 0.35, conditionImpact: 0.35 },
 
   // Overclock
-  overclockBonus: 1.12, // +12% effective atk/def for one fixture; the starters still pay the energy cost
+  overclockBonus: 1.1, // +10% effective atk/def for one fixture (#157: was 1.12); the starters still pay the energy cost
   overclockEnergyCost: 8, // each starter loses this energy when applied
 
   // Command Charge

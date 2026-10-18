@@ -72,3 +72,10 @@ arm Overclock, so their Overclock-off matches stay identical. Tactics and
 intensity remain on the restored pre-#133 model: this PR does not restore the
 reverted tactics proposal. The fitness proposal (#135) must recheck Overclock,
 since a flatter energy penalty changes the effective price of eight energy.
+
+## Update — #157 (2026-10-18)
+
+The bonus is now 1.10, down from 1.12. After the #133 tempo and #135 fitness changes,
+Overclock combined with scoreline coaching won a 4-round run 10.1% of the time
+(Balanced 5.6%). See `docs/balance-157.md`. Overclock alone is still +4.7 points
+in an even tie, so it is still worth its two charges.
