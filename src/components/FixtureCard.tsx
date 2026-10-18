@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { FixtureCard as Fx } from "../lib/pocketbase";
 import { clockSeconds, clockText, countdown, phaseInfo, ukTime } from "../lib/live";
+import { NO_CURRENT_PRICE, UNOFFERED_HINT, formatOdds, selectionLabel } from "../lib/priceLabel";
 import { TeamLabel } from "./Team";
 
 /** Counter that bumps when `value` changes (never on first render) — drives subtle flashes. */
@@ -65,6 +66,8 @@ export default function FixtureCard({
   const preKick = !st;
   const toKick = fx.kickoffAt - now;
   const oddsOpen = !!fx.odds && !fx.odds.closed && !blocked;
+  const hintId = useId();
+  const unoffered = oddsOpen && (formatOdds(fx.odds?.home) == null || formatOdds(fx.odds?.away) == null);
 
   return (
     <article
@@ -125,27 +128,39 @@ export default function FixtureCard({
         >
           {preKick ? "Preview" : finished ? "Result" : "Watch live"}
         </Link>
-        {fx.odds && onBet && !finished ? (
-          <button
-            type="button"
-            className="btn-odds !min-h-10 !flex-row gap-2 px-3 text-xs"
-            disabled={!oddsOpen || stale}
-            onClick={() => onBet(fx)}
-            title={blocked ? "You manage a team in this fixture" : fx.odds.closed || "Bet on this match"}
-            data-testid="bet-fixture"
-          >
-            {blocked ? (
-              "Your match"
-            ) : fx.odds.closed ? (
-              <span className="text-[11px] font-semibold">Suspended</span>
-            ) : (
-              <>
-                <span className="tabular">{fx.odds.home?.toFixed(2) ?? "–"}</span>
-                <span className="opacity-50">|</span>
-                <span className="tabular">{fx.odds.away?.toFixed(2) ?? "–"}</span>
-              </>
-            )}
-          </button>
+        {onBet && !finished ? (
+          fx.odds ? (
+            <button
+              type="button"
+              className="btn-odds !min-h-10 !flex-row gap-2 px-3 text-xs"
+              disabled={!oddsOpen || stale}
+              onClick={() => onBet(fx)}
+              aria-describedby={unoffered ? hintId : undefined}
+              title={blocked ? "You manage a team in this fixture" : fx.odds.closed || "Bet on this match"}
+              data-testid="bet-fixture"
+            >
+              {blocked ? (
+                "Your match"
+              ) : fx.odds.closed ? (
+                <span className="text-[11px] font-semibold">Suspended</span>
+              ) : (
+                <>
+                  <span className={formatOdds(fx.odds.home) ? "tabular" : "text-[11px] leading-tight"}>{selectionLabel(fx.odds.home, true)}</span>
+                  <span className="opacity-50">|</span>
+                  <span className={formatOdds(fx.odds.away) ? "tabular" : "text-[11px] leading-tight"}>{selectionLabel(fx.odds.away, true)}</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <p className="max-w-[9rem] text-center text-[11px] leading-tight text-muted" data-testid="odds-missing">
+              {NO_CURRENT_PRICE}
+            </p>
+          )
+        ) : null}
+        {unoffered ? (
+          <p id={hintId} className="sr-only" data-testid="unoffered-hint">
+            {UNOFFERED_HINT}
+          </p>
         ) : null}
       </div>
     </article>
