@@ -6,6 +6,23 @@ import type { MatchEvent, MatchView } from "../lib/pocketbase";
 
 /** Mirrors MatchPage MATCH_POLL_MS (the page is imported dynamically after mocks). */
 const MATCH_POLL_MS = 2500;
+/** Same tail as sim LINGER_MS. Local so these cases load against a sim from before that export. */
+const BADGE_TAIL_MS = 2500;
+
+function reducedMotionList(query: string): MediaQueryList {
+  return {
+    matches: query.includes("reduce"),
+    media: query,
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() {
+      return false;
+    },
+  };
+}
 
 const team = (n: string) => ({ id: n, slug: n, name: n, abbreviation: n.slice(0, 3).toUpperCase(), primary_color: "#fff" }) as unknown as MatchView["fixture"]["home"];
 const names = (p: string) => Array.from({ length: 5 }, (_, i) => ({ name: `${p} P${i}`, no: i + 1, role: i === 0 ? "gk" : "util", starter: true }));
@@ -79,6 +96,78 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("pitch")).toBeTruthy();
     expect(screen.getAllByTestId("player")).toHaveLength(10);
     expect(screen.getByTestId("commentary").textContent).toBe("Current pass");
+  });
+
+  it("drops SAVED once the save is over and does not resurrect it on a later pass", async () => {
+    const { sceneFor } = await import("../domain/scenes");
+    const now = Date.now();
+    const save = { ...ev(1, now, "Keeper save"), t: "save", side: "away" as const, target: [0, 32] as [number, number] };
+    const ms = sceneFor(save, [40, 30], 15000)!.ms;
+    const clock = now - 1500;
+    await mount(view([{ ...save, at: clock - ms - 400 }], null, now));
+    expect(screen.getByText("SAVED!")).toBeTruthy();
+    cleanup();
+    await mount(view([{ ...save, at: clock - ms - BADGE_TAIL_MS - 500 }], null, now));
+    expect(screen.queryByText("SAVED!")).toBeNull();
+    cleanup();
+    await mount(view([{ ...save, at: now - 25000 }, ev(2, now - 2000, "Later pass")], null, now));
+    expect(screen.queryByText("SAVED!")).toBeNull();
+    expect(screen.getByTestId("commentary").textContent).toBe("Later pass");
+    expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+    const realNow = performance.now.bind(performance);
+    let extra = 0;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => realNow() + extra);
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Replay: Keeper save"));
+      });
+      extra = ms + 100;
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      expect(screen.getByText("SAVED!")).toBeTruthy();
+      expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+    } finally {
+      spy.mockRestore();
+    }
+    cleanup();
+    await mount(view([{ ...save, at: clock - ms - 200 }, ev(2, clock - 80, "Tail pass")], null, now));
+    expect(screen.getByText("SAVED!")).toBeTruthy();
+    expect(screen.getByTestId("commentary").textContent).toBe("Tail pass");
+    expect(screen.getByTestId("match-score").textContent).toBe("0–0");
+  });
+
+  it("uses elapsed time when reduced motion holds the scene at its final frame", async () => {
+    const { sceneFor } = await import("../domain/scenes");
+    const now = Date.now();
+    const save = { ...ev(1, now, "Keeper save"), t: "save", side: "away" as const, target: [0, 32] as [number, number] };
+    const ms = sceneFor(save, [40, 30], 15000)!.ms;
+    const prev = window.matchMedia;
+    window.matchMedia = reducedMotionList;
+    try {
+      await mount(view([{ ...save, at: now - 1500 - ms - 400 }], null, now));
+      expect(screen.getByText("SAVED!")).toBeTruthy();
+      cleanup();
+      await mount(view([{ ...save, at: now - 1500 - ms - BADGE_TAIL_MS - 500 }], null, now));
+      expect(screen.queryByText("SAVED!")).toBeNull();
+    } finally {
+      window.matchMedia = prev;
+    }
+  });
+
+  it("keeps the large goal, half-time and full-time banners after their scenes would have expired a result chip", async () => {
+    const now = Date.now();
+    const scored = { ...st!, sc: [1, 0] as [number, number] };
+    const goal = { ...ev(1, now - 30000, "GOAL!"), t: "goal", target: [100, 32] as [number, number], st: scored };
+    await mount(view([goal], { home: names("Home"), away: names("Away") }, now));
+    expect(screen.getByTestId("goal-banner")).toBeTruthy();
+    expect(screen.getByTestId("match-score").textContent).toBe("1–0");
+    cleanup();
+    const ht = { ...ev(1, now - 5000, "Half time"), t: "half_time" };
+    await mount(view([ht], null, now));
+    expect(screen.getByTestId("period-banner")).toBeTruthy();
+    cleanup();
+    const ft = { ...ev(1, now - 30000, "Full time"), t: "match_end", side: "home" as const };
+    await mount(view([ft], null, now));
+    expect(screen.getByTestId("ft-banner")).toBeTruthy();
   });
 
   it("retires one event's caption during dwell, then shows the next event even with the same words", async () => {

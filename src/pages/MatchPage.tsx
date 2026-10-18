@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
+import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
 import { countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -236,7 +236,9 @@ export default function MatchPage() {
       // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
       // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
       const liveScene = ph ? scenes.get(ph.cur.seq) : null;
-      const prevScene = ph?.prev && !replay ? scenes.get(ph.prev.seq) : undefined; // its result badge lingers into the new scene
+      const prevBuilt = ph?.prev && !replay ? scenes.get(ph.prev.seq) : undefined;
+      // A pass that arrives after the chip has already expired must not start the 2.5 s tail again.
+      const prevScene = prevBuilt && ph?.prev && clock - ph.prev.at < prevBuilt.ms + LINGER_MS ? prevBuilt : undefined;
       const liveP = sysReduced ? 1 : ph && liveScene?.ms ? ph.elapsed / liveScene.ms : 1;
       const scene = replay ? replay.scene : liveScene;
       const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
