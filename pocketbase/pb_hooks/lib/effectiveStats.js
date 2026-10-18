@@ -8,7 +8,6 @@ try {
   balMod = require("./balance.js");
 }
 var BALANCE = balMod.BALANCE;
-var coachingMod = balMod.coachingMod;
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
@@ -21,7 +20,8 @@ function fitnessFactor(value, impact) {
 
 /**
  * @param {object} player { attack, defence, role, energy, condition, intensity }
- * @param {object} opts { coachingStance, overclock, sentOff }
+ * @param {object} opts { overclock, sentOff } — a coaching stance is a match tempo applied
+ *   by the match engine, so it never changes a player's stats (a legacy coachingStance is ignored)
  */
 function effectivePlayerStats(player, opts) {
   opts = opts || {};
@@ -32,7 +32,6 @@ function effectivePlayerStats(player, opts) {
   var w = BALANCE.roleWeights[role] || BALANCE.roleWeights.util;
   var intensity = player.intensity || "balanced";
   var im = BALANCE.intensity[intensity] || BALANCE.intensity.balanced;
-  var cm = coachingMod(opts.coachingStance || "balanced");
   var energy = clamp(player.energy != null ? player.energy : 100, 0, 100);
   var condition = clamp(player.condition != null ? player.condition : 100, 0, 100);
   // Low values hurt, but never zero a player from one axis alone
@@ -44,7 +43,6 @@ function effectivePlayerStats(player, opts) {
     (player.attack || 50) *
     w.attack *
     im.attack *
-    cm.attack *
     energyFactor *
     conditionFactor *
     overclock;
@@ -52,7 +50,6 @@ function effectivePlayerStats(player, opts) {
     (player.defence || 50) *
     w.defence *
     im.defence *
-    cm.defence *
     energyFactor *
     conditionFactor *
     overclock;
@@ -79,7 +76,6 @@ function effectiveTeamStrength(players, opts) {
   var n = Math.max(starters.length, 1);
   for (var i = 0; i < starters.length; i++) {
     var s = effectivePlayerStats(starters[i], {
-      coachingStance: opts.coachingStance,
       overclock: opts.overclock,
       sentOff: starters[i].sentOff,
     });

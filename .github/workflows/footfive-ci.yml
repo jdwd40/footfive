@@ -63,6 +63,8 @@ jobs:
         run: npm run test:coaching
       - name: Overclock kick-off cost (disposable PocketBase)
         run: npm run test:overclock
+      - name: Balance replay determinism (headless engine, 200 seeds)
+        run: npm run test:balance-replay
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test

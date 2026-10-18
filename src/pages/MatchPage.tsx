@@ -652,6 +652,9 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
         </p>
       ) : (
         <>
+          <p className="mt-1 text-xs text-muted" data-testid="coaching-hint">
+            Attack opens up chances at both ends; Defend slows chances at both ends.
+          </p>
           <div className="mt-2 grid grid-cols-3 gap-1.5">
             {(["defend", "balanced", "attack"] as const).map((s) => (
               <button
