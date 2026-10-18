@@ -105,6 +105,18 @@ onRecordUpdate(function(e) {
   }
   e.next();
 });
+// Disposable copy only: every tick here is explicit. The app's minute catch-up cron could
+// claim the world lease at a real minute boundary, commit a reset round's kickoff at real
+// time and be killed by stop() before publishing it. Hook files load in no fixed order, so
+// the jobs are removed once every file has loaded; PocketBase's own jobs stay scheduled.
+onBootstrap(function(e) {
+  e.next();
+  e.app.cron().remove("footfive_catchup");
+  e.app.cron().remove("footfive_retention_daily");
+});
+routerAdd("GET", "/api/ff20/cron-jobs", function(e) {
+  return e.json(200, $app.cron().jobs().map(function(j) { return j.id(); }));
+});
 `;
 function query(sql, ...params) {
   const db = new DatabaseSync(path.join(DATA, "data.db"), { readOnly: true });
@@ -149,16 +161,25 @@ async function start() {
   while (Date.now() < deadline) {
     if (failure) throw failure;
     assert.equal(child.exitCode, null, "owned PB exited before readiness (port may be occupied)");
+    let ready = false;
     try {
       const response = await fetch(BASE + "/api/health", { signal: AbortSignal.timeout(500) });
       if (response.ok) {
         // Identify our temp directory through its real migrated DB, not a foreign service.
         if (fs.existsSync(path.join(DATA, "data.db"))) {
           query("SELECT id FROM world LIMIT 1"); // Schema ready; the designed health tick below ensures world data.
-          return;
+          ready = true;
         }
       }
     } catch { /* Wait for this owned process's bootstrap. */ }
+    if (ready) {
+      // This instance's live scheduler: no app job, PocketBase's own jobs retained.
+      const jobs = await request("/api/ff20/cron-jobs");
+      assert.equal(jobs.status, 200, JSON.stringify(jobs.data));
+      assert(jobs.data.includes("__pbDBOptimize__"), "PocketBase system jobs must stay scheduled: " + JSON.stringify(jobs.data));
+      assert(!jobs.data.some((id) => id.startsWith("footfive_")), "app cron jobs must be unscheduled: " + JSON.stringify(jobs.data));
+      return;
+    }
     await sleep(50);
   }
   throw new Error("owned PocketBase readiness timeout");
@@ -483,10 +504,17 @@ async function main() {
     await start();
     const kicked = await operation("tick", clock, { fixture: id });
     assert.equal(kicked.status, 200, JSON.stringify(kicked.data));
+    // This fixed-clock tick itself must kick off: a tick locked out by another lease holder
+    // can leave a committed but unpublished minute-0 "pre" state.
+    const result = kicked.data.result;
+    assert(!result.locked && !result.paused && result.actions.includes("kickoff:r16"), "fixed-clock tick must kick off: " + JSON.stringify(kicked.data));
     const st = kickoffState(id);
     assert.equal(st.teams.home.ai, aiSide === "home");
     assert.equal(st.teams.away.ai, aiSide === "away");
     assert.equal(st.minute, 0, "only the real kickoff announcement should have run");
+    assert.equal(st.phase, "first_half");
+    const announced = query("SELECT type, data FROM match_events WHERE fixture = ? AND at <= ? ORDER BY seq", id, clock);
+    assert.deepEqual(announced.map((e) => [e.type, JSON.parse(e.data).st.ph]), [["kickoff", "first_half"]], "the real kickoff must be published by the fixed clock");
     assert.equal(query("SELECT lineups_frozen FROM shared_fixtures WHERE id = ?", id)[0].lineups_frozen, 1);
     // Prevent preliminary ticks from changing play during rejection snapshots.
     // Fixed-clock coaching remains caught up; one rejection uses the real route.
