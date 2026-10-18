@@ -58,7 +58,7 @@ type Row = Record<string, unknown> & { id: string };
 const COLLECTION: Record<string, string> = {};
 
 /** In-memory PocketBase stand-in: copies on read, logs every save. */
-function world(rows: Row[], team: Row, pace: string) {
+function world(rows: Row[], team: Row, pace: string, extra: Record<string, Row[]> = {}) {
   const db = new Map<string, Row>();
   const put = (collection: string, row: Row) => {
     COLLECTION[row.id] = collection;
@@ -68,6 +68,7 @@ function world(rows: Row[], team: Row, pace: string) {
   put("proball_teams", team);
   put("command_charge", { id: "cc1", user: "manager1", points: BALANCE.commandChargeMax, last_regen_at: pbDate(Date.now()) });
   put("world", { id: "world", pace });
+  Object.entries(extra).forEach(([collection, list]) => list.forEach((r) => put(collection, r)));
   const record = (id: string) => {
     const f = { ...db.get(id)! };
     return {
@@ -230,7 +231,9 @@ describe("the projection keeps the existing energy writes and fields", () => {
 describe("managementHelp describes what the actions do", () => {
   it("arming costs the shown Charge, previews the shown boost, and the five pay the shown energy at kick-off", () => {
     const fit = roster.map((r) => ({ ...r, energy: 70, energy_updated_at: pbDate(T0) }));
-    const app = world(fit, team(), "live");
+    // Arming needs a next kick-off (#42). The fake ignores filters, so this row must truly match one.
+    const next = { id: "fx1", status: "scheduled", home_team: "team1", away_team: "team2", scheduled_at: pbDate(T0 + 60_000) };
+    const app = world(fit, team(), "live", { shared_fixtures: [next] });
     const help = mgmt.getSquad(app, "manager1").managementHelp;
     const before = mgmt.getSquad(app, "manager1").players;
 

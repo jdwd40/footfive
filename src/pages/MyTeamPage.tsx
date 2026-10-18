@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import { Kit, TeamLabel } from "../components/Team";
 import { countdown, credits, ukTime, useNow } from "../lib/live";
-import { footfiveApi, type EffectiveModifiers, type ManagementHelp, type TacticalScan, type TacticalScanReport, type TeamPublic, type WorldSnapshot } from "../lib/pocketbase";
+import { footfiveApi, type ActionBlocker, type EffectiveModifiers, type ManagementHelp, type TacticalScan, type TacticalScanReport, type TeamPublic, type WorldSnapshot } from "../lib/pocketbase";
 
 type Squad = Awaited<ReturnType<typeof footfiveApi.myTeam>>;
 type Player = Squad["players"][number];
@@ -21,6 +21,14 @@ function modifiersFrom(m: EffectiveModifiers | undefined): EffectiveModifiers | 
   if (!m || !finitePair(m.base) || !finitePair(m.role) || !finitePair(m.intensity)) return null;
   if (![m.energy, m.condition, m.overclock].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
   return m;
+}
+
+const BLOCKER_CODES = new Set<ActionBlocker["code"]>(["armed", "unavailable", "no_kickoff", "no_fixture"]);
+
+/** Ignore a missing or unfamiliar blocker so an older squad payload keeps today's buttons. */
+function actionBlocker(value: ActionBlocker | null | undefined): ActionBlocker | null {
+  if (!value || !BLOCKER_CODES.has(value.code) || typeof value.message !== "string" || value.message.length === 0) return null;
+  return value;
 }
 
 function helpFrom(h: ManagementHelp | undefined): ManagementHelp | null {
@@ -191,6 +199,7 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const [savedScans, setSavedScans] = useState<SavedScan[]>([]);
   const [shownScan, setShownScan] = useState<ShownScan | null>(null);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  const [availabilityNote, setAvailabilityNote] = useState<string | null>(null);
   // Matches a purchase to its saved row. Never rendered.
   const purchaseMatch = useRef<{ fixtureId: string; report: TacticalScanReport } | null>(null);
   const scanGen = useRef(0);
@@ -267,6 +276,18 @@ function Manage({ world }: { world: WorldSnapshot }) {
     setShownScan(null);
   }
 
+  async function refreshAvailability() {
+    setBusy(true);
+    setAvailabilityNote(null);
+    try {
+      await load();
+    } catch (err) {
+      setAvailabilityNote(err instanceof Error ? err.message : "Could not refresh availability");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function run(fn: () => Promise<unknown>, ok: string | ((reloaded: Squad) => string)) {
     setBusy(true);
     setMsg(null);
@@ -290,6 +311,9 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const overclockCost = integerCost(help?.overclockChargeCost, 2);
   const overclockBonus = help && help.overclockBonus > 0 ? help.overclockBonus : null;
   const overclockEnergy = help && help.overclockEnergyCost > 0 ? help.overclockEnergyCost : null;
+  const scanBlock = actionBlocker(sq.actionBlockers?.tactical_scan);
+  const overclockBlock = actionBlocker(sq.actionBlockers?.overclock);
+  const overclockArmed = !!t.overclock_ready || overclockBlock?.code === "armed";
   const ai = t.mode === "ai";
   const next = world.nextFixture;
   const starters = draft || sq.players.filter((p) => p.is_starter).map((p) => p.id);
@@ -463,14 +487,20 @@ function Manage({ world }: { world: WorldSnapshot }) {
               <div className="h-full bg-gradient-to-r from-cyan to-magenta" style={{ width: `${(cc.points / Math.max(cc.max, 1)) * 100}%` }} />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < scanCost} onClick={() => void buyScan()}>
+              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < scanCost || scanBlock != null} onClick={() => void buyScan()}>
                 Tactical scan ({scanCost})
               </button>
-              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < overclockCost || t.overclock_ready} onClick={() => run(() => footfiveApi.spendCommandCharge("overclock"), "Overclock armed for your next kick-off.")}>
+              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < overclockCost || overclockArmed || (overclockBlock != null && overclockBlock.code !== "armed")} onClick={() => run(() => footfiveApi.spendCommandCharge("overclock"), "Overclock armed for your next kick-off.")}>
                 Overclock ({overclockCost})
               </button>
             </div>
-            {t.overclock_ready ? <p className="mt-2 text-xs text-lime">Overclock armed for your next kick-off.</p> : null}
+            {overclockArmed ? <p className="mt-2 text-xs text-lime">Overclock armed for your next kick-off.</p> : null}
+            {overclockBlock && overclockBlock.code !== "armed" ? <p className="mt-2 text-xs text-amber" data-testid="overclock-blocker">{overclockBlock.message}</p> : null}
+            {scanBlock ? <p className="mt-2 text-xs text-amber" data-testid="scan-blocker">{scanBlock.message}</p> : null}
+            <button type="button" className="btn-ghost mt-2 w-full !min-h-10 text-xs" disabled={busy} onClick={() => void refreshAvailability()}>
+              Refresh availability
+            </button>
+            {availabilityNote ? <p className="mt-1 text-xs text-amber" role="alert" data-testid="availability-error">{availabilityNote}</p> : null}
             <details className="mt-2 text-xs text-muted" data-testid="charge-help">
               <summary className="cursor-pointer select-none">What do these do?</summary>
               <p className="mt-1" data-testid="scan-help">

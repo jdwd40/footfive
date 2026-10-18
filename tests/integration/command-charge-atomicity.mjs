@@ -597,6 +597,221 @@ async function main() {
     assert.equal(fullTargetState(), before);
   });
 
+  // Issue 42. configure() only UPDATEs command_charge, so each shape GETs the
+  // authenticated charge route first and lets that read create the row. The
+  // absent shape deletes the row after that update. HTTP bodies include the
+  // trailing period; blocker copy already contains its own single period.
+  const NO_KICKOFF = "No upcoming fixture: Overclock is available when your team has another kick-off.";
+  const NO_FIXTURE = "No upcoming fixture to scan.";
+  const ONLY_UPCOMING = "Only an upcoming fixture can be scanned.";
+  const INVALID_FIXTURE = "Invalid fixtureId.";
+  const ARMED_MSG = "Overclock is already armed for your next kick-off.";
+  const OWNERSHIP = "Fixture does not involve your team.";
+  async function ensureChargeRow() {
+    const created = await request("/api/footfive/command-charge", user.token);
+    assert.equal(created.status, 200, JSON.stringify(created.data));
+    assert.equal(typeof points(), "number", "authenticated charge GET must create the row before shape setup");
+  }
+  function ownFixtureRows() {
+    return query("SELECT id, status FROM shared_fixtures WHERE home_team = ? OR away_team = ? ORDER BY id", team.id, team.id);
+  }
+  async function restoreAvailability(savedFixtures, eliminated, foreignStatus) {
+    const extra = [
+      ["UPDATE proball_teams SET eliminated = ? WHERE id = ?", [eliminated, team.id]],
+      ...savedFixtures.map((row) => ["UPDATE shared_fixtures SET status = ? WHERE id = ?", [row.status, row.id]]),
+    ];
+    if (foreignStatus) extra.push(["UPDATE shared_fixtures SET status = ? WHERE id = ?", [foreignStatus.status, foreignStatus.id]]);
+    await configure(extra);
+  }
+  function eliminatedSql(absent) {
+    return [
+      ["UPDATE proball_teams SET eliminated = 1 WHERE id = ?", [team.id]],
+      ["UPDATE shared_fixtures SET status = 'finished' WHERE home_team = ? OR away_team = ?", [team.id, team.id]],
+      ...(absent ? [["DELETE FROM command_charge WHERE user = ?", [user.id]]] : []),
+    ];
+  }
+  async function withAvailability(setup, fn, foreignId) {
+    await ensureChargeRow();
+    const savedFixtures = ownFixtureRows();
+    const eliminated = query("SELECT eliminated FROM proball_teams WHERE id = ?", team.id)[0].eliminated;
+    const foreignStatus = foreignId
+      ? { id: foreignId, status: query("SELECT status FROM shared_fixtures WHERE id = ?", foreignId)[0].status }
+      : null;
+    try {
+      await setup();
+      await fn();
+    } finally {
+      await restoreAvailability(savedFixtures, eliminated, foreignStatus);
+    }
+  }
+
+  await test("eliminated team with no scheduled fixture rejects overclock and the squad reports the same reasons", async () => {
+    await withAvailability(async () => {
+      await configure(eliminatedSql(false));
+    }, async () => {
+      assert.equal(points(), 5);
+      const before = state();
+      const response = await spend({ action: "overclock" });
+      rejected(response);
+      assert.equal(response.data.message, NO_KICKOFF);
+      assert.deepEqual(state(), before);
+      const squad = await request("/api/footfive/my-team", user.token);
+      assert.equal(squad.status, 200, JSON.stringify(squad.data));
+      assert.deepEqual(squad.data.actionBlockers.overclock, { code: "no_kickoff", message: response.data.message });
+      assert.deepEqual(squad.data.actionBlockers.tactical_scan, { code: "no_fixture", message: NO_FIXTURE });
+      assert.equal(points(), 5);
+      assert.deepEqual(state(), before);
+    });
+  });
+
+  await test("eliminated overclock reject does not create an absent charge row", async () => {
+    await withAvailability(async () => {
+      await configure(eliminatedSql(true));
+    }, async () => {
+      assert.equal(charge().length, 0);
+      const before = state();
+      const response = await spend({ action: "overclock" });
+      rejected(response);
+      assert.equal(response.data.message, NO_KICKOFF);
+      assert.equal(charge().length, 0, "no_kickoff rejection must leave the charge row absent");
+      assert.deepEqual(state(), before);
+      const squad = await request("/api/footfive/my-team", user.token);
+      assert.equal(squad.status, 200, JSON.stringify(squad.data));
+      assert.deepEqual(squad.data.actionBlockers.overclock, { code: "no_kickoff", message: NO_KICKOFF });
+      assert.equal(charge().length, 0, "squad read must not create the absent charge row");
+      assert.deepEqual(state(), before);
+    });
+  });
+
+  await test("eliminated overclock reject leaves an insufficient 1-point charge unchanged", async () => {
+    await withAvailability(async () => {
+      await configure(eliminatedSql(false), 1);
+    }, async () => {
+      assert.equal(points(), 1, "insufficient shape must persist 1 point on the created row");
+      const before = state();
+      const response = await spend({ action: "overclock" });
+      rejected(response);
+      assert.equal(response.data.message, NO_KICKOFF);
+      assert.equal(points(), 1);
+      assert.deepEqual(state(), before);
+    });
+  });
+
+  await test("alive team with live own fixtures can arm and cannot scan", async () => {
+    await withAvailability(async () => {
+      await configure([
+        ["UPDATE proball_teams SET eliminated = 0 WHERE id = ?", [team.id]],
+        ["UPDATE shared_fixtures SET status = 'live' WHERE home_team = ? OR away_team = ?", [team.id, team.id]],
+      ]);
+    }, async () => {
+      assert(query("SELECT id FROM shared_tournaments WHERE status = 'active'").length >= 1, "alive arm requires an active tournament");
+      const before = state();
+      const scan = await spend({ action: "tactical_scan" });
+      rejected(scan);
+      assert.equal(scan.data.message, NO_FIXTURE);
+      assert.deepEqual(state(), before);
+      const explicit = await spend({ action: "tactical_scan", fixtureId: ownFixture.id });
+      rejected(explicit);
+      assert.equal(explicit.data.message, ONLY_UPCOMING);
+      assert.deepEqual(state(), before);
+      const beforeArm = points();
+      assert.equal(typeof beforeArm, "number");
+      assert.equal(beforeArm, 5);
+      const armed = await spend({ action: "overclock" });
+      assert.equal(armed.status, 200, JSON.stringify(armed.data));
+      assert.equal(points(), beforeArm - 2);
+      assert.equal(query("SELECT overclock_ready FROM proball_teams WHERE id = ?", team.id)[0].overclock_ready, 1);
+      const afterArm = state();
+      const squad = await request("/api/footfive/my-team", user.token);
+      assert.equal(squad.status, 200, JSON.stringify(squad.data));
+      assert.deepEqual(squad.data.actionBlockers.overclock, { code: "armed", message: ARMED_MSG });
+      assert.deepEqual(squad.data.actionBlockers.tactical_scan, { code: "no_fixture", message: NO_FIXTURE });
+      assert.deepEqual(state(), afterArm);
+    });
+  });
+
+  await test("alive team waiting for the next round can arm and cannot scan", async () => {
+    await withAvailability(async () => {
+      await configure([
+        ["UPDATE proball_teams SET eliminated = 0 WHERE id = ?", [team.id]],
+        ["UPDATE shared_fixtures SET status = 'finished' WHERE home_team = ? OR away_team = ?", [team.id, team.id]],
+      ]);
+    }, async () => {
+      assert(query("SELECT id FROM shared_tournaments WHERE status = 'active'").length >= 1, "alive arm requires an active tournament");
+      const before = state();
+      const scan = await spend({ action: "tactical_scan" });
+      rejected(scan);
+      assert.equal(scan.data.message, NO_FIXTURE);
+      assert.deepEqual(state(), before);
+      const beforeArm = points();
+      assert.equal(typeof beforeArm, "number");
+      assert.equal(beforeArm, 5);
+      const armed = await spend({ action: "overclock" });
+      assert.equal(armed.status, 200, JSON.stringify(armed.data));
+      assert.equal(points(), beforeArm - 2);
+      assert.equal(query("SELECT overclock_ready FROM proball_teams WHERE id = ?", team.id)[0].overclock_ready, 1);
+      const afterArm = state();
+      const squad = await request("/api/footfive/my-team", user.token);
+      assert.equal(squad.status, 200, JSON.stringify(squad.data));
+      assert.deepEqual(squad.data.actionBlockers.overclock, { code: "armed", message: ARMED_MSG });
+      assert.deepEqual(squad.data.actionBlockers.tactical_scan, { code: "no_fixture", message: NO_FIXTURE });
+      assert.deepEqual(state(), afterArm);
+    });
+  });
+
+  await test("paused scheduled fixture leaves both actions allowed and writes nothing", async () => {
+    await withAvailability(async () => {
+      await configure([
+        ["UPDATE proball_teams SET eliminated = 0 WHERE id = ?", [team.id]],
+        ["UPDATE shared_fixtures SET status = 'scheduled' WHERE id = ?", [ownFixture.id]],
+      ]);
+    }, async () => {
+      assert.equal(query("SELECT progression_paused FROM world WHERE key = 'main'")[0].progression_paused, 1);
+      assert.equal(query("SELECT status FROM shared_fixtures WHERE id = ?", ownFixture.id)[0].status, "scheduled");
+      const before = state();
+      const squad = await request("/api/footfive/my-team", user.token);
+      assert.equal(squad.status, 200, JSON.stringify(squad.data));
+      assert.equal(squad.data.actionBlockers.overclock, null);
+      assert.equal(squad.data.actionBlockers.tactical_scan, null);
+      assert.deepEqual(state(), before);
+    });
+  });
+
+  await test("explicit finished own scan rejects before debit", async () => {
+    await withAvailability(async () => {
+      await configure([["UPDATE shared_fixtures SET status = 'finished' WHERE id = ?", [ownFixture.id]]]);
+    }, async () => {
+      const before = state();
+      const response = await spend({ action: "tactical_scan", fixtureId: ownFixture.id });
+      rejected(response);
+      assert.equal(response.data.message, ONLY_UPCOMING);
+      assert.deepEqual(state(), before);
+    });
+  });
+
+  await test("live foreign scan keeps the ownership error", async () => {
+    await withAvailability(async () => {
+      await configure([["UPDATE shared_fixtures SET status = 'live' WHERE id = ?", [foreignFixture.id]]]);
+    }, async () => {
+      const before = state();
+      const response = await spend({ action: "tactical_scan", fixtureId: foreignFixture.id });
+      rejected(response);
+      assert.equal(response.data.message, OWNERSHIP);
+      assert.equal(response.data.message.includes(ONLY_UPCOMING), false);
+      assert.deepEqual(state(), before);
+    }, foreignFixture.id);
+  });
+
+  await test("non-string fixtureId is rejected before lookup", async () => {
+    await ensureChargeRow();
+    await configure();
+    const before = state();
+    const response = await spend({ action: "tactical_scan", fixtureId: 12 });
+    rejected(response);
+    assert.equal(response.data.message, INVALID_FIXTURE);
+    assert.deepEqual(state(), before);
+  });
+
 }
 
 try { await main(); }

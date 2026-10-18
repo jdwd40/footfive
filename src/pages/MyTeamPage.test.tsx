@@ -614,3 +614,120 @@ describe("My Team tactical scan reports", () => {
     expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("My Team action availability", () => {
+  const FIVE = ["g1", "o1", "o2", "o3", "o4"];
+  const CHARGE = { points: 5, max: 5, nextPointInMs: 0 };
+  const NO_KICKOFF = "No upcoming fixture: Overclock is available when your team has another kick-off.";
+  const NO_FIXTURE = "No upcoming fixture to scan.";
+
+  it("keeps both actions available when an older squad omits blockers, even with no next fixture", async () => {
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE);
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Overclock (2)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled();
+    expect(screen.queryByTestId("scan-blocker")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overclock-blocker")).not.toBeInTheDocument();
+    expect(footfiveApi.world).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables a blocked scan and Overclock with the server reason, and still offers refresh", async () => {
+    const blocked = {
+      ...squad(FIVE),
+      actionBlockers: {
+        overclock: { code: "no_kickoff" as const, message: NO_KICKOFF },
+        tactical_scan: { code: "no_fixture" as const, message: NO_FIXTURE },
+      },
+    };
+    await mountSquads(blocked, blocked, CHARGE);
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Overclock (2)" })).toBeDisabled();
+    expect(screen.getByTestId("scan-blocker")).toHaveTextContent(NO_FIXTURE);
+    expect(screen.getByTestId("overclock-blocker")).toHaveTextContent(NO_KICKOFF);
+    expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled();
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+
+  it("uses the existing armed sentence instead of a second Overclock reason", async () => {
+    const armed = {
+      ...squad(FIVE),
+      actionBlockers: {
+        overclock: { code: "armed" as const, message: "Overclock is already armed for your next kick-off." },
+        tactical_scan: null,
+      },
+    };
+    await mountSquads(armed, armed, CHARGE);
+    expect(screen.getByRole("button", { name: "Overclock (2)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeEnabled();
+    expect(screen.getByText("Overclock armed for your next kick-off.")).toBeInTheDocument();
+    expect(screen.queryByText("Overclock is already armed for your next kick-off.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled();
+  });
+
+  it("still disables actions that the Charge balance cannot pay when no blocker is set", async () => {
+    const open = {
+      ...squad(FIVE),
+      actionBlockers: { overclock: null, tactical_scan: null },
+    };
+    await mountSquads(open, open, { points: 0, max: 5, nextPointInMs: 0 });
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Overclock (2)" })).toBeDisabled();
+    expect(screen.queryByTestId("scan-blocker")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overclock-blocker")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled();
+  });
+
+  it("reloads the squad without a world poll, and keeps the line-up draft and selected scan", async () => {
+    const saved = {
+      id: "s1",
+      fixtureId: "hidden-fixture",
+      created: "2026-10-18 15:04:00.000Z",
+      report: {
+        teamName: "Wave City",
+        grade: "A",
+        approxAttack: 77,
+        approxDefence: 48,
+        energyRange: [40, 80] as [number, number],
+        conditionRange: [30, 31] as [number, number],
+        confidence: "medium",
+      },
+    };
+    await mountSquads(squad(FIVE), squad(FIVE), CHARGE, async () => ({ scans: [saved] }));
+    await userEvent.click(screen.getByRole("button", { name: /Wave City/ }));
+    const g1 = screen.getByText("Player G1").closest("li")!;
+    await userEvent.click(within(g1).getByTitle("In the five — tap to rest"));
+    expect(screen.getByTestId("save-lineup")).toHaveTextContent("Save line-up (4/5)");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh availability" }));
+    await waitFor(() => expect(footfiveApi.myTeam).toHaveBeenCalledTimes(2));
+    expect(footfiveApi.world).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.tacticalScans).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("save-lineup")).toHaveTextContent("Save line-up (4/5)");
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Approx attack 77");
+    expect(screen.getByTestId("scan-report")).toHaveTextContent("Wave City");
+    expect(document.body.textContent).not.toContain("hidden-fixture");
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
+  });
+
+  it("shows a local error when refresh fails and leaves the blocked actions and draft in place", async () => {
+    const blocked = {
+      ...squad(FIVE),
+      actionBlockers: {
+        overclock: null,
+        tactical_scan: { code: "no_fixture" as const, message: NO_FIXTURE },
+      },
+    };
+    await mountSquads(blocked, blocked, CHARGE);
+    const g1 = screen.getByText("Player G1").closest("li")!;
+    await userEvent.click(within(g1).getByTitle("In the five — tap to rest"));
+    vi.mocked(footfiveApi.myTeam).mockRejectedValueOnce(new Error("availability down"));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh availability" }));
+    expect(await screen.findByTestId("availability-error")).toHaveTextContent("availability down");
+    expect(screen.queryByTestId("team-msg")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeDisabled();
+    expect(screen.getByTestId("save-lineup")).toHaveTextContent("Save line-up (4/5)");
+    expect(footfiveApi.world).toHaveBeenCalledTimes(1);
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+  });
+});

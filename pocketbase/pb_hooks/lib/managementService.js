@@ -306,6 +306,7 @@ function getSquad($app, userId) {
   var n = Math.max(list.length, 1);
   var treasury = team.get("treasury");
   if (treasury == null) treasury = BALANCE.startingTreasury;
+  var actionCtx = actionContext($app, team);
 
   return {
     team: {
@@ -339,6 +340,11 @@ function getSquad($app, userId) {
       overclockEnergyCost: BALANCE.overclockEnergyCost,
       overclockChargeCost: commandChargeCost("overclock"),
       tacticalScanChargeCost: commandChargeCost("tactical_scan"),
+    },
+    // Each is null or the { code, message } the spend would reject with now.
+    actionBlockers: {
+      overclock: overclockBlocker(actionCtx),
+      tactical_scan: scanBlocker(actionCtx),
     },
   };
 }
@@ -674,20 +680,19 @@ function commandChargeSpend($app, userId, action, playerId, fixtureId) {
           fx = findRecordOrNull(tx, "shared_fixtures", fixtureId);
           if (!fx) reject(new BadRequestError("Fixture not found"));
         } else {
-          fx = findNextManagedFixture(tx, team.id);
-          if (!fx) reject(new BadRequestError("No upcoming fixture to scan"));
+          var scanCtx = actionContext(tx, team);
+          var noScan = scanBlocker(scanCtx);
+          if (noScan) reject(new BadRequestError(noScan.message));
+          fx = scanCtx.nextFixture();
         }
         if (fx.get("home_team") !== team.id && fx.get("away_team") !== team.id) {
           reject(new BadRequestError("Fixture does not involve your team"));
         }
+        // Checked after ownership, so another team's fixture status is never revealed.
+        if (fx.get("status") !== "scheduled") reject(new BadRequestError("Only an upcoming fixture can be scanned"));
       } else if (action === "overclock") {
-        // One arm per kick-off: the fresh flag stays set until kick-off consumes it.
-        if (team.get("overclock_ready")) reject(new BadRequestError("Overclock is already armed for your next kick-off"));
-        // Hooks can load before migration 1750000019: without the pending field an arm
-        // would save no owed cost, and kick-off would hand out a free bonus.
-        if (!team.collection().fields.getByName("overclock_cost_pending")) {
-          reject(new BadRequestError("Overclock is unavailable until the server update completes"));
-        }
+        var noOverclock = overclockBlocker(actionContext(tx, team));
+        if (noOverclock) reject(new BadRequestError(noOverclock.message));
       } else {
         reject(new BadRequestError("Unknown action"));
       }
@@ -743,6 +748,56 @@ function findNextManagedFixture($app, teamId) {
     { t: teamId },
   );
   return rows && rows.length ? rows[0] : null;
+}
+
+/**
+ * Read-only facts the Overclock and Tactical Scan guards share. Each lookup runs at
+ * most once, and only when a guard needs it. Spends build this inside their
+ * transaction; squad reads use the same guards so a shown reason matches the rejection.
+ */
+function actionContext($app, team) {
+  var fixture;
+  var active;
+  return {
+    team: team,
+    nextFixture: function () {
+      if (fixture === undefined) fixture = findNextManagedFixture($app, team.id);
+      return fixture;
+    },
+    // Same filter as worldService.activeTournament, which cannot be required here
+    // (worldService requires this module).
+    tournamentActive: function () {
+      if (active === undefined) {
+        var rows = $app.findRecordsByFilter("shared_tournaments", 'status = "active"', "", 1, 0, {});
+        active = !!(rows && rows.length);
+      }
+      return active;
+    },
+  };
+}
+
+/** Why Overclock cannot be armed now, or null. Charge balance is checked by the spend. */
+function overclockBlocker(ctx) {
+  var team = ctx.team;
+  // One arm per kick-off: the fresh flag stays set until kick-off consumes it.
+  if (team.get("overclock_ready")) {
+    return { code: "armed", message: "Overclock is already armed for your next kick-off." };
+  }
+  // Hooks can load before migration 1750000019: without the pending field an arm
+  // would save no owed cost, and kick-off would hand out a free bonus.
+  if (!team.collection().fields.getByName("overclock_cost_pending")) {
+    return { code: "unavailable", message: "Overclock is unavailable until the server update completes." };
+  }
+  // The arm needs a kick-off to apply to. A team still in the championship has one
+  // even while its match is live or the next round is not yet drawn.
+  if (ctx.nextFixture()) return null;
+  if (!team.get("eliminated") && ctx.tournamentActive()) return null;
+  return { code: "no_kickoff", message: "No upcoming fixture: Overclock is available when your team has another kick-off." };
+}
+
+/** Why the default Tactical Scan (next scheduled own fixture) cannot run now, or null. */
+function scanBlocker(ctx) {
+  return ctx.nextFixture() ? null : { code: "no_fixture", message: "No upcoming fixture to scan." };
 }
 
 function buildTacticalScan($app, oppTeamId) {

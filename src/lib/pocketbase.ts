@@ -281,6 +281,12 @@ export type EffectiveModifiers = {
   overclock: number;
 };
 
+/** Why one Charge action is unavailable. Balance and busy are not blockers. */
+export type ActionBlocker = {
+  code: "armed" | "unavailable" | "no_kickoff" | "no_fixture";
+  message: string;
+};
+
 /** Costs and the Overclock bonus, taken from the same settings the actions use. */
 export type ManagementHelp = {
   overclockBonus: number;
@@ -388,6 +394,14 @@ export const footfiveApi = {
       repairCostPerPoint: number;
       /** Action costs and the Overclock bonus. Absent from older servers. */
       managementHelp?: ManagementHelp;
+      /**
+       * Current Overclock and Tactical scan eligibility. Absent from older servers.
+       * Null means no state blocker; Charge balance stays a separate check.
+       */
+      actionBlockers?: {
+        overclock: ActionBlocker | null;
+        tactical_scan: ActionBlocker | null;
+      };
     }>("/api/footfive/my-team"),
 
   saveMyLineup: (starters: string[], subs: string[]) =>

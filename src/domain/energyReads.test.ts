@@ -22,7 +22,13 @@ const bal = require(path.resolve(__dirname, "../../pocketbase/pb_hooks/lib/balan
 type Row = Record<string, unknown> & { id: string };
 const record = (row: Row) => {
   const f = { ...row };
-  return { id: f.id, get: (k: string) => f[k], set: (k: string, v: unknown) => void (f[k] = v), fields: f };
+  return {
+    id: f.id,
+    get: (k: string) => f[k],
+    set: (k: string, v: unknown) => void (f[k] = v),
+    fields: f,
+    collection: () => ({ fields: { getByName: (n: string) => (n in f ? { name: n } : null) } }),
+  };
 };
 type Rec = ReturnType<typeof record>;
 
