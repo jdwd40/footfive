@@ -106,9 +106,15 @@ export default function BettingPage() {
             </p>
             <p className="text-xs text-muted">Fictional credits · no cash value · separate from any team treasury</p>
             {mine ? (
-              <dl className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+              <>
+                <p className="mt-3 text-center text-xs" data-testid="wallet-pending">
+                  <span className="text-muted">Pending stakes </span>
+                  <span className="tabular font-bold">{mine.pendingStaked == null ? "…" : credits(mine.pendingStaked)}</span>
+                </p>
+                <p className="mt-2 text-center text-[11px] text-muted">Settled bets in the latest 100 history</p>
+                <dl className="mt-1 grid grid-cols-3 gap-2 text-center text-xs">
                 <div>
-                  <dt className="text-muted">Staked</dt>
+                  <dt className="text-muted">Settled stakes</dt>
                   <dd className="tabular font-bold">{credits(mine.settledStaked)}</dd>
                 </div>
                 <div>
@@ -123,6 +129,7 @@ export default function BettingPage() {
                   </dd>
                 </div>
               </dl>
+              </>
             ) : null}
             {mine ? (
               <div className="mt-3 rounded-lg border border-line p-2 text-xs text-muted">

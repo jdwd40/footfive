@@ -562,7 +562,11 @@ function myBets($app, userId) {
     staked += b.stake;
     returned += b.payout;
   });
-  return { credits: u.get("credits") || 0, bets: list, settledStaked: staked, settledReturned: returned, net: returned - staked, topUp: topUpState(u) };
+  var pendingStaked = 0;
+  openBets($app, "user = {:u}", { u: userId }).forEach(function (b) {
+    pendingStaked += b.get("stake") || 0;
+  });
+  return { credits: u.get("credits") || 0, bets: list, settledStaked: staked, settledReturned: returned, net: returned - staked, pendingStaked: pendingStaked, topUp: topUpState(u) };
 }
 
 function topUpState(u) {
