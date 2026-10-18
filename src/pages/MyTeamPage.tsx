@@ -248,7 +248,8 @@ function Manage({ world }: { world: WorldSnapshot }) {
       } catch {
         setMsg({ ok: false, text: "Saved the scan, but the squad could not refresh." });
       }
-      await refreshScans();
+      // A slow saved-report read must not keep scan, Overclock, battery, or line-up disabled.
+      void refreshScans();
     } catch (err) {
       setMsg({ ok: false, text: err instanceof Error ? err.message : "Action failed" });
     } finally {

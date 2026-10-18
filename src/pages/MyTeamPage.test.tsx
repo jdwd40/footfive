@@ -575,4 +575,42 @@ describe("My Team tactical scan reports", () => {
     expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).not.toContain("hidden-fixture");
   });
+
+  it("shows the purchased report and leaves management actions enabled while the saved-report refresh is pending", async () => {
+    let releaseSaved!: (value: { scans: TacticalScan[] }) => void;
+    const pending = new Promise<{ scans: TacticalScan[] }>((resolve) => { releaseSaved = resolve; });
+    let calls = 0;
+    const tired = squad(FIVE, { energy: { o1: 50 }, batteries: 1 });
+    await mountSquads(tired, tired, CHARGE, () => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve({ scans: [] });
+      return pending;
+    });
+    vi.mocked(footfiveApi.spendCommandCharge).mockResolvedValue({
+      ok: true,
+      action: "tactical_scan",
+      fixtureId: "hidden-fixture",
+      report: report("Just Bought", 77),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Tactical scan (1)" }));
+    expect(await screen.findByTestId("scan-report")).toHaveTextContent("Approx attack 77");
+    expect(await screen.findByTestId("team-msg")).toHaveTextContent("Tactical scan ready.");
+    expect(footfiveApi.tacticalScans).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Overclock (2)" })).toBeEnabled();
+    const starters = screen.getAllByTitle("In the five — tap to rest");
+    expect(starters).toHaveLength(5);
+    for (const chip of starters) expect(chip).toBeEnabled();
+    const row = screen.getByText("Player O1").closest("li")!;
+    await userEvent.click(within(row).getByRole("button", { name: /Player O1/ }));
+    expect(within(row).getByRole("button", { name: "Battery (up to +40)" })).toBeEnabled();
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("scan-error")).not.toBeInTheDocument();
+    await act(async () => {
+      releaseSaved({ scans: [] });
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Tactical scan (1)" })).toBeEnabled();
+    expect(footfiveApi.spendCommandCharge).toHaveBeenCalledTimes(1);
+  });
 });
