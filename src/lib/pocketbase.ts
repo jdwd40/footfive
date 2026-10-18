@@ -271,6 +271,24 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Raw multipliers behind one squad estimate. Coaching is not one of them. */
+export type EffectiveModifiers = {
+  base: { attack: number; defence: number };
+  role: { attack: number; defence: number };
+  intensity: { attack: number; defence: number };
+  energy: number;
+  condition: number;
+  overclock: number;
+};
+
+/** Costs and the Overclock bonus, taken from the same settings the actions use. */
+export type ManagementHelp = {
+  overclockBonus: number;
+  overclockEnergyCost: number;
+  overclockChargeCost: number;
+  tacticalScanChargeCost: number;
+};
+
 export const footfiveApi = {
   serverTime: () => api<{ serverTime: string; serverTimeMs: number }>("/api/footfive/server-time"),
   live: () => api<LiveView>("/api/footfive/live"),
@@ -313,6 +331,8 @@ export const footfiveApi = {
         effective_defence: number;
         sort_order: number;
         upgrade_cost: { attack: number; defence: number };
+        /** Raw factors behind the effective numbers. Absent from older servers. */
+        effective_modifiers?: EffectiveModifiers;
       }>;
       averages: { energy: number; condition: number };
       managementOpen: boolean;
@@ -322,6 +342,8 @@ export const footfiveApi = {
       /** Most energy one battery adds (capped at 100). Absent from older servers. */
       batteryRestore?: number;
       repairCostPerPoint: number;
+      /** Action costs and the Overclock bonus. Absent from older servers. */
+      managementHelp?: ManagementHelp;
     }>("/api/footfive/my-team"),
 
   saveMyLineup: (starters: string[], subs: string[]) =>

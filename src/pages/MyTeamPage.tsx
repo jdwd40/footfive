@@ -3,11 +3,36 @@ import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import { Kit, TeamLabel } from "../components/Team";
 import { countdown, credits, ukTime, useNow } from "../lib/live";
-import { footfiveApi, type TeamPublic, type WorldSnapshot } from "../lib/pocketbase";
+import { footfiveApi, type EffectiveModifiers, type ManagementHelp, type TeamPublic, type WorldSnapshot } from "../lib/pocketbase";
 
 type Squad = Awaited<ReturnType<typeof footfiveApi.myTeam>>;
 type Player = Squad["players"][number];
 type Stance = "defend" | "balanced" | "attack";
+
+function integerCost(n: number | undefined, fallback: number): number {
+  return typeof n === "number" && Number.isFinite(n) && n > 0 && Math.floor(n) === n ? n : fallback;
+}
+
+function finitePair(x: { attack: number; defence: number } | undefined): x is { attack: number; defence: number } {
+  return !!x && typeof x.attack === "number" && Number.isFinite(x.attack) && typeof x.defence === "number" && Number.isFinite(x.defence);
+}
+
+function modifiersFrom(m: EffectiveModifiers | undefined): EffectiveModifiers | null {
+  if (!m || !finitePair(m.base) || !finitePair(m.role) || !finitePair(m.intensity)) return null;
+  if (![m.energy, m.condition, m.overclock].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  return m;
+}
+
+function helpFrom(h: ManagementHelp | undefined): ManagementHelp | null {
+  if (!h) return null;
+  if (![h.overclockBonus, h.overclockEnergyCost, h.overclockChargeCost, h.tacticalScanChargeCost].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  return h;
+}
+
+/** Display only. Server factors stay exact; this trims binary noise such as 0.7130000000000001. */
+function times(n: number): string {
+  return `×${Number(n.toFixed(4))}`;
+}
 
 export default function MyTeamPage() {
   const [world, setWorld] = useState<WorldSnapshot | null>(null);
@@ -126,6 +151,11 @@ function Manage({ world }: { world: WorldSnapshot }) {
   const t = sq.team;
   // Older servers don't send the battery amount; the copy then names no number.
   const restore = typeof sq.batteryRestore === "number" && Number.isFinite(sq.batteryRestore) && sq.batteryRestore > 0 ? sq.batteryRestore : null;
+  const help = helpFrom(sq.managementHelp);
+  const scanCost = integerCost(help?.tacticalScanChargeCost, 1);
+  const overclockCost = integerCost(help?.overclockChargeCost, 2);
+  const overclockBonus = help && help.overclockBonus > 0 ? help.overclockBonus : null;
+  const overclockEnergy = help && help.overclockEnergyCost > 0 ? help.overclockEnergyCost : null;
   const ai = t.mode === "ai";
   const next = world.nextFixture;
   const starters = draft || sq.players.filter((p) => p.is_starter).map((p) => p.id);
@@ -299,14 +329,24 @@ function Manage({ world }: { world: WorldSnapshot }) {
               <div className="h-full bg-gradient-to-r from-cyan to-magenta" style={{ width: `${(cc.points / Math.max(cc.max, 1)) * 100}%` }} />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < 1} onClick={() => run(() => footfiveApi.spendCommandCharge("tactical_scan"), "Tactical scan ready.")}>
-                Tactical scan (1)
+              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < scanCost} onClick={() => run(() => footfiveApi.spendCommandCharge("tactical_scan"), "Tactical scan ready.")}>
+                Tactical scan ({scanCost})
               </button>
-              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < 2 || t.overclock_ready} onClick={() => run(() => footfiveApi.spendCommandCharge("overclock"), "Overclock armed for your next kick-off.")}>
-                Overclock (2)
+              <button type="button" className="btn-ghost !min-h-10 text-[11px]" disabled={busy || cc.points < overclockCost || t.overclock_ready} onClick={() => run(() => footfiveApi.spendCommandCharge("overclock"), "Overclock armed for your next kick-off.")}>
+                Overclock ({overclockCost})
               </button>
             </div>
             {t.overclock_ready ? <p className="mt-2 text-xs text-lime">Overclock armed for your next kick-off.</p> : null}
+            <details className="mt-2 text-xs text-muted" data-testid="charge-help">
+              <summary className="cursor-pointer select-none">What do these do?</summary>
+              <p className="mt-1" data-testid="scan-help">
+                Tactical scan ({scanCost} Charge): an approximate report on your next opponent — team strength and their starters&apos; energy and condition. It gives your team no boost.
+              </p>
+              <p className="mt-1" data-testid="overclock-help">
+                Overclock ({overclockCost} Charge): for your next fixture only,{" "}
+                {overclockBonus != null ? `effective ATK/DEF ×${overclockBonus} (+${Number(((overclockBonus - 1) * 100).toFixed(1))}%)` : "a boost to effective ATK/DEF"}. At that kick-off each of the five who actually start pays {overclockEnergy != null ? `${overclockEnergy} energy` : "an energy cost"}. Arming does not spend that energy, and it does not change a match already being played.
+              </p>
+            </details>
           </section>
 
           <section className="panel p-4">
@@ -337,6 +377,65 @@ function Manage({ world }: { world: WorldSnapshot }) {
         </aside>
       </div>
     </div>
+  );
+}
+
+function StatHelp({ p }: { p: Player }) {
+  const mods = modifiersFrom(p.effective_modifiers);
+  const rows: Array<[string, string, string]> = mods
+    ? [
+        ["Base", String(mods.base.attack), String(mods.base.defence)],
+        [`Role (${(p.role || "util").toUpperCase()})`, times(mods.role.attack), times(mods.role.defence)],
+        [`Intensity (${p.intensity})`, times(mods.intensity.attack), times(mods.intensity.defence)],
+        [`Energy ${p.energy}%`, times(mods.energy), times(mods.energy)],
+        [`Condition ${p.condition}%`, times(mods.condition), times(mods.condition)],
+        [mods.overclock === 1 ? "Overclock (not armed)" : "Overclock (armed)", times(mods.overclock), times(mods.overclock)],
+      ]
+    : [];
+  return (
+    <details className="text-xs text-muted" data-testid="stat-help">
+      <summary className="cursor-pointer select-none">Why these numbers?</summary>
+      {mods ? (
+        <table className="mt-1 w-full tabular" data-testid="stat-breakdown" aria-label={`${p.name} effective stats breakdown`}>
+          <thead>
+            <tr>
+              <th scope="col" className="text-left font-normal">Factor</th>
+              <th scope="col" className="text-right font-normal">ATK</th>
+              <th scope="col" className="text-right font-normal">DEF</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, atk, def]) => (
+              <tr key={label}>
+                <th scope="row" className="text-left font-normal">{label}</th>
+                <td className="text-right">{atk}</td>
+                <td className="text-right">{def}</td>
+              </tr>
+            ))}
+            <tr className="font-semibold text-white">
+              <th scope="row" className="text-left">Effective (rounded)</th>
+              <td className="text-right">{p.effective_attack}</td>
+              <td className="text-right">{p.effective_defence}</td>
+            </tr>
+          </tbody>
+        </table>
+      ) : null}
+      {mods ? <p className="mt-1">Displayed multipliers are rounded to 4 decimal places.</p> : null}
+      <p className="mt-1" data-testid="energy-help">
+        Energy recovers automatically over time, so effective ATK/DEF can rise without you doing anything. Playing matches uses it up.
+      </p>
+      <p className="mt-1" data-testid="condition-help">
+        Condition is wear from playing. It doesn&apos;t recover on its own — Repair restores it.
+      </p>
+      {mods && mods.overclock !== 1 ? (
+        <p className="mt-1" data-testid="overclock-preview-help">
+          This armed preview already includes the Overclock factor. The energy cost is paid at kick-off by the five who actually start, so these energy numbers do not include that debit yet.
+        </p>
+      ) : null}
+      <p className="mt-1" data-testid="estimate-help">
+        These are estimates for your squad right now. Kick-off tactics change the match&apos;s chance tempo. These individual ATK/DEF numbers follow role, intensity, energy, condition and Overclock. A match already being played keeps the setup from its own kick-off.
+      </p>
+    </details>
   );
 }
 
@@ -411,6 +510,7 @@ function PlayerRow({
           <p className="text-xs text-muted" data-testid="effective-hint">
             Effective ATK/DEF is the base stat adjusted for role, intensity, energy and condition (and Overclock when armed).
           </p>
+          <StatHelp p={p} />
           <div className="flex flex-wrap gap-1">
             {(["passive", "balanced", "aggressive"] as const).map((iv) => (
               <button

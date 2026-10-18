@@ -235,6 +235,26 @@ function findRecordOrNull($app, collection, id) {
   }
 }
 
+/**
+ * Raw factors effectivePlayerStats multiplied, with the same fallbacks.
+ * effective = round1(base x role x intensity x energy x condition x overclock).
+ * Coaching is match tempo, so it is not a factor here.
+ */
+function effectiveModifiers(snap, overclock, eff) {
+  var roleKey = snap.role || "util";
+  var w = BALANCE.roleWeights[roleKey] || BALANCE.roleWeights.util;
+  var intensityKey = snap.intensity || "balanced";
+  var im = BALANCE.intensity[intensityKey] || BALANCE.intensity.balanced;
+  return {
+    base: { attack: snap.attack || 50, defence: snap.defence || 50 },
+    role: { attack: w.attack, defence: w.defence },
+    intensity: { attack: im.attack, defence: im.defence },
+    energy: eff.energyFactor,
+    condition: eff.conditionFactor,
+    overclock: overclock ? BALANCE.overclockBonus : 1,
+  };
+}
+
 function playerPublic($app, p, coachingStance, overclock) {
   var energy = materialisePlayerEnergy($app, p);
   var condition = p.get("condition");
@@ -257,6 +277,7 @@ function playerPublic($app, p, coachingStance, overclock) {
   });
   snap.effective_attack = eff.attack;
   snap.effective_defence = eff.defence;
+  snap.effective_modifiers = effectiveModifiers(snap, !!overclock, eff);
   snap.upgrade_cost = { attack: upgradeCost(snap.attack), defence: upgradeCost(snap.defence) };
   return snap;
 }
@@ -313,6 +334,12 @@ function getSquad($app, userId) {
     batteryRestore: BALANCE.batteryRestore,
     repairCostPerPoint: BALANCE.repairCostPerPoint,
     aiRules: AI_RULES,
+    managementHelp: {
+      overclockBonus: BALANCE.overclockBonus,
+      overclockEnergyCost: BALANCE.overclockEnergyCost,
+      overclockChargeCost: commandChargeCost("overclock"),
+      tacticalScanChargeCost: commandChargeCost("tactical_scan"),
+    },
   };
 }
 
