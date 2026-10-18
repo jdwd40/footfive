@@ -651,7 +651,7 @@ describe("MatchPage labels and timing (#78)", () => {
       expect(row("Spot kick").textContent).toBe("P");
       expect(row("Spot kick").getAttribute("title")).toBe("120:00");
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "attack" })));
-      expect(screen.getByText(`Attack from ${minuteLabel(59)}.`)).toBeTruthy();
+      expect(screen.getByText(`Attack accepted from ${minuteLabel(59)}.`)).toBeTruthy();
     } finally {
       coaching.mockRestore();
     }
@@ -663,5 +663,235 @@ describe("MatchPage labels and timing (#78)", () => {
     await mount(v);
     expect(screen.queryByText("The match hasn't started.")).toBeNull();
     expect(screen.getByText(/Not kicked off yet/)).toBeTruthy();
+  });
+});
+
+describe("MatchPage coaching feedback", () => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    cleanup();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.match).mockReset();
+  });
+
+  function withCoach(patch: Partial<NonNullable<MatchView["coach"]>> & { fixtureId?: string } = {}): MatchView {
+    const { fixtureId = "fx1", ...coach } = patch;
+    const v = view([ev(1, Date.now() - 30000, "Pass")], null, Date.now());
+    v.fixture = { ...v.fixture, id: fixtureId };
+    v.managedSide = "home";
+    v.coach = { stance: "balanced", pending: false, ai: false, used: 0, max: 3, cooldownUntil: 0, ...coach };
+    return v;
+  }
+
+  const touchline = () => within(screen.getByTestId("coaching"));
+
+  it("shows the accepted acknowledgement and 2/3 left before refresh resolves", async () => {
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    let refresh: ((v: MatchView) => void) | null = null;
+    match.mockResolvedValueOnce(withCoach());
+    match.mockImplementationOnce(() => new Promise((resolve) => { refresh = resolve; }));
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockResolvedValue({ ok: true, stance: "attack", fromMinute: 59, used: 1, max: 3 });
+    try {
+      await mount();
+      expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Balanced.");
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      expect(match).toHaveBeenCalledTimes(2);
+      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
+      expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
+      expect(touchline().getByRole("button", { name: "attack" })).toHaveAttribute("aria-pressed", "false");
+      expect(touchline().getByRole("button", { name: "balanced" })).toHaveAttribute("aria-pressed", "false");
+      expect(refresh).toBeTypeOf("function");
+    } finally {
+      if (refresh) await act(async () => refresh!(withCoach()));
+      coaching.mockRestore();
+    }
+  });
+
+  it("follows active, queued, then active once fresh snapshots catch up", async () => {
+    vi.useFakeTimers();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    const queuedSnap = withCoach({ stance: "attack", pending: true, used: 1, max: 3 });
+    const activeSnap = withCoach({ stance: "attack", pending: false, used: 1, max: 3 });
+    match.mockResolvedValueOnce(withCoach());
+    match.mockResolvedValueOnce(queuedSnap);
+    match.mockResolvedValue(activeSnap);
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockResolvedValue({ ok: true, stance: "attack", fromMinute: 59, used: 1, max: 3 });
+    try {
+      await mount();
+      expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Balanced.");
+      expect(touchline().getByRole("button", { name: "balanced" })).toHaveAttribute("aria-pressed", "true");
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
+      expect(touchline().getByRole("button", { name: "attack" })).toHaveAttribute("aria-pressed", "false");
+      expect(touchline().getByRole("button", { name: "attack" }).className).not.toMatch(/bg-cyan/);
+      expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
+      expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Attack.");
+      expect(touchline().getByTestId("coaching-state").textContent).not.toContain("Queued:");
+      expect(touchline().getByRole("button", { name: "attack" })).toHaveAttribute("aria-pressed", "true");
+      expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
+    } finally {
+      coaching.mockRestore();
+    }
+  });
+
+  it("does not reuse an earlier fromMinute when a fresher snapshot queues the same stance", async () => {
+    vi.useFakeTimers();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    match.mockResolvedValueOnce(withCoach());
+    match.mockResolvedValueOnce(withCoach({ stance: "attack", pending: true, used: 1, max: 3 }));
+    match.mockResolvedValue(withCoach({ stance: "attack", pending: true, used: 3, max: 3 }));
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockResolvedValue({ ok: true, stance: "attack", fromMinute: 59, used: 1, max: 3 });
+    try {
+      await mount();
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
+      await act(async () => { await vi.advanceTimersByTimeAsync(MATCH_POLL_MS); });
+      const state = touchline().getByTestId("coaching-state").textContent ?? "";
+      expect(state).toContain("Queued: Attack. ");
+      expect(state).not.toContain("from ");
+      expect(state).not.toContain(minuteLabel(59));
+      expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
+    } finally {
+      coaching.mockRestore();
+    }
+  });
+
+  it("keeps the accepted acknowledgement and count when refresh fails or a stale snapshot arrives", async () => {
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const accepted = { ok: true, stance: "attack", fromMinute: 59, used: 1, max: 3 };
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockResolvedValue(accepted);
+    try {
+      const failed = vi.mocked(footfiveApi.match).mockReset();
+      failed.mockResolvedValueOnce(withCoach());
+      failed.mockRejectedValueOnce(new Error("Match unavailable"));
+      await mount();
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
+      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
+      expect(screen.queryByText("Match unavailable")).toBeNull();
+      cleanup();
+
+      const staleMatch = vi.mocked(footfiveApi.match).mockReset();
+      let refresh: ((v: MatchView) => void) | null = null;
+      staleMatch.mockResolvedValueOnce(withCoach());
+      staleMatch.mockImplementationOnce(() => new Promise((resolve) => { refresh = resolve; }));
+      await mount();
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      await act(async () => refresh!(withCoach({ stance: "balanced", pending: false, used: 0, max: 3 })));
+      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().queryByText("3/3 commands left")).toBeNull();
+      expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
+      expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
+      expect(touchline().getByTestId("coaching-state").textContent).not.toContain("Active:");
+      expect(touchline().getByRole("button", { name: "balanced" })).toHaveAttribute("aria-pressed", "false");
+      expect(touchline().getByRole("button", { name: "balanced" })).toBeEnabled();
+    } finally {
+      coaching.mockRestore();
+    }
+  });
+
+  it("shows an error and does not spend a command when the server rejects it", async () => {
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.match).mockReset().mockResolvedValue(withCoach());
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockRejectedValueOnce(new Error("Command recharging — available in 4s"));
+    try {
+      await mount();
+      expect(touchline().getByText("3/3 commands left")).toBeTruthy();
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      expect(touchline().getByRole("alert").textContent).toBe("Command recharging — available in 4s");
+      expect(touchline().queryByRole("status")).toBeNull();
+      expect(touchline().getByText("3/3 commands left")).toBeTruthy();
+      expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Balanced.");
+      expect(touchline().getByTestId("coaching-state").textContent).not.toContain("Queued:");
+      expect(coaching).toHaveBeenCalledTimes(1);
+    } finally {
+      coaching.mockRestore();
+    }
+  });
+
+  it("labels a pending server stance as queued and does not present it as the active one", async () => {
+    await mount(withCoach({ stance: "attack", pending: true, used: 1, max: 3 }));
+    const state = touchline().getByTestId("coaching-state").textContent ?? "";
+    expect(state).toContain("Queued: Attack.");
+    expect(state).not.toContain("Active:");
+    expect(state).not.toContain("from ");
+    expect(state).toContain("Commands affect future play only.");
+    const attack = touchline().getByRole("button", { name: "attack" });
+    expect(attack).toHaveAttribute("aria-pressed", "false");
+    expect(attack.className).not.toMatch(/bg-cyan/);
+    expect(attack).toBeDisabled();
+    expect(touchline().getByRole("button", { name: "balanced" })).toHaveAttribute("aria-pressed", "false");
+    expect(touchline().getByRole("button", { name: "balanced" })).toBeEnabled();
+    expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+    expect(touchline().queryByRole("status")).toBeNull();
+  });
+
+  it("keeps Full AI, command limit, cooldown, and closed-phase guards", async () => {
+    await mount(withCoach({ ai: true }));
+    expect(touchline().getByText(/Full AI/)).toBeTruthy();
+    expect(touchline().queryByRole("button", { name: "attack" })).toBeNull();
+    cleanup();
+
+    await mount(withCoach({ used: 3, max: 3 }));
+    expect(touchline().getByText("0/3 commands left")).toBeTruthy();
+    expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
+    expect(touchline().getByRole("button", { name: "defend" })).toBeDisabled();
+    expect(touchline().getByRole("button", { name: "balanced" })).toBeDisabled();
+    cleanup();
+
+    await mount(withCoach({ cooldownUntil: Date.now() + 60_000 }));
+    expect(touchline().getByTestId("coaching-state").textContent).toMatch(/Recharging:/);
+    expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
+    expect(touchline().getByText(/Commands affect future play only/)).toBeTruthy();
+    cleanup();
+
+    const shootout = withCoach();
+    shootout.fixture = { ...shootout.fixture, st: { ...st!, ph: "shootout" } };
+    await mount(shootout);
+    expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
+    cleanup();
+
+    const finished = withCoach();
+    finished.fixture = { ...finished.fixture, status: "finished", st: { ...st!, ph: "finished" } };
+    await mount(finished);
+    expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
+  });
+
+  it("does not leak an accepted command onto the next fixture", async () => {
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const { default: MatchPage } = await import("./MatchPage");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    match.mockImplementation((id: string) => Promise.resolve(id === "fx2" ? withCoach({ fixtureId: "fx2", stance: "defend", pending: false, used: 0 }) : withCoach()));
+    const coaching = vi.spyOn(footfiveApi, "coaching").mockResolvedValue({ ok: true, stance: "attack", fromMinute: 59, used: 1, max: 3 });
+    try {
+      await act(async () => {
+        render(
+          <MemoryRouter initialEntries={["/match/fx1"]}>
+            <Link to="/match/fx2">Switch fixture</Link>
+            <Routes>
+              <Route path="/match/:fixtureId" element={<MatchPage />} />
+            </Routes>
+          </MemoryRouter>,
+        );
+      });
+      await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
+      expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
+      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      await act(async () => fireEvent.click(screen.getByText("Switch fixture")));
+      expect(touchline().queryByRole("status")).toBeNull();
+      expect(touchline().queryByText(/Attack accepted/)).toBeNull();
+      expect(touchline().queryByText(/Queued:/)).toBeNull();
+      expect(touchline().getByText("3/3 commands left")).toBeTruthy();
+      expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Defend.");
+    } finally {
+      coaching.mockRestore();
+    }
   });
 });
