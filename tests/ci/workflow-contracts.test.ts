@@ -293,6 +293,21 @@ describe("footfive-ci.yml contracts", () => {
     expect(pkg.scripts["test:http-errors"]).toBe("node tests/integration/http-errors.mjs");
   });
 
+  it("requires native collection guards and real CLI cleanup after HTTP contracts", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => step.split("\n").includes(`        run: ${run}`));
+    const guards = steps.filter((step) => /^ {8}run: npm run test:collection-guards$/m.test(step));
+    expect(guards).toHaveLength(1);
+    expect(guards[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(guards[0]).toMatch(/^ {10}COLLECTION_GUARDS_PB_PORT: "8308"$/m);
+    expect(at("npm run test:http-errors")).toBeGreaterThan(-1);
+    expect(at("npm run test:collection-guards")).toBeGreaterThan(at("npm run test:http-errors"));
+    expect(steps.findIndex((step) => step.startsWith("name: Start test PocketBase")))
+      .toBeGreaterThan(at("npm run test:collection-guards"));
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:collection-guards"]).toBe("node tests/integration/collection-guards.mjs");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

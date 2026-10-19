@@ -185,101 +185,120 @@ routerUse((e) => {
   return e.next();
 });
 
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "proball_teams");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "proball_teams");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "match_states");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "match_states");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_fixtures");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_fixtures");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_bets");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_bets");
+// Native collection API policy (review B8/D2). One registration per event and
+// collection, each callback self-contained (PB JSVM runs it without its outer
+// scope). FootFive services write through $app/tx, which never reach these
+// request hooks. Null API rules already stop non-superusers on every base
+// collection below; these guards keep that so if a rule is ever loosened.
+// Application-role admins are ordinary clients here.
 
-// Phase 6: lock more server-owned collections from client mutation
-// (inline per-collection — PB JSVM must not rely on outer-scope loops)
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "global_team_records");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "global_team_records");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "global_player_records");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "global_player_records");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "match_summaries");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "match_summaries");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "tournament_summaries");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "tournament_summaries");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "credit_ledger");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "credit_ledger");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "team_finance_ledger");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "team_finance_ledger");
-// admin_audit_logs: createRule is null — clients cannot create; superuser CLI + $app.save allowed
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "proball_players");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "proball_players");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_tournaments");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_tournaments");
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_rounds");
-onRecordUpdateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "shared_rounds");
-// Teams: block client create/update; superuser CLI needs manager release
-onRecordCreateRequest((e) => {
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "proball_teams");
-onRecordUpdateRequest((e) => {
-  try {
-    if (typeof e.hasSuperuserAuth === "function" && e.hasSuperuserAuth()) {
-      e.next();
-      return;
-    }
-  } catch (_) {}
-  throw new ForbiddenError("Use protected FootFive routes");
-}, "proball_teams");
+// Server-owned game state: no native create/update for anyone, superusers
+// included; use the protected FootFive routes.
+onRecordCreateRequest(
+  function (e) {
+    throw new ForbiddenError("Use protected FootFive routes");
+  },
+  "proball_teams",
+  "match_states",
+  "shared_fixtures",
+  "shared_bets",
+  "global_team_records",
+  "global_player_records",
+  "match_summaries",
+  "tournament_summaries",
+  "credit_ledger",
+  "team_finance_ledger",
+  "proball_players",
+  "shared_tournaments",
+  "shared_rounds"
+);
+onRecordUpdateRequest(
+  function (e) {
+    throw new ForbiddenError("Use protected FootFive routes");
+  },
+  "match_states",
+  "shared_fixtures",
+  "shared_bets",
+  "global_team_records",
+  "global_player_records",
+  "match_summaries",
+  "tournament_summaries",
+  "credit_ledger",
+  "team_finance_ledger",
+  "proball_players",
+  "shared_tournaments",
+  "shared_rounds"
+);
+
+// Trusted superuser operations (dashboard, scripts/footfive-admin.mjs) keep
+// native access: team updates such as the cleanup manager release, and the
+// remaining app collections. Everyone else is denied.
+onRecordCreateRequest(
+  function (e) {
+    if (e.hasSuperuserAuth()) return e.next();
+    throw new ForbiddenError("Use protected FootFive routes");
+  },
+  "admin_audit_logs",
+  "app_settings",
+  "backfill_runs",
+  "coaching_commands",
+  "command_charge",
+  "match_events",
+  "retention_runs",
+  "reward_settlements",
+  "tactical_scans",
+  "world"
+);
+onRecordUpdateRequest(
+  function (e) {
+    if (e.hasSuperuserAuth()) return e.next();
+    throw new ForbiddenError("Use protected FootFive routes");
+  },
+  "proball_teams",
+  "admin_audit_logs",
+  "app_settings",
+  "backfill_runs",
+  "coaching_commands",
+  "command_charge",
+  "match_events",
+  "retention_runs",
+  "reward_settlements",
+  "tactical_scans",
+  "world"
+);
+
+// Native deletes are superuser-only. For users this stops self-delete, which
+// would otherwise cascade the account's bets, ledger, Command Charge and scans.
+onRecordDeleteRequest(
+  function (e) {
+    if (e.hasSuperuserAuth()) return e.next();
+    throw new ForbiddenError("Use protected FootFive routes");
+  },
+  "users",
+  "proball_teams",
+  "match_states",
+  "shared_fixtures",
+  "shared_bets",
+  "global_team_records",
+  "global_player_records",
+  "match_summaries",
+  "tournament_summaries",
+  "credit_ledger",
+  "team_finance_ledger",
+  "proball_players",
+  "shared_tournaments",
+  "shared_rounds",
+  "admin_audit_logs",
+  "app_settings",
+  "backfill_runs",
+  "coaching_commands",
+  "command_charge",
+  "match_events",
+  "retention_runs",
+  "reward_settlements",
+  "tactical_scans",
+  "world"
+);
 
 // The world advances on this one-minute cron (which, while a round is live, keeps
 // pumping the lease-guarded tick ~1/s for the rest of its minute), the throttled /health designed-tick

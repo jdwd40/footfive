@@ -104,7 +104,9 @@ async function countAdmins(token) {
 }
 
 async function audit(token, action, user, before, after, reason) {
-  // admin_audit_logs.createRule is null — superuser can create; admin relation optional
+  // Best effort. admin_audit_logs.admin is a required relation to an app user and this
+  // superuser CLI has none to give, so today the write fails validation and is skipped
+  // with the warning below (known limitation).
   try {
     await json("/api/collections/admin_audit_logs/records", {
       method: "POST",
@@ -169,6 +171,16 @@ async function demote(email, confirm, forceLast) {
   console.log("demoted", updated.email, "role=", updated.role);
 }
 
+/** Rows matching a superuser list filter; throws if the lookup fails. */
+async function countRecords(token, collection, filter) {
+  const res = await json(
+    `/api/collections/${collection}/records?filter=${encodeURIComponent(filter)}&perPage=1`,
+    { token },
+  );
+  if (typeof res.totalItems !== "number") throw new Error(`${collection} lookup returned no total`);
+  return res.totalItems;
+}
+
 async function cleanupSmoke(confirm) {
   if (!confirm) throw new Error("Refusing without --confirm");
   const token = await superuserToken();
@@ -178,11 +190,28 @@ async function cleanupSmoke(confirm) {
     (u) => re.test(u.email || "") || /smoke/i.test(u.display_name || ""),
   );
   for (const u of candidates) {
-    // release team if any
+    // Application admins are never cleaned up here; use demote first if intended.
+    if (u.role === "admin") {
+      console.log("skipped admin", u.email);
+      continue;
+    }
+    // Every lookup runs before any change and fails closed: an error aborts the
+    // run with this candidate untouched (never "no bets" / "no history").
     const teams = await json(
       `/api/collections/proball_teams/records?filter=${encodeURIComponent(`manager="${u.id}"`)}&perPage=5`,
       { token },
     );
+    const bets = await json(
+      `/api/collections/shared_bets/records?filter=${encodeURIComponent(`user="${u.id}" && settled=false`)}&perPage=20`,
+      { token },
+    );
+    const openBets = (bets.items || []).length > 0;
+    // Audit actors and coaching users are required references: PB refuses to
+    // delete them, so they are disabled instead (as the admin delete route does).
+    const history =
+      (await countRecords(token, "admin_audit_logs", `admin="${u.id}"`)) > 0 ||
+      (await countRecords(token, "coaching_commands", `user="${u.id}"`)) > 0;
+    // release team if any
     for (const t of teams.items || []) {
       await json(`/api/collections/proball_teams/records/${t.id}`, {
         method: "PATCH",
@@ -191,17 +220,13 @@ async function cleanupSmoke(confirm) {
       });
       console.log("released team", t.name || t.id, "from", u.email);
     }
-    // check open bets
-    const bets = await json(
-      `/api/collections/shared_bets/records?filter=${encodeURIComponent(`user="${u.id}" && settled=false`)}&perPage=20`,
-      { token },
-    ).catch(() => ({ items: [] }));
-    if ((bets.items || []).length) {
-      console.log("disable (open bets)", u.email);
+    if (openBets || history) {
+      const why = openBets ? "open bets" : "audit/coaching history";
+      console.log(`disable (${why})`, u.email);
       await json(`/api/collections/users/records/${u.id}`, {
         method: "PATCH",
         token,
-        body: { disabled: true, admin_note: "disabled: deploy smoke with open bets" },
+        body: { disabled: true, admin_note: `disabled: deploy smoke with ${why}` },
       });
       await audit(token, "cli_disable_smoke", u, { disabled: false }, { disabled: true }, "smoke cleanup");
       continue;

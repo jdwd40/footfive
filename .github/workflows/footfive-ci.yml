@@ -73,6 +73,10 @@ jobs:
         env:
           HTTP_ERRORS_PB_PORT: "8307"
         run: npm run test:http-errors
+      - name: Native collection guards and cleanup (disposable PocketBase)
+        env:
+          COLLECTION_GUARDS_PB_PORT: "8308"
+        run: npm run test:collection-guards
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test
