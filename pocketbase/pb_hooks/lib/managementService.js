@@ -153,6 +153,18 @@ function materialisePlayerEnergy($app, playerRec, pace) {
   return Math.round(energy);
 }
 
+/**
+ * The energy materialisePlayerEnergy would return for this stored row at `now`, without
+ * saving (review B13): same formula, default, clamps and rounding. Reads use it so they
+ * never round or re-stamp a row; only mutations materialise. A row with no stamp has no
+ * regeneration anchor, so it reads as stored until a mutation stamps it.
+ */
+function currentEnergy(playerRec, regenPerHour, now) {
+  var stored = playerRec.get("energy");
+  if (stored == null) stored = 100;
+  return Math.round(materialiseEnergy(stored, parsePbDate(playerRec.get("energy_updated_at")), now, regenPerHour));
+}
+
 function findCommandCharge($app, userId) {
   var rows = $app.findRecordsByFilter("command_charge", "user = {:u}", "", 1, 0, { u: userId });
   return rows && rows.length ? rows[0] : null;
@@ -255,8 +267,7 @@ function effectiveModifiers(snap, overclock, eff) {
   };
 }
 
-function playerPublic($app, p, coachingStance, overclock) {
-  var energy = materialisePlayerEnergy($app, p);
+function playerPublic(p, coachingStance, overclock, energy) {
   var condition = p.get("condition");
   if (condition == null) condition = 100;
   var snap = {
@@ -294,11 +305,14 @@ function getSquad($app, userId) {
     { t: team.id },
   );
   var overclock = !!team.get("overclock_ready");
+  // Read-only: one pace read and one instant for the whole squad, no player saves (B13)
+  var regen = getTiming(pace).energyRegenPerHour;
+  var now = Date.now();
   var list = [];
   var energySum = 0;
   var condSum = 0;
   for (var i = 0; i < players.length; i++) {
-    var pub = playerPublic($app, players[i], "balanced", overclock);
+    var pub = playerPublic(players[i], "balanced", overclock, currentEnergy(players[i], regen, now));
     list.push(pub);
     energySum += pub.energy;
     condSum += pub.condition;
@@ -602,15 +616,12 @@ function useBattery($app, userId, playerId) {
 function repairPlayer($app, userId, playerId, points) {
   points = parseInt(points, 10);
   if (!points || points < 1) throw new BadRequestError("Invalid repair points");
-  var presets = [10, 25, 50, 100];
-  if (presets.indexOf(points) < 0 && points !== 100) {
-    // allow any 1-100
-    if (points > 100) points = 100;
-  }
+  if (points > 100) points = 100;
   var team = requireManagerTeam($app, userId);
   var player = $app.findRecordById("proball_players", playerId);
   if (player.get("team") !== team.id) throw new ForbiddenError("Not your player");
-  var cost = repairCost(points);
+  var applied = 0;
+  var charged = 0;
 
   $app.runInTransaction(function (txApp) {
     var t = txApp.findRecordById("proball_teams", team.id);
@@ -630,8 +641,11 @@ function repairPlayer($app, userId, playerId, points) {
       idempotency_key: "repair:" + playerId + ":" + Date.now(),
       player_id: playerId,
     });
+    applied = need;
+    charged = c;
   });
-  return { ok: true, points: points, cost: cost };
+  // What was actually restored and charged, which can be less than requested (B22)
+  return { ok: true, points: applied, cost: charged };
 }
 
 /**
@@ -878,7 +892,12 @@ function teamFinances($app, userId, limit) {
 /**
  * Load players for match freeze with materialised energy + overclock.
  */
-function loadTeamSnapshot($app, teamId) {
+/**
+ * Engine snapshot of a team. By default energy is materialised (saved), as kick-off and
+ * other lifecycle callers expect. opts.readOnlyEnergy computes it instead from one pace
+ * read at opts.now (or now) and saves nothing, for read views such as the match preview.
+ */
+function loadTeamSnapshot($app, teamId, opts) {
   var team = $app.findRecordById("proball_teams", teamId);
   var players = $app.findRecordsByFilter(
     "proball_players",
@@ -888,10 +907,13 @@ function loadTeamSnapshot($app, teamId) {
     0,
     { t: teamId },
   );
+  var readOnly = !!(opts && opts.readOnlyEnergy);
+  var regen = readOnly ? getTiming(getPace($app)).energyRegenPerHour : 0;
+  var now = readOnly ? (opts.now != null ? opts.now : Date.now()) : 0;
   var list = [];
   for (var i = 0; i < players.length; i++) {
     var p = players[i];
-    var energy = materialisePlayerEnergy($app, p);
+    var energy = readOnly ? currentEnergy(p, regen, now) : materialisePlayerEnergy($app, p);
     var condition = p.get("condition");
     if (condition == null) condition = 100;
     list.push({

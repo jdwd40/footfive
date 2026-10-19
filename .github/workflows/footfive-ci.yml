@@ -77,6 +77,10 @@ jobs:
         env:
           COLLECTION_GUARDS_PB_PORT: "8308"
         run: npm run test:collection-guards
+      - name: Pure squad reads and repair receipts (disposable PocketBase)
+        env:
+          SQUAD_READS_PB_PORT: "8309"
+        run: npm run test:squad-reads
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test
