@@ -43,6 +43,8 @@ export default function TournamentDetailPage() {
   }
 
   const rounds = (data.rounds || {}) as Record<string, Array<Record<string, unknown>>>;
+  // Matches outside the standard rounds (legacy or missing round keys, grouped as "other") follow them.
+  const otherRounds = Object.keys(rounds).filter((k) => !(ROUND_ORDER as readonly string[]).includes(k));
   const top = data.topScorer as { name?: string; goals?: number } | null;
 
   return (
@@ -72,13 +74,13 @@ export default function TournamentDetailPage() {
 
       {/* Mobile-first vertical bracket */}
       <div className="space-y-4">
-        {ROUND_ORDER.map((rk) => {
+        {[...ROUND_ORDER, ...otherRounds].map((rk) => {
           const list = rounds[rk] || [];
           if (!list.length) return null;
           return (
             <section key={rk}>
               <h2 className="mb-2 text-[11px] uppercase tracking-widest text-muted">
-                {ROUND_LABEL[rk] || rk}
+                {ROUND_LABEL[rk] || (rk === "other" ? "Other rounds" : rk)}
               </h2>
               <ul className="space-y-2">
                 {list.map((m) => (
@@ -98,6 +100,9 @@ export default function TournamentDetailPage() {
                         <p className="mt-1 text-center text-xs text-amber">
                           pens {String(m.shootoutHome)}–{String(m.shootoutAway)}
                         </p>
+                      ) : null}
+                      {!ROUND_LABEL[rk] && m.roundKey && String(m.roundKey) !== rk ? (
+                        <p className="mt-1 text-center text-xs text-muted">{String(m.roundKey)}</p>
                       ) : null}
                     </Link>
                   </li>

@@ -865,7 +865,14 @@ routerAdd(
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const rec = require(`${__hooks}/lib/recordsService.js`);
-    return e.json(200, { tournaments: rec.listTournaments($app) });
+    var page = "";
+    var perPage = "";
+    try {
+      var query = e.request.url.query();
+      page = query.get("page") || "";
+      perPage = query.get("perPage") || "";
+    } catch (_) {}
+    return e.json(200, rec.tournamentsPage($app, page, perPage));
   },
   $apis.requireAuth(),
 );
@@ -878,14 +885,19 @@ routerAdd(
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const rec = require(`${__hooks}/lib/recordsService.js`);
     let filters = {};
+    var page = "";
+    var perPage = "";
     try {
       const q = e.request.url.query();
       if (q.get("tournamentId")) filters.tournamentId = q.get("tournamentId");
       if (q.get("teamId")) filters.teamId = q.get("teamId");
+      if (q.get("round")) filters.roundKey = q.get("round");
       if (q.get("shootout") === "1") filters.shootoutOnly = true;
       if (q.get("et") === "1") filters.etOnly = true;
+      page = q.get("page") || "";
+      perPage = q.get("perPage") || "";
     } catch (_) {}
-    return e.json(200, { matches: rec.listMatchArchive($app, filters) });
+    return e.json(200, rec.matchArchivePage($app, filters, page, perPage));
   },
   $apis.requireAuth(),
 );
@@ -910,13 +922,19 @@ routerAdd(
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const rec = require(`${__hooks}/lib/recordsService.js`);
     let filters = { leaders: true };
+    var page = "";
+    var perPage = "";
     try {
       const q = e.request.url.query();
       if (q.get("teamId")) filters.teamId = q.get("teamId");
       if (q.get("role")) filters.role = q.get("role");
       if (q.get("all") === "1") filters.leaders = false;
+      page = q.get("page") || "";
+      perPage = q.get("perPage") || "";
     } catch (_) {}
-    return e.json(200, { players: rec.listPlayerRecords($app, filters) });
+    // Leaders stay the unpaged top 25; all=1 is the paged full list
+    if (filters.leaders) return e.json(200, { players: rec.listPlayerRecords($app, filters) });
+    return e.json(200, rec.playerRecordsPage($app, filters, page, perPage));
   },
   $apis.requireAuth(),
 );

@@ -324,6 +324,9 @@ export type TacticalScanSpend = {
   fixtureId: string;
 };
 
+/** Paging fields on the records matches, players (all=1) and tournaments lists. Absent from older servers. */
+export type RecordsPageMeta = { page?: number; perPage?: number; hasMore?: boolean };
+
 function spendCommandCharge(
   action: "tactical_scan",
   playerId?: string,
@@ -466,14 +469,16 @@ export const footfiveApi = {
   recordsOverview: () => api<Record<string, unknown>>("/api/footfive/records/overview"),
   recordsTeams: () =>
     api<{ teams: Array<Record<string, unknown>> }>("/api/footfive/records/teams"),
-  recordsTournaments: () =>
-    api<{ tournaments: Array<Record<string, unknown>> }>("/api/footfive/records/tournaments"),
+  recordsTournaments: (qs = "") =>
+    api<{ tournaments: Array<Record<string, unknown>> } & RecordsPageMeta>(
+      `/api/footfive/records/tournaments${qs ? `?${qs}` : ""}`,
+    ),
   recordsMatches: (qs = "") =>
-    api<{ matches: Array<Record<string, unknown>> }>(
+    api<{ matches: Array<Record<string, unknown>> } & RecordsPageMeta>(
       `/api/footfive/records/matches${qs ? `?${qs}` : ""}`,
     ),
   recordsPlayers: (qs = "") =>
-    api<{ players: Array<Record<string, unknown>> }>(
+    api<{ players: Array<Record<string, unknown>> } & RecordsPageMeta>(
       `/api/footfive/records/players${qs ? `?${qs}` : ""}`,
     ),
   recordsTeamDetail: (id: string) =>

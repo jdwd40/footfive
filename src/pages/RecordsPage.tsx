@@ -1,9 +1,52 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
-import { footfiveApi } from "../lib/pocketbase";
+import { footfiveApi, type RecordsPageMeta } from "../lib/pocketbase";
 
 type Tab = "overview" | "teams" | "players" | "tournaments" | "matches" | "betting";
+type Row = Record<string, unknown>;
+type PagedTab = "players" | "tournaments" | "matches";
+type Pager = { page: number; hasMore: boolean; loading: boolean };
+
+const NO_PAGER: Pager = { page: 1, hasMore: false, loading: false };
+const isPaged = (t: Tab): t is PagedTab => t === "players" || t === "tournaments" || t === "matches";
+
+/** One page of a paged list. Page 1 sends today's request; the players list always asks for everyone (all=1). */
+async function fetchPage(tab: PagedTab, page: number): Promise<{ items: Row[]; page: number; hasMore: boolean }> {
+  const qs = [tab === "players" ? "all=1" : "", page > 1 ? `page=${page}` : ""].filter(Boolean).join("&");
+  let items: Row[] | undefined;
+  let meta: RecordsPageMeta;
+  if (tab === "players") {
+    const r = await footfiveApi.recordsPlayers(qs);
+    items = r.players;
+    meta = r;
+  } else if (tab === "tournaments") {
+    const r = await footfiveApi.recordsTournaments(qs);
+    items = r.tournaments;
+    meta = r;
+  } else {
+    const r = await footfiveApi.recordsMatches(qs);
+    items = r.matches;
+    meta = r;
+  }
+  // An older server sends no paging fields: its one list is everything, so there is nothing more to load.
+  return { items: items || [], page: typeof meta.page === "number" ? meta.page : page, hasMore: meta.hasMore === true };
+}
+
+/** Appends a later page, skipping rows already shown (new results shift older rows onto the next page). */
+function appendNew(shown: Row[], next: Row[]): Row[] {
+  const ids = new Set(shown.map((r) => String(r.id)));
+  return [...shown, ...next.filter((r) => !ids.has(String(r.id)))];
+}
+
+function LoadMore({ pager, onLoad }: { pager: Pager; onLoad: () => void }) {
+  if (!pager.hasMore) return null;
+  return (
+    <button type="button" className="btn-ghost w-full text-xs" disabled={pager.loading} onClick={onLoad}>
+      {pager.loading ? "Loading…" : "Load more"}
+    </button>
+  );
+}
 
 export default function RecordsPage() {
   const [tab, setTab] = useState<Tab>("overview");
@@ -14,33 +57,65 @@ export default function RecordsPage() {
   const [matches, setMatches] = useState<Array<Record<string, unknown>>>([]);
   const [betting, setBetting] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
+  const [pager, setPager] = useState<Record<PagedTab, Pager>>({ players: NO_PAGER, tournaments: NO_PAGER, matches: NO_PAGER });
+  // Bumped on every tab load: responses to an earlier load (page 1 or Load more) are ignored.
+  const loadGen = useRef(0);
 
   useEffect(() => {
+    const gen = ++loadGen.current;
+    const stale = () => gen !== loadGen.current;
+    if (isPaged(tab)) setPager((p) => ({ ...p, [tab]: NO_PAGER }));
     (async () => {
       try {
         if (tab === "overview") {
-          setOverview(await footfiveApi.recordsOverview());
+          const r = await footfiveApi.recordsOverview();
+          if (stale()) return;
+          setOverview(r);
         } else if (tab === "teams") {
           const r = await footfiveApi.recordsTeams();
+          if (stale()) return;
           setTeams(r.teams || []);
-        } else if (tab === "players") {
-          const r = await footfiveApi.recordsPlayers("all=1");
-          setPlayers(r.players || []);
-        } else if (tab === "tournaments") {
-          const r = await footfiveApi.recordsTournaments();
-          setTournaments(r.tournaments || []);
-        } else if (tab === "matches") {
-          const r = await footfiveApi.recordsMatches();
-          setMatches(r.matches || []);
+        } else if (isPaged(tab)) {
+          const r = await fetchPage(tab, 1);
+          if (stale()) return;
+          if (tab === "players") setPlayers(r.items);
+          else if (tab === "tournaments") setTournaments(r.items);
+          else setMatches(r.items);
+          setPager((p) => ({ ...p, [tab]: { page: r.page, hasMore: r.hasMore, loading: false } }));
         } else if (tab === "betting") {
-          setBetting(await footfiveApi.betsHistory());
+          const r = await footfiveApi.betsHistory();
+          if (stale()) return;
+          setBetting(r);
         }
         setError("");
       } catch (err) {
+        if (stale()) return;
         setError(err instanceof Error ? err.message : "Load failed");
       }
     })();
   }, [tab]);
+
+  async function loadMore(t: PagedTab) {
+    const cur = pager[t];
+    if (cur.loading || !cur.hasMore) return;
+    const gen = loadGen.current;
+    setPager((p) => ({ ...p, [t]: { ...cur, loading: true } }));
+    try {
+      const r = await fetchPage(t, cur.page + 1);
+      if (gen !== loadGen.current) return;
+      const add = (shown: Row[]) => appendNew(shown, r.items);
+      if (t === "players") setPlayers(add);
+      else if (t === "tournaments") setTournaments(add);
+      else setMatches(add);
+      setPager((p) => ({ ...p, [t]: { page: r.page, hasMore: r.hasMore, loading: false } }));
+      setError("");
+    } catch (err) {
+      if (gen !== loadGen.current) return;
+      // Keep what is shown and the button, so the same page can be retried.
+      setPager((p) => ({ ...p, [t]: { ...cur, loading: false } }));
+      setError(err instanceof Error ? err.message : "Load failed");
+    }
+  }
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "overview", label: "Overview" },
@@ -193,6 +268,7 @@ export default function RecordsPage() {
           {!players.length ? (
             <p className="text-sm text-muted">Player stats fill in as matches complete</p>
           ) : null}
+          <LoadMore pager={pager.players} onLoad={() => void loadMore("players")} />
         </div>
       ) : null}
 
@@ -217,6 +293,7 @@ export default function RecordsPage() {
           {!tournaments.length ? (
             <p className="text-sm text-muted">No tournament summaries yet</p>
           ) : null}
+          <LoadMore pager={pager.tournaments} onLoad={() => void loadMore("tournaments")} />
         </div>
       ) : null}
 
@@ -248,6 +325,7 @@ export default function RecordsPage() {
           {!matches.length ? (
             <p className="text-sm text-muted">No archived matches yet</p>
           ) : null}
+          <LoadMore pager={pager.matches} onLoad={() => void loadMore("matches")} />
         </div>
       ) : null}
 
