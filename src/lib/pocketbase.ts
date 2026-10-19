@@ -485,9 +485,19 @@ export const footfiveApi = {
   betsHistory: () => api<Record<string, unknown>>("/api/footfive/bets/history"),
 
   adminOverview: () => api<Record<string, unknown>>("/api/footfive/admin/overview"),
-  adminUsers: (q = "") =>
-    api<{ users: Array<Record<string, unknown>> }>(
-      `/api/footfive/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+  adminUsers: (q = "", page = 1, perPage = 200) =>
+    api<{
+      users: Array<Record<string, unknown>>;
+      page: number;
+      perPage: number;
+      totalItems: number;
+      hasMore: boolean;
+    }>(
+      `/api/footfive/admin/users?${new URLSearchParams({
+        q,
+        page: String(page),
+        perPage: String(perPage),
+      }).toString()}`,
     ),
   adminCreateUser: (body: Record<string, unknown>) =>
     api<Record<string, unknown>>("/api/footfive/admin/users", {

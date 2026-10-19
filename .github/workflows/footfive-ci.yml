@@ -65,6 +65,10 @@ jobs:
         run: npm run test:overclock
       - name: Balance replay determinism (headless engine, 200 seeds)
         run: npm run test:balance-replay
+      - name: Admin mutations and pagination (disposable PocketBase)
+        env:
+          ADMIN_MUTATIONS_PB_PORT: "8306"
+        run: npm run test:admin-mutations
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test

@@ -264,6 +264,20 @@ describe("footfive-ci.yml contracts", () => {
     expect(readFileSync(path.join(root, "scripts/balance-calibrate.mjs"), "utf8")).toContain("path.join(ROOT, 'pocketbase/pb_hooks')");
   });
 
+  it("requires the real admin mutation suite before starting the shared API fixture", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => step.split("\n").includes(`        run: ${run}`));
+    const admin = steps.filter((step) => /^ {8}run: npm run test:admin-mutations$/m.test(step));
+    expect(admin).toHaveLength(1);
+    expect(admin[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(at("npm run test:balance-replay")).toBeGreaterThan(-1);
+    expect(at("npm run test:admin-mutations")).toBeGreaterThan(at("npm run test:balance-replay"));
+    expect(steps.findIndex((step) => step.startsWith("name: Start test PocketBase")))
+      .toBeGreaterThan(at("npm run test:admin-mutations"));
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:admin-mutations"]).toBe("node tests/integration/admin-mutations.mjs");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

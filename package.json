@@ -27,6 +27,7 @@
     "test:coaching": "node tests/integration/coaching-atomicity.mjs",
     "test:overclock": "node tests/integration/overclock-kickoff.mjs",
     "test:balance-replay": "node tests/integration/balance-replay.mjs",
+    "test:admin-mutations": "node tests/integration/admin-mutations.mjs",
     "test:settlement": "node tests/integration/settlement-recovery.mjs",
     "test:progression": "node tests/integration/progression-lock.mjs",
     "test:recovery": "node scripts/restart-recovery.mjs",
