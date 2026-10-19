@@ -29,6 +29,52 @@ function parseJson(v, fb) {
   }
 }
 
+var PAGE_MESSAGE = "Page must be a whole number from 1";
+var PER_PAGE_MESSAGE = "Page size must be a whole number from 1 to 200";
+var ROUND_KEYS = ["r16", "qf", "sf", "final"];
+// Internal page size when a detail view reads every match of a tournament.
+var DETAIL_PAGE = 100;
+
+/** A page/perPage query value: digits only, the default when empty (as admin users). */
+function listParam(v, def, max, msg) {
+  if (v == null || v === "") return def;
+  var s = String(v);
+  if (!/^\d{1,7}$/.test(s)) throw new BadRequestError(msg);
+  var n = parseInt(s, 10);
+  if (n < 1 || n > max) throw new BadRequestError(msg);
+  return n;
+}
+
+/** Bound clauses joined with AND, or null when there are none. */
+function allOf(parts, params) {
+  return parts.length ? $dbx.exp(parts.join(" AND "), params) : null;
+}
+
+/** One query for the names of the teams on rows[0..count). */
+function teamNames($app, rows, count) {
+  var names = {};
+  var seen = {};
+  var marks = [];
+  var params = {};
+  for (var i = 0; i < count; i++) {
+    var t = rows[i].get("team");
+    if (!t || Object.prototype.hasOwnProperty.call(seen, t)) continue;
+    seen[t] = true;
+    params["t" + marks.length] = t;
+    marks.push("{:t" + marks.length + "}");
+  }
+  if (!marks.length) return names;
+  try {
+    var teams = arrayOf(new Record());
+    $app
+      .recordQuery("proball_teams")
+      .andWhere($dbx.exp("id IN (" + marks.join(",") + ")", params))
+      .all(teams);
+    for (var j = 0; j < teams.length; j++) names[teams[j].id] = teams[j].get("name");
+  } catch (_) {}
+  return names;
+}
+
 function extractGoalsFromEvents(events) {
   var goals = [];
   for (var i = 0; i < (events || []).length; i++) {
@@ -356,68 +402,125 @@ function recordsOverview($app) {
   };
 }
 
-function listMatchArchive($app, filters) {
-  filters = filters || {};
-  var rows = $app.findRecordsByFilter(
-    "match_summaries",
-    "id != ''",
-    "-completed_at",
-    100,
-    0,
-  );
-  var out = [];
-  for (var i = 0; i < (rows || []).length; i++) {
-    var s = rows[i];
-    if (filters.tournamentId && s.get("tournament_id") !== filters.tournamentId)
-      continue;
-    if (filters.roundKey && s.get("round_key") !== filters.roundKey) continue;
-    if (filters.teamId) {
-      if (
-        s.get("home_team") !== filters.teamId &&
-        s.get("away_team") !== filters.teamId
-      )
-        continue;
-    }
-    if (filters.shootoutOnly && !s.get("went_shootout")) continue;
-    if (filters.etOnly && !s.get("went_extra_time")) continue;
-    out.push({
-      id: s.id,
-      fixtureId: s.get("fixture_id"),
-      tournamentId: s.get("tournament_id"),
-      roundKey: s.get("round_key"),
-      slot: s.get("slot"),
-      homeName: s.get("home_name"),
-      awayName: s.get("away_name"),
-      homeTeamId: s.get("home_team"),
-      awayTeamId: s.get("away_team"),
-      scoreHome: s.get("score_home"),
-      scoreAway: s.get("score_away"),
-      shootoutHome: s.get("shootout_home"),
-      shootoutAway: s.get("shootout_away"),
-      winnerTeamId: s.get("winner_team"),
-      wentExtraTime: !!s.get("went_extra_time"),
-      wentShootout: !!s.get("went_shootout"),
-      goals: parseJson(s.get("goals_json"), []),
-      cards: parseJson(s.get("cards_json"), []),
-      shootoutKicks: parseJson(s.get("shootout_kicks_json"), []),
-      eventsPurged: !!s.get("events_purged"),
-      completedAt: s.get("completed_at"),
-      stats: parseJson(s.get("stats_json"), null),
-    });
+/** Bound SQL for the archive filters, applied before any limit. */
+function archiveFilter(filters) {
+  var parts = [];
+  var params = {};
+  if (filters.tournamentId) {
+    parts.push("tournament_id = {:tid}");
+    params.tid = String(filters.tournamentId);
   }
-  return out;
+  if (filters.roundKey) {
+    parts.push("round_key = {:rk}");
+    params.rk = String(filters.roundKey);
+  }
+  if (filters.teamId) {
+    parts.push("(home_team = {:team} OR away_team = {:team})");
+    params.team = String(filters.teamId);
+  }
+  if (filters.shootoutOnly) parts.push("went_shootout IS TRUE");
+  if (filters.etOnly) parts.push("went_extra_time IS TRUE");
+  return allOf(parts, params);
 }
 
-function listTournaments($app) {
-  var rows = $app.findRecordsByFilter(
-    "tournament_summaries",
-    "id != ''",
-    "-number",
-    50,
-    0,
-  );
+function archiveItem(s) {
+  return {
+    id: s.id,
+    fixtureId: s.get("fixture_id"),
+    tournamentId: s.get("tournament_id"),
+    roundKey: s.get("round_key"),
+    slot: s.get("slot"),
+    homeName: s.get("home_name"),
+    awayName: s.get("away_name"),
+    homeTeamId: s.get("home_team"),
+    awayTeamId: s.get("away_team"),
+    scoreHome: s.get("score_home"),
+    scoreAway: s.get("score_away"),
+    shootoutHome: s.get("shootout_home"),
+    shootoutAway: s.get("shootout_away"),
+    winnerTeamId: s.get("winner_team"),
+    wentExtraTime: !!s.get("went_extra_time"),
+    wentShootout: !!s.get("went_shootout"),
+    goals: parseJson(s.get("goals_json"), []),
+    cards: parseJson(s.get("cards_json"), []),
+    shootoutKicks: parseJson(s.get("shootout_kicks_json"), []),
+    eventsPurged: !!s.get("events_purged"),
+    completedAt: s.get("completed_at"),
+    stats: parseJson(s.get("stats_json"), null),
+  };
+}
+
+/**
+ * One page of the match archive, newest first (completed_at, then id). Filters run in
+ * SQL before the limit, so older matches are found; hasMore comes from one extra row.
+ */
+function matchArchivePage($app, filters, page, perPage) {
+  filters = filters || {};
+  page = listParam(page, 1, 999999, PAGE_MESSAGE);
+  perPage = listParam(perPage, 100, 200, PER_PAGE_MESSAGE);
+  var query = $app.recordQuery("match_summaries");
+  var where = archiveFilter(filters);
+  if (where) query = query.andWhere(where);
+  var rows = arrayOf(new Record());
+  query
+    .orderBy("completed_at DESC", "id ASC")
+    .limit(perPage + 1)
+    .offset((page - 1) * perPage)
+    .all(rows);
   var out = [];
-  for (var i = 0; i < (rows || []).length; i++) {
+  for (var i = 0; i < rows.length && i < perPage; i++) out.push(archiveItem(rows[i]));
+  return { matches: out, page: page, perPage: perPage, hasMore: rows.length > perPage };
+}
+
+function listMatchArchive($app, filters) {
+  return matchArchivePage($app, filters, 1, 100).matches;
+}
+
+/**
+ * Every match of one tournament in archive order. Keyset pages (strictly after the last
+ * completed_at, id) so no page size or concurrent completion drops or repeats a match.
+ */
+function allTournamentMatches($app, tournamentId) {
+  var out = [];
+  var at = null;
+  var id = "";
+  for (;;) {
+    var query = $app
+      .recordQuery("match_summaries")
+      .andWhere($dbx.exp("tournament_id = {:tid}", { tid: String(tournamentId) }));
+    if (at !== null) {
+      query = query.andWhere(
+        $dbx.exp("(completed_at < {:at} OR (completed_at = {:at} AND id > {:id}))", { at: at, id: id })
+      );
+    }
+    var rows = arrayOf(new Record());
+    query.orderBy("completed_at DESC", "id ASC").limit(DETAIL_PAGE).all(rows);
+    for (var i = 0; i < rows.length; i++) {
+      var nextAt = rows[i].getString("completed_at");
+      if (at !== null && !(nextAt < at || (nextAt === at && rows[i].id > id))) {
+        throw new Error("match archive cursor did not advance");
+      }
+      at = nextAt;
+      id = rows[i].id;
+      out.push(archiveItem(rows[i]));
+    }
+    if (rows.length < DETAIL_PAGE) return out;
+  }
+}
+
+/** One page of completed tournaments, newest first (number, then id). */
+function tournamentsPage($app, page, perPage) {
+  page = listParam(page, 1, 999999, PAGE_MESSAGE);
+  perPage = listParam(perPage, 50, 200, PER_PAGE_MESSAGE);
+  var rows = arrayOf(new Record());
+  $app
+    .recordQuery("tournament_summaries")
+    .orderBy("number DESC", "id ASC")
+    .limit(perPage + 1)
+    .offset((page - 1) * perPage)
+    .all(rows);
+  var out = [];
+  for (var i = 0; i < rows.length && i < perPage; i++) {
     var t = rows[i];
     out.push({
       id: t.id,
@@ -433,7 +536,11 @@ function listTournaments($app) {
       completedAt: t.get("completed_at"),
     });
   }
-  return out;
+  return { tournaments: out, page: page, perPage: perPage, hasMore: rows.length > perPage };
+}
+
+function listTournaments($app) {
+  return tournamentsPage($app, 1, 50).tournaments;
 }
 
 /**
@@ -576,23 +683,42 @@ function awardChampionshipPlayers($app, teamId) {
   }
 }
 
-function listPlayerRecords($app, filters) {
+/**
+ * One page of permanent player records, most goals first (goals, then id). Team and role
+ * filter in SQL before the limit; team names come from one query for the page.
+ */
+function playerRecordsPage($app, filters, page, perPage) {
   filters = filters || {};
-  var rows = [];
-  try {
-    rows = $app.findRecordsByFilter("global_player_records", "id != ''", "-goals", 200, 0);
-  } catch (_) {
-    return [];
+  page = listParam(page, 1, 999999, PAGE_MESSAGE);
+  perPage = listParam(perPage, 200, 200, PER_PAGE_MESSAGE);
+  var parts = [];
+  var params = {};
+  if (filters.teamId) {
+    parts.push("team = {:team}");
+    params.team = String(filters.teamId);
+  }
+  if (filters.role) {
+    parts.push("role = {:role}");
+    params.role = String(filters.role);
   }
   var out = [];
-  for (var i = 0; i < (rows || []).length; i++) {
+  var rows = arrayOf(new Record());
+  try {
+    var query = $app.recordQuery("global_player_records");
+    var where = allOf(parts, params);
+    if (where) query = query.andWhere(where);
+    query
+      .orderBy("goals DESC", "id ASC")
+      .limit(perPage + 1)
+      .offset((page - 1) * perPage)
+      .all(rows);
+  } catch (_) {
+    return { players: out, page: page, perPage: perPage, hasMore: false };
+  }
+  var count = Math.min(rows.length, perPage);
+  var names = teamNames($app, rows, count);
+  for (var i = 0; i < count; i++) {
     var r = rows[i];
-    var teamName = "";
-    try {
-      teamName = $app.findRecordById("proball_teams", r.get("team")).get("name");
-    } catch (_) {}
-    if (filters.teamId && r.get("team") !== filters.teamId) continue;
-    if (filters.role && r.get("role") !== filters.role) continue;
     var apps = r.get("appearances") || 0;
     var goals = r.get("goals") || 0;
     out.push({
@@ -600,7 +726,7 @@ function listPlayerRecords($app, filters) {
       playerId: r.get("player"),
       name: r.get("player_name"),
       teamId: r.get("team"),
-      teamName: teamName,
+      teamName: Object.prototype.hasOwnProperty.call(names, r.get("team")) ? names[r.get("team")] : "",
       role: r.get("role"),
       appearances: apps,
       goals: goals,
@@ -617,13 +743,13 @@ function listPlayerRecords($app, filters) {
       championships: r.get("championships") || 0,
     });
   }
-  if (filters.leaders) {
-    out.sort(function (a, b) {
-      return b.goals - a.goals;
-    });
-    out = out.slice(0, 25);
-  }
-  return out;
+  return { players: out, page: page, perPage: perPage, hasMore: rows.length > perPage };
+}
+
+/** Leaders: the top 25 scorers; otherwise today's first window of 200. */
+function listPlayerRecords($app, filters) {
+  filters = filters || {};
+  return playerRecordsPage($app, filters, 1, filters.leaders ? 25 : 200).players;
 }
 
 function userBettingHistory($app, userId) {
@@ -716,21 +842,28 @@ function teamDetail($app, teamId) {
     0,
     { t: teamId },
   );
+  // One query for the whole squad's permanent records instead of one per player
+  var recordOf = {};
+  if (players && players.length) {
+    var marks = [];
+    var params = {};
+    for (var q = 0; q < players.length; q++) {
+      params["p" + q] = players[q].id;
+      marks.push("{:p" + q + "}");
+    }
+    try {
+      var prs = arrayOf(new Record());
+      $app
+        .recordQuery("global_player_records")
+        .andWhere($dbx.exp("player IN (" + marks.join(",") + ")", params))
+        .all(prs);
+      for (var x = 0; x < prs.length; x++) recordOf[prs[x].get("player")] = prs[x];
+    } catch (_) {}
+  }
   var squad = [];
   for (var i = 0; i < (players || []).length; i++) {
     var p = players[i];
-    var pr = null;
-    try {
-      var prs = $app.findRecordsByFilter(
-        "global_player_records",
-        "player = {:p}",
-        "",
-        1,
-        0,
-        { p: p.id },
-      );
-      if (prs && prs.length) pr = prs[0];
-    } catch (_) {}
+    var pr = Object.prototype.hasOwnProperty.call(recordOf, p.id) ? recordOf[p.id] : null;
     squad.push({
       id: p.id,
       name: p.get("name"),
@@ -745,7 +878,7 @@ function teamDetail($app, teamId) {
       goals: pr ? pr.get("goals") || 0 : 0,
     });
   }
-  var recent = listMatchArchive($app, { teamId: teamId }).slice(0, 12);
+  var recent = matchArchivePage($app, { teamId: teamId }, 1, 12).matches;
   var form = [];
   for (var m = 0; m < Math.min(recent.length, 5); m++) {
     var match = recent[m];
@@ -874,12 +1007,17 @@ function tournamentDetail($app, tournamentId) {
     } catch (_) {}
   }
   var tid = tournament ? tournament.id : tSum ? tSum.get("tournament_id") : tournamentId;
-  var matches = listMatchArchive($app, { tournamentId: tid });
+  var matches = allTournamentMatches($app, tid);
   var byRound = { r16: [], qf: [], sf: [], final: [] };
   for (var i = 0; i < matches.length; i++) {
     var rk = matches[i].roundKey || "";
-    if (byRound[rk]) byRound[rk].push(matches[i]);
-    else if (!byRound.other) byRound.other = [];
+    if (ROUND_KEYS.indexOf(rk) >= 0) {
+      byRound[rk].push(matches[i]);
+    } else {
+      // Legacy, backfilled or empty round keys
+      if (!byRound.other) byRound.other = [];
+      byRound.other.push(matches[i]);
+    }
   }
   var bracket = tSum ? parseJson(tSum.get("bracket_json"), []) : [];
   if (!bracket.length) {
@@ -1033,11 +1171,14 @@ if (typeof module !== "undefined") {
     ensureTournamentSummary: ensureTournamentSummary,
     recordsOverview: recordsOverview,
     listMatchArchive: listMatchArchive,
+    matchArchivePage: matchArchivePage,
     listTournaments: listTournaments,
+    tournamentsPage: tournamentsPage,
     userBettingHistory: userBettingHistory,
     settlePlayerRecordsFromMatch: settlePlayerRecordsFromMatch,
     awardChampionshipPlayers: awardChampionshipPlayers,
     listPlayerRecords: listPlayerRecords,
+    playerRecordsPage: playerRecordsPage,
     teamDetail: teamDetail,
     tournamentDetail: tournamentDetail,
     matchDetail: matchDetail,
