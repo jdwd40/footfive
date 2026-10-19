@@ -207,22 +207,24 @@ describe("effective_modifiers explain the squad's effective stats", () => {
   });
 });
 
-describe("the projection keeps the existing energy writes and fields", () => {
-  it("saves exactly what energy materialisation alone saves, and nothing on a repeat read", () => {
+describe("the projection keeps its fields and writes nothing (issue #25)", () => {
+  it("shows the energy materialisation would return, but saves no player, on every read", () => {
     const stale = roster.map((r, i) => ({ ...r, energy_updated_at: i % 2 ? pbDate(T0 - 2.37 * HOUR) : null }));
     const read = world(stale, team({ overclock_ready: true }), "live");
+    const before = [...read.db.entries()];
     const reference = world(stale, team({ overclock_ready: true }), "live");
     const squad = mgmt.getSquad(read, "manager1");
-    stale.forEach((r) => mgmt.materialisePlayerEnergy(reference, reference.findRecordById("proball_players", r.id)));
-    expect(read.saves.length).toBeGreaterThan(0);
-    expect(read.saves).toEqual(reference.saves);
-    expect([...read.db.entries()]).toEqual([...reference.db.entries()]);
+    const materialised = stale.map((r) => mgmt.materialisePlayerEnergy(reference, reference.findRecordById("proball_players", r.id)));
+    expect(reference.saves.length).toBeGreaterThan(0); // the old read path would have written these
+    expect(squad.players.map((p) => p.energy)).toEqual(materialised);
+    expect(read.saves).toEqual([]);
+    expect([...read.db.entries()]).toEqual(before);
     for (const p of squad.players) {
       expect(p).toHaveProperty("upgrade_cost");
       expect(p).toHaveProperty("effective_attack");
       expect(p.effective_modifiers).toBeTruthy();
     }
-    read.saves.length = 0;
+    expectReconciled(squad.players, true);
     mgmt.getSquad(read, "manager1");
     expect(read.saves).toEqual([]);
   });

@@ -325,10 +325,11 @@ function listTeams($app) {
 
 /**
  * Team snapshot for the engine. AI-controlled sides (unmanaged or Full AI) pick their
- * five from fitness without touching the manager's saved lineup.
+ * five from fitness without touching the manager's saved lineup. `opts` goes to
+ * loadTeamSnapshot (only read views pass readOnlyEnergy).
  */
-function engineTeam($app, team) {
-  var snap = mgmtMod.loadTeamSnapshot($app, team.id);
+function engineTeam($app, team, opts) {
+  var snap = mgmtMod.loadTeamSnapshot($app, team.id, opts);
   var manager = team.get("manager");
   var ai = !manager || team.get("manager_mode") === "ai";
   var players = ai ? mgmtMod.aiLineup(snap.players) : snap.players;
@@ -1535,9 +1536,11 @@ function matchView($app, fixtureId, sinceSeq, userId, throughMs) {
       }
     }
   } else {
+    // Preview of both sides at this view's instant, without saving any energy (B13)
+    var preview = { readOnlyEnergy: true, now: now };
     lineups = {
-      home: lineupPublic(engineTeam($app, teams[fx.get("home_team")]).players.map(numbered)),
-      away: lineupPublic(engineTeam($app, teams[fx.get("away_team")]).players.map(numbered)),
+      home: lineupPublic(engineTeam($app, teams[fx.get("home_team")], preview).players.map(numbered)),
+      away: lineupPublic(engineTeam($app, teams[fx.get("away_team")], preview).players.map(numbered)),
     };
   }
   return {

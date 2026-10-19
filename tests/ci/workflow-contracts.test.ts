@@ -308,6 +308,21 @@ describe("footfive-ci.yml contracts", () => {
     expect(pkg.scripts["test:collection-guards"]).toBe("node tests/integration/collection-guards.mjs");
   });
 
+  it("requires pure squad reads and repair receipts after collection guards", () => {
+    const api = job(ci, "api-e2e");
+    const steps = api.split(/^ {6}- /m).slice(1);
+    const reads = steps.filter((step) => /^ {8}run: npm run test:squad-reads$/m.test(step));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(reads[0]).toContain('SQUAD_READS_PB_PORT: "8309"');
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    expect(at("npm run test:collection-guards")).toBeGreaterThan(-1);
+    expect(at("npm run test:squad-reads")).toBeGreaterThan(at("npm run test:collection-guards"));
+    expect(at("name: Start test PocketBase")).toBeGreaterThan(at("npm run test:squad-reads"));
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:squad-reads"]).toBe("node tests/integration/squad-read-repair.mjs");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");
