@@ -33,6 +33,7 @@ export default function RegisterPage() {
         {error ? <p className="text-sm text-magenta">{error}</p> : null}
         <label className="block space-y-1 text-sm">
           <span className="text-muted">Display name</span>
+          <span className="block text-xs text-muted">Public name. Sign in with your email.</span>
           <input
             className="input"
             value={displayName}
