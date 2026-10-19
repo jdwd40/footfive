@@ -1008,7 +1008,6 @@ function rewardFixture($app, fixture, matchState, tournamentId, roundKey) {
   var homeId = fixture.get("home_team");
   var awayId = fixture.get("away_team");
   var winnerId = matchState.get("winner_team");
-  var loserId = winnerId === homeId ? awayId : homeId;
   var hs = matchState.get("score_home") || 0;
   var as_ = matchState.get("score_away") || 0;
   var homeTeam = $app.findRecordById("proball_teams", homeId);

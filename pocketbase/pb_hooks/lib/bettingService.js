@@ -8,7 +8,7 @@
  *   was computed, the bet is rejected with the new price (never silently worse).
  * - Repeating a request id returns the original bet (double-clicks, retries).
  */
-var wsMod, oddsMod, mkt, balMod, eng;
+var wsMod, oddsMod, mkt, balMod;
 function ws() {
   if (!wsMod) {
     try {
@@ -23,12 +23,10 @@ try {
   oddsMod = require(__hooks + "/lib/odds.js");
   mkt = require(__hooks + "/lib/markets.js");
   balMod = require(__hooks + "/lib/balance.js");
-  eng = require(__hooks + "/lib/matchEngine.js");
 } catch (e) {
   oddsMod = require("./odds.js");
   mkt = require("./markets.js");
   balMod = require("./balance.js");
-  eng = require("./matchEngine.js");
 }
 var BALANCE = balMod.BALANCE;
 var FIXTURE_MARKETS = ["winner", "exact", "next_goal", "margin"];
@@ -378,7 +376,7 @@ function openBets(tx, filter, params) {
 }
 
 /** Fixture markets at the (public) final whistle. */
-function settleFixtureBets(tx, fx, r, now) {
+function settleFixtureBets(tx, fx, r, _now) {
   var note = "Final " + r.sh + "–" + r.sa + (r.by === "pens" ? " (pens " + r.soh + "–" + r.soa + ")" : r.by === "aet" ? " AET" : "");
   var n = 0;
   openBets(tx, "fixture = {:f}", { f: fx.id }).forEach(function (b) {

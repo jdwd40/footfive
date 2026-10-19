@@ -107,12 +107,10 @@ function detectStalls($app) {
         0,
         { r: rd.id },
       );
-      var allFinished = fixtures && fixtures.length > 0;
       var anyLive = false;
       for (var f = 0; f < (fixtures || []).length; f++) {
         var st = fixtures[f].get("status");
         if (st === "live") anyLive = true;
-        if (st !== "finished" && st !== "complete") allFinished = false;
       }
       // All match states finalised but round not progressed
       var allMsDone = fixtures && fixtures.length > 0;
