@@ -935,10 +935,15 @@ routerAdd(
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     let q = "";
+    var page = "";
+    var perPage = "";
     try {
-      q = e.request.url.query().get("q") || "";
+      var query = e.request.url.query();
+      q = query.get("q") || "";
+      page = query.get("page") || "";
+      perPage = query.get("perPage") || "";
     } catch (_) {}
-    return e.json(200, { users: adm.listUsers($app, q) });
+    return e.json(200, adm.listUsers($app, q, page, perPage));
   },
   $apis.requireAuth(),
 );
@@ -1107,7 +1112,7 @@ routerAdd(
     try {
       body = e.requestInfo().body || {};
     } catch (_) {}
-    return e.json(200, adm.assignTeam($app, auth.id, id, null, body.reason || "release"));
+    return e.json(200, adm.releaseTeam($app, auth.id, id, body.reason || "release"));
   },
   $apis.requireAuth(),
 );

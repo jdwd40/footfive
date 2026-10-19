@@ -50,13 +50,32 @@ function requireAdmin(auth) {
   if (auth.get("disabled")) throw new ForbiddenError("Account disabled");
 }
 
+/**
+ * Re-reads the acting admin inside the transaction, so an admin disabled or
+ * demoted by a concurrent request can no longer act (review B19).
+ */
+function requireFreshAdmin(txApp, adminId) {
+  var rows = txApp.findRecordsByFilter("users", "id = {:id}", "", 1, 0, { id: adminId });
+  requireAdmin(rows && rows.length ? rows[0] : null);
+}
+
+function activeAdminCount(txApp) {
+  return txApp.countRecords("users", $dbx.hashExp({ role: "admin", disabled: false }));
+}
+
+/** Code points, as PocketBase counts text field length. */
+function chars(s) {
+  return s.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]/g) || [];
+}
+
 function overview($app) {
-  var users = $app.findRecordsByFilter("users", "id != ''", "", 500, 0);
-  var teams = $app.findRecordsByFilter("proball_teams", "id != ''", "", 20, 0);
-  var managed = 0;
-  for (var i = 0; i < teams.length; i++) {
-    if (teams[i].get("manager")) managed++;
-  }
+  // Exact counts (review B19): no list caps, actual unmanaged teams.
+  var userCount = $app.countRecords("users");
+  var available = $app.countRecords(
+    "proball_teams",
+    $dbx.exp("manager = '' OR manager IS NULL")
+  );
+  var managed = $app.countRecords("proball_teams") - available;
   var world = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0)[0];
   var tourney = null;
   try {
@@ -77,23 +96,11 @@ function overview($app) {
   } catch (_) {}
   var liveFx = 0;
   try {
-    liveFx = $app.findRecordsByFilter(
-      "shared_fixtures",
-      'status = "live"',
-      "",
-      50,
-      0,
-    ).length;
+    liveFx = $app.countRecords("shared_fixtures", $dbx.hashExp({ status: "live" }));
   } catch (_) {}
   var eventStates = 0;
   try {
-    eventStates = $app.findRecordsByFilter(
-      "match_states",
-      "id != ''",
-      "",
-      500,
-      0,
-    ).length;
+    eventStates = $app.countRecords("match_states");
   } catch (_) {}
   var audits = $app.findRecordsByFilter(
     "admin_audit_logs",
@@ -111,10 +118,10 @@ function overview($app) {
     });
   }
   return {
-    users: (users || []).length,
+    users: userCount,
     managedTeams: managed,
-    availableTeams: 16 - managed,
-    spectators: Math.max(0, (users || []).length - managed),
+    availableTeams: available,
+    spectators: Math.max(0, userCount - managed),
     tournament: tourney,
     liveFixtures: liveFx,
     matchStates: eventStates,
@@ -169,32 +176,64 @@ function overview($app) {
   };
 }
 
-function listUsers($app, q) {
-  var rows = $app.findRecordsByFilter("users", "id != ''", "-created", 200, 0);
-  var out = [];
-  for (var i = 0; i < (rows || []).length; i++) {
-    var u = rows[i];
-    if (q) {
-      var hay =
-        (u.get("email") || "") +
-        " " +
-        (u.get("display_name") || "") +
-        " " +
-        u.id;
-      if (hay.toLowerCase().indexOf(String(q).toLowerCase()) < 0) continue;
+function listParam(v, def, max, msg) {
+  if (v == null || v === "") return def;
+  var s = String(v);
+  if (!/^\d{1,7}$/.test(s)) throw new BadRequestError(msg);
+  var n = parseInt(s, 10);
+  if (n < 1 || n > max) throw new BadRequestError(msg);
+  return n;
+}
+
+/**
+ * One page of users, newest first (review B19). q is a literal substring of
+ * email, display name or id: LIKE with an explicit ESCAPE, because PB filter `~`
+ * and $dbx.like treat % _ \ specially on SQLite. Case folding is ASCII-only
+ * (SQLite LIKE); the old in-memory filter also folded other letters.
+ */
+function listUsers($app, q, page, perPage) {
+  q = q == null ? "" : String(q).trim();
+  if (q.length > 254) throw new BadRequestError("Search query is too long");
+  page = listParam(page, 1, 999999, "Page must be a whole number from 1");
+  perPage = listParam(perPage, 200, 200, "Page size must be a whole number from 1 to 200");
+  var exp = null;
+  if (q) {
+    exp = $dbx.exp(
+      "(email LIKE {:p} ESCAPE '\\' OR display_name LIKE {:p} ESCAPE '\\' OR id LIKE {:p} ESCAPE '\\')",
+      { p: "%" + q.replace(/[\\%_]/g, "\\$&") + "%" }
+    );
+  }
+  var query = $app.recordQuery("users");
+  if (exp) query = query.andWhere(exp);
+  var rows = arrayOf(new Record());
+  query
+    .orderBy("created DESC", "id ASC")
+    .limit(perPage + 1)
+    .offset((page - 1) * perPage)
+    .all(rows);
+  var hasMore = rows.length > perPage;
+  var count = hasMore ? perPage : rows.length;
+  // One team lookup for the whole page instead of one per user
+  var teamOf = {};
+  if (count) {
+    var marks = [];
+    var params = {};
+    for (var m = 0; m < count; m++) {
+      params["u" + m] = rows[m].id;
+      marks.push("{:u" + m + "}");
     }
-    var team = null;
-    try {
-      var tr = $app.findRecordsByFilter(
-        "proball_teams",
-        "manager = {:u}",
-        "",
-        1,
-        0,
-        { u: u.id },
-      );
-      if (tr && tr.length) team = { id: tr[0].id, name: tr[0].get("name") };
-    } catch (_) {}
+    var teams = arrayOf(new Record());
+    $app
+      .recordQuery("proball_teams")
+      .andWhere($dbx.exp("manager IN (" + marks.join(",") + ")", params))
+      .all(teams);
+    for (var t = 0; t < teams.length; t++) {
+      teamOf[teams[t].get("manager")] = { id: teams[t].id, name: teams[t].get("name") };
+    }
+  }
+  var out = [];
+  for (var i = 0; i < count; i++) {
+    var u = rows[i];
     out.push({
       id: u.id,
       email: u.get("email"),
@@ -203,25 +242,67 @@ function listUsers($app, q) {
       credits: u.get("credits") || 0,
       disabled: !!u.get("disabled"),
       admin_note: u.get("admin_note") || "",
-      team: team,
+      team: teamOf[u.id] || null,
       created: u.get("created"),
     });
   }
-  return out;
+  // Same predicate as the page; a separate read, so the pager follows hasMore
+  var totalItems = exp ? $app.countRecords("users", exp) : $app.countRecords("users");
+  return { users: out, page: page, perPage: perPage, totalItems: totalItems, hasMore: hasMore };
 }
 
+/** Validates everything before any write (review B19). */
 function createUser($app, adminId, body) {
-  var col = $app.findCollectionByNameOrId("users");
-  var rec = new Record(col);
-  rec.set("email", body.email);
-  rec.set("password", body.password);
-  rec.set("passwordConfirm", body.password);
-  rec.set("display_name", body.display_name || body.email.split("@")[0]);
-  rec.set("role", body.role === "admin" ? "admin" : "user");
-  rec.set("credits", body.credits != null ? body.credits : BALANCE.startingCredits);
-  rec.set("disabled", false);
-  $app.save(rec);
-  audit($app, adminId, "user_create", "users", rec.id, null, { email: body.email }, body.reason || "create", true);
+  body = body || {};
+  var email = typeof body.email === "string" ? body.email.trim() : "";
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new BadRequestError("Valid email required");
+  }
+  var password = body.password;
+  if (typeof password !== "string" || password.length < 8) {
+    throw new BadRequestError("Password must be at least 8 characters");
+  }
+  var role = body.role == null ? "user" : body.role;
+  if (role !== "user" && role !== "admin") {
+    throw new BadRequestError("Role must be user or admin");
+  }
+  var name = body.display_name;
+  if (name == null || name === "") {
+    name = chars(email.split("@")[0]).slice(0, 40).join("");
+  } else if (typeof name !== "string" || chars(name).length > 40) {
+    throw new BadRequestError("Display name must be 1 to 40 characters");
+  }
+  // Only an omitted value takes the default; null is not a credit amount.
+  var credits = body.credits === undefined ? BALANCE.startingCredits : body.credits;
+  if (
+    typeof credits !== "number" ||
+    !isFinite(credits) ||
+    Math.floor(credits) !== credits ||
+    credits < 0 ||
+    credits > 9007199254740991
+  ) {
+    throw new BadRequestError("Credits must be a whole number of 0 or more");
+  }
+  var rec;
+  $app.runInTransaction(function (txApp) {
+    var existing = null;
+    try {
+      existing = txApp.findAuthRecordByEmail("users", email);
+    } catch (err) {
+      if (String((err && err.message) || err).indexOf("no rows in result set") < 0) throw err;
+    }
+    if (existing) throw new BadRequestError("Email already in use");
+    rec = new Record(txApp.findCollectionByNameOrId("users"));
+    rec.set("email", email);
+    rec.set("password", password);
+    rec.set("passwordConfirm", password);
+    rec.set("display_name", name);
+    rec.set("role", role);
+    rec.set("credits", credits);
+    rec.set("disabled", false);
+    txApp.save(rec);
+  });
+  audit($app, adminId, "user_create", "users", rec.id, null, { email: email }, body.reason || "create", true);
   return { id: rec.id, email: rec.get("email") };
 }
 
@@ -239,15 +320,29 @@ function rotateTokenKey(u) {
   throw new Error("token rotation unavailable");
 }
 
+/**
+ * One transaction with fresh actor, target and admin-count reads: SQLite
+ * serialises writers, so two admins disabling each other cannot leave none.
+ */
 function setUserDisabled($app, adminId, userId, disabled, reason) {
-  var u = $app.findRecordById("users", userId);
-  var before = !!u.get("disabled");
-  u.set("disabled", !!disabled);
-  if (disabled && !before) {
-    // Revoke outstanding auth tokens: PB validates tokens against tokenKey (review B2)
-    rotateTokenKey(u);
-  }
-  $app.save(u);
+  var before = false;
+  $app.runInTransaction(function (txApp) {
+    requireFreshAdmin(txApp, adminId);
+    var u = txApp.findRecordById("users", userId);
+    before = !!u.get("disabled");
+    if (disabled) {
+      if (u.id === adminId) throw new BadRequestError("You cannot disable your own account");
+      if (!before && u.get("role") === "admin" && activeAdminCount(txApp) <= 1) {
+        throw new BadRequestError("Cannot disable the last active admin");
+      }
+    }
+    u.set("disabled", !!disabled);
+    if (disabled && !before) {
+      // Revoke outstanding auth tokens: PB validates tokens against tokenKey (review B2)
+      rotateTokenKey(u);
+    }
+    txApp.save(u);
+  });
   audit(
     $app,
     adminId,
@@ -262,25 +357,41 @@ function setUserDisabled($app, adminId, userId, disabled, reason) {
   return { ok: true, disabled: !!disabled };
 }
 
+/**
+ * Release and delete commit together or not at all. Audit actors and coaching
+ * users are required, non-cascading references, so PB would refuse the delete:
+ * say so up front. Bets, ledger, Command Charge and scans still cascade.
+ */
 function deleteUser($app, adminId, userId, reason) {
-  var u = $app.findRecordById("users", userId);
-  var email = u.get("email");
-  // release team
-  try {
-    var tr = $app.findRecordsByFilter(
+  var email = "";
+  $app.runInTransaction(function (txApp) {
+    requireFreshAdmin(txApp, adminId);
+    var u = txApp.findRecordById("users", userId);
+    if (u.id === adminId) throw new BadRequestError("You cannot delete your own account");
+    if (u.get("role") === "admin" && !u.get("disabled") && activeAdminCount(txApp) <= 1) {
+      throw new BadRequestError("Cannot delete the last active admin");
+    }
+    if (
+      txApp.countRecords("admin_audit_logs", $dbx.hashExp({ admin: u.id })) > 0 ||
+      txApp.countRecords("coaching_commands", $dbx.hashExp({ user: u.id })) > 0
+    ) {
+      throw new BadRequestError("User has audit or coaching history; disable the account instead");
+    }
+    email = u.get("email");
+    var tr = txApp.findRecordsByFilter(
       "proball_teams",
       "manager = {:u}",
       "",
       1,
       0,
-      { u: userId },
+      { u: u.id },
     );
     if (tr && tr.length) {
       tr[0].set("manager", "");
-      $app.save(tr[0]);
+      txApp.save(tr[0]);
     }
-  } catch (_) {}
-  $app.delete(u);
+    txApp.delete(u);
+  });
   audit($app, adminId, "user_delete", "users", userId, { email: email }, null, reason, true);
   return { ok: true };
 }
@@ -385,41 +496,46 @@ function adjustTreasury($app, adminId, teamId, mode, amount, reason) {
   return { ok: true, before: before, after: after };
 }
 
+/** Assigns an existing, enabled user; releasing is releaseTeam only (review B19). */
 function assignTeam($app, adminId, teamId, userId, reason) {
+  if (typeof userId !== "string" || !userId.trim()) {
+    throw new BadRequestError("User ID required");
+  }
   $app.runInTransaction(function (txApp) {
     var team = txApp.findRecordById("proball_teams", teamId);
-    if (userId) {
-      var other = txApp.findRecordsByFilter(
-        "proball_teams",
-        "manager = {:u}",
-        "",
-        1,
-        0,
-        { u: userId },
-      );
-      if (other && other.length && other[0].id !== teamId) {
-        throw new BadRequestError("User already manages a team");
-      }
-      if (team.get("manager") && team.get("manager") !== userId) {
-        throw new BadRequestError("Team already has a manager — release first");
-      }
-      team.set("manager", userId);
-    } else {
-      team.set("manager", "");
+    var users = txApp.findRecordsByFilter("users", "id = {:id}", "", 1, 0, { id: userId });
+    if (!users || !users.length) throw new BadRequestError("User not found");
+    if (users[0].get("disabled")) throw new BadRequestError("Cannot assign a disabled user");
+    var other = txApp.findRecordsByFilter(
+      "proball_teams",
+      "manager = {:u}",
+      "",
+      1,
+      0,
+      { u: userId },
+    );
+    if (other && other.length && other[0].id !== teamId) {
+      throw new BadRequestError("User already manages a team");
     }
+    if (team.get("manager") && team.get("manager") !== userId) {
+      throw new BadRequestError("Team already has a manager — release first");
+    }
+    // A new manager starts in manual mode, as on claim; re-assigning keeps it
+    if (!team.get("manager")) team.set("manager_mode", "manual");
+    team.set("manager", userId);
     txApp.save(team);
   });
-  audit(
-    $app,
-    adminId,
-    userId ? "team_assign" : "team_release",
-    "proball_teams",
-    teamId,
-    null,
-    { manager: userId || null },
-    reason,
-    true,
-  );
+  audit($app, adminId, "team_assign", "proball_teams", teamId, null, { manager: userId }, reason, true);
+  return { ok: true };
+}
+
+function releaseTeam($app, adminId, teamId, reason) {
+  $app.runInTransaction(function (txApp) {
+    var team = txApp.findRecordById("proball_teams", teamId);
+    team.set("manager", "");
+    txApp.save(team);
+  });
+  audit($app, adminId, "team_release", "proball_teams", teamId, null, { manager: null }, reason, true);
   return { ok: true };
 }
 
@@ -598,6 +714,7 @@ if (typeof module !== "undefined") {
     adjustCredits: adjustCredits,
     adjustTreasury: adjustTreasury,
     assignTeam: assignTeam,
+    releaseTeam: releaseTeam,
     resetTeamOps: resetTeamOps,
     patchWorldSettings: patchWorldSettings,
     listAudit: listAudit,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import { footfiveApi } from "../lib/pocketbase";
@@ -21,11 +21,21 @@ export default function AdminPage() {
   const [tab, setTab] = useState<
     "dash" | "users" | "teams" | "retention" | "tools" | "audit"
   >("dash");
+  const [userDraft, setUserDraft] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const [userTotal, setUserTotal] = useState<number | null>(null);
+  const [userHasMore, setUserHasMore] = useState(false);
+  // Applied list query. Actions and Retry reload this page; a new search sets page 1.
+  const listRef = useRef({ q: "", page: 1 });
+  const loadGen = useRef(0);
 
   async function load() {
+    const gen = ++loadGen.current;
+    const { q, page } = listRef.current;
     try {
       // Load overview first so shell is never blank if a secondary call fails
       const o = await footfiveApi.adminOverview();
+      if (gen !== loadGen.current) return;
       setOverview(o);
       const bm = Number(o.betweenRoundMinutes ?? 1);
       if (!Number.isNaN(bm) && bm >= 1) setBetweenMins(bm);
@@ -35,7 +45,7 @@ export default function AdminPage() {
       setWindowMins(Number(o.fixturesWindowMinutes ?? 5));
 
       const results = await Promise.allSettled([
-        footfiveApi.adminUsers(),
+        footfiveApi.adminUsers(q, page, 200),
         footfiveApi.recordsTeams(),
         footfiveApi.adminRetention(),
         footfiveApi.adminAudit(),
@@ -43,7 +53,22 @@ export default function AdminPage() {
         footfiveApi.adminRecoveryStatus(),
         footfiveApi.adminHealth(),
       ]);
-      if (results[0].status === "fulfilled") setUsers(results[0].value.users || []);
+      if (gen !== loadGen.current) return;
+      if (results[0].status === "fulfilled") {
+        let listed = results[0].value;
+        let shownPage = page;
+        // One step back when a delete empties the page. Do not walk to an unfiltered page 1.
+        if ((listed.users || []).length === 0 && page > 1) {
+          shownPage = page - 1;
+          listRef.current = { q, page: shownPage };
+          listed = await footfiveApi.adminUsers(q, shownPage, 200);
+          if (gen !== loadGen.current) return;
+        }
+        setUsers(listed.users || []);
+        setUserPage(typeof listed.page === "number" ? listed.page : shownPage);
+        setUserTotal(typeof listed.totalItems === "number" ? listed.totalItems : null);
+        setUserHasMore(!!listed.hasMore);
+      }
       if (results[1].status === "fulfilled") setTeams(results[1].value.teams || []);
       if (results[2].status === "fulfilled") setRetention(results[2].value);
       if (results[3].status === "fulfilled") setAudit(results[3].value.entries || []);
@@ -54,6 +79,7 @@ export default function AdminPage() {
       const failed = results.filter((r) => r.status === "rejected").length;
       setError(failed ? `${failed} admin panel(s) failed to load — retry` : "");
     } catch (err) {
+      if (gen !== loadGen.current) return;
       setError(err instanceof Error ? err.message : "Admin API unavailable");
       // Keep shell visible — overview null still shows header/tabs
     }
@@ -399,6 +425,64 @@ export default function AdminPage() {
 
       {tab === "users" ? (
         <div className="space-y-2">
+          <form
+            className="glass flex flex-wrap items-end gap-2 rounded-2xl p-3 text-sm"
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              const q = userDraft.trim();
+              listRef.current = { q, page: 1 };
+              setUserPage(1);
+              void load();
+            }}
+          >
+            <label className="min-w-0 flex-1">
+              <span className="text-muted">Search users</span>
+              <input
+                value={userDraft}
+                onChange={(e) => setUserDraft(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-sm"
+                data-testid="admin-user-search"
+              />
+            </label>
+            <button type="submit" className="btn-primary text-xs" data-testid="admin-user-search-submit">
+              Search
+            </button>
+          </form>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <p className="text-muted" data-testid="admin-user-total">
+              {userTotal == null ? "…" : `${userTotal} matching`}
+            </p>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs"
+                disabled={userPage <= 1}
+                data-testid="admin-user-prev"
+                onClick={() => {
+                  const next = Math.max(1, listRef.current.page - 1);
+                  listRef.current = { ...listRef.current, page: next };
+                  setUserPage(next);
+                  void load();
+                }}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn-ghost !min-h-9 !px-3 !py-1.5 text-xs"
+                disabled={!userHasMore}
+                data-testid="admin-user-next"
+                onClick={() => {
+                  const next = listRef.current.page + 1;
+                  listRef.current = { ...listRef.current, page: next };
+                  setUserPage(next);
+                  void load();
+                }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
           <form
             className="glass space-y-2 rounded-2xl p-3 text-sm"
             onSubmit={(ev) => {

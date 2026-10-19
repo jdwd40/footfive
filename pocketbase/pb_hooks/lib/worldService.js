@@ -1815,15 +1815,15 @@ function claimTeam($app, userId, teamId) {
     tx.save(team);
     result = team;
   });
+  // Shared audit serializer (review D8); best-effort after commit, as before
   try {
-    var col = $app.findCollectionByNameOrId("admin_audit_logs");
-    var a = new Record(col);
-    a.set("admin", userId);
-    a.set("action", "team_claim");
-    a.set("target_type", "proball_teams");
-    a.set("target_id", teamId);
-    a.set("meta", {});
-    $app.save(a);
+    var adm;
+    try {
+      adm = require(__hooks + "/lib/adminService.js");
+    } catch (e) {
+      adm = require("./adminService.js");
+    }
+    adm.audit($app, userId, "team_claim", "proball_teams", teamId, { manager: null }, { manager: userId }, "claim", true);
   } catch (_) {}
   return result;
 }
