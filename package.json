@@ -31,6 +31,7 @@
     "test:http-errors": "node tests/integration/http-errors.mjs",
     "test:collection-guards": "node tests/integration/collection-guards.mjs",
     "test:squad-reads": "node tests/integration/squad-read-repair.mjs",
+    "test:retention": "node tests/integration/retention-throughput.mjs",
     "test:settlement": "node tests/integration/settlement-recovery.mjs",
     "test:progression": "node tests/integration/progression-lock.mjs",
     "test:recovery": "node scripts/restart-recovery.mjs",

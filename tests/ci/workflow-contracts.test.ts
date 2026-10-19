@@ -323,6 +323,21 @@ describe("footfive-ci.yml contracts", () => {
     expect(pkg.scripts["test:squad-reads"]).toBe("node tests/integration/squad-read-repair.mjs");
   });
 
+  it("requires real retention throughput and protection checks before the shared API server", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const retention = steps.filter((step) => /^ {8}run: npm run test:retention$/m.test(step));
+    expect(retention).toHaveLength(1);
+    expect(retention[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(retention[0]).toContain('RETENTION_PB_PORT: "8311"');
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    expect(at("npm run test:retention")).toBeGreaterThan(at("npm run test:squad-reads"));
+    expect(at("name: Start test PocketBase")).toBeGreaterThan(at("npm run test:retention"));
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:retention"]).toBe("node tests/integration/retention-throughput.mjs");
+    expect(readFileSync(path.join(root, "tests/integration/retention-throughput.mjs"), "utf8"))
+      .toContain("RETENTION_PB_PORT");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

@@ -81,6 +81,10 @@ jobs:
         env:
           SQUAD_READS_PB_PORT: "8309"
         run: npm run test:squad-reads
+      - name: Retention throughput and protections (disposable PocketBase)
+        env:
+          RETENTION_PB_PORT: "8311"
+        run: npm run test:retention
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test
