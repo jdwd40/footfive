@@ -1,5 +1,17 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { loginViaUi, registerViaUi, expectNoHorizontalOverflow, apiLogin, PB } from "./helpers";
+
+async function persistedAuthToken(page: Page) {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem("pocketbase_auth");
+    if (!raw) return "";
+    try {
+      return String(JSON.parse(raw).token || "");
+    } catch {
+      return raw;
+    }
+  });
+}
 
 test.describe("auth", () => {
   test("login valid user and session survives refresh", async ({ page }) => {
@@ -8,6 +20,33 @@ test.describe("auth", () => {
     await expectNoHorizontalOverflow(page);
     await page.reload();
     await expect(page).not.toHaveURL(/\/login$/);
+  });
+
+  test("one visible logout click stays logged out after reload and /my-team", async ({ page }) => {
+    await loginViaUi(page, "e2e_user_a@test.local", "testpass99");
+    await expect(page).toHaveURL(/\/live$/, { timeout: 20000 });
+    const logout = page.getByRole("button", { name: "Log out", exact: true });
+    await expect(logout).toHaveCount(1);
+    await expect(logout).toBeVisible();
+    expect(await persistedAuthToken(page)).not.toBe("");
+    await logout.click();
+
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByTestId("login-form")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Log out", exact: true })).toHaveCount(0);
+    expect(await persistedAuthToken(page)).toBe("");
+
+    await page.reload();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByTestId("login-form")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Log out", exact: true })).toHaveCount(0);
+    expect(await persistedAuthToken(page)).toBe("");
+
+    await page.goto("/my-team");
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByTestId("login-form")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Log out", exact: true })).toHaveCount(0);
+    expect(await persistedAuthToken(page)).toBe("");
   });
 
   test("reject invalid login", async ({ page }) => {
