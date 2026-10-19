@@ -80,7 +80,9 @@ function where(exps: Exp[]) {
 
 class Row {
   id: string;
-  constructor(private data: Record<string, unknown>) {
+  private data: Record<string, unknown>;
+  constructor(data: Record<string, unknown>) {
+    this.data = data;
     this.id = String(data.id);
   }
   getString(key: string) {
