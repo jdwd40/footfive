@@ -20,7 +20,9 @@ onBootstrap((e) => {
           lastErr = "schema_not_ready";
           // brief busy-wait (~50ms) without setTimeout
           const t0 = Date.now();
-          while (Date.now() - t0 < 50) {}
+          while (Date.now() - t0 < 50) {
+            // busy-wait
+          }
           continue;
         }
         svc.ensureWorld($app);
@@ -31,7 +33,9 @@ onBootstrap((e) => {
       } catch (err) {
         lastErr = String(err);
         const t1 = Date.now();
-        while (Date.now() - t1 < 50) {}
+        while (Date.now() - t1 < 50) {
+          // busy-wait
+        }
       }
     }
     if (!ok) {
@@ -195,7 +199,7 @@ routerUse((e) => {
 // Server-owned game state: no native create/update for anyone, superusers
 // included; use the protected FootFive routes.
 onRecordCreateRequest(
-  function (e) {
+  function (_e) {
     throw new ForbiddenError("Use protected FootFive routes");
   },
   "proball_teams",
@@ -213,7 +217,7 @@ onRecordCreateRequest(
   "shared_rounds"
 );
 onRecordUpdateRequest(
-  function (e) {
+  function (_e) {
     throw new ForbiddenError("Use protected FootFive routes");
   },
   "match_states",

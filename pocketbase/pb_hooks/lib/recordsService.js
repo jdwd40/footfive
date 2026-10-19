@@ -1,13 +1,10 @@
 /**
  * Shared records, match/tournament summaries, history APIs.
  */
-var balMod;
 var tourneyMod;
 try {
-  balMod = require(__hooks + "/lib/balance.js");
   tourneyMod = require(__hooks + "/lib/tournament.js");
 } catch (e) {
-  balMod = require("./balance.js");
   tourneyMod = require("./tournament.js");
 }
 
@@ -126,7 +123,7 @@ function ensureMatchSummary($app, fixture, matchState, roundKey, tournamentId, e
   return { record: rec, created: true };
 }
 
-function ensureTournamentSummary($app, tournament, fixturesMeta) {
+function ensureTournamentSummary($app, tournament, _fixturesMeta) {
   var tid = tournament.id;
   var existing = $app.findRecordsByFilter(
     "tournament_summaries",
@@ -752,7 +749,6 @@ function teamDetail($app, teamId) {
   var form = [];
   for (var m = 0; m < Math.min(recent.length, 5); m++) {
     var match = recent[m];
-    var isHome = match.homeTeamId === teamId;
     var won =
       match.winnerTeamId === teamId
         ? "W"

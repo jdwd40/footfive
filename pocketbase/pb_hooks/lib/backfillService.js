@@ -9,27 +9,6 @@ try {
   recMod = require("./recordsService.js");
 }
 
-function parseJson(v, fb) {
-  if (v == null || v === "") return fb;
-  if (typeof v === "string") {
-    try {
-      return JSON.parse(v);
-    } catch (_) {
-      return fb;
-    }
-  }
-  try {
-    return JSON.parse(JSON.stringify(v));
-  } catch (_) {
-    return v || fb;
-  }
-}
-
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
-}
-
 function listFinishedWithoutSummary($app, limit) {
   limit = limit || 40;
   var states = $app.findRecordsByFilter(

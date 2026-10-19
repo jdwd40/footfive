@@ -16,7 +16,7 @@ export default tseslint.config(
       "pocketbase/pb_data/**",
       "pocketbase/pb_data_test/**",
       "pocketbase/pb_data_rehearsal/**",
-      "pocketbase/pb_hooks/**",
+      // Applied migrations are immutable history; never edited to satisfy lint.
       "pocketbase/pb_migrations/**",
       "pocketbase/pocketbase",
       "e2e/.browser-libs/**",
@@ -43,6 +43,70 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": [
         "warn",
         { argsIgnorePattern: "^_" },
+      ],
+    },
+  },
+  // PocketBase JSVM hooks (goja). lib/*.js are CommonJS modules required from
+  // handlers; *.pb.js are scripts whose handler callbacks run without the file's
+  // outer scope.
+  {
+    extends: [js.configs.recommended],
+    files: ["pocketbase/pb_hooks/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: {
+        ...globals.es2021,
+        console: "readonly",
+        $app: "readonly",
+        $apis: "readonly",
+        $dbx: "readonly",
+        $os: "readonly",
+        $security: "readonly",
+        __hooks: "readonly",
+        Record: "readonly",
+        arrayOf: "readonly",
+        sleep: "readonly",
+        ApiError: "readonly",
+        BadRequestError: "readonly",
+        ForbiddenError: "readonly",
+        NotFoundError: "readonly",
+        UnauthorizedError: "readonly",
+        routerAdd: "readonly",
+        routerUse: "readonly",
+        cronAdd: "readonly",
+        onBootstrap: "readonly",
+        onRecordCreateRequest: "readonly",
+        onRecordUpdateRequest: "readonly",
+        onRecordDeleteRequest: "readonly",
+        onRecordAuthRequest: "readonly",
+      },
+    },
+    rules: {
+      "no-redeclare": ["error", { builtinGlobals: true }],
+      // ES5 needs a catch binding, so unused ones are inherent, not findings.
+      "no-unused-vars": [
+        "error",
+        { vars: "all", args: "after-used", argsIgnorePattern: "^_", caughtErrors: "none" },
+      ],
+      // Best-effort `catch (_) {}` is deliberate in hooks.
+      "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
+  {
+    files: ["pocketbase/pb_hooks/*.pb.js"],
+    languageOptions: {
+      sourceType: "script",
+      globals: { require: "readonly" },
+    },
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "Program > :matches(VariableDeclaration, FunctionDeclaration, ClassDeclaration)",
+          message:
+            "PocketBase runs hook handlers without this file's scope: put helpers in lib/ and require them inside the handler.",
+        },
       ],
     },
   },

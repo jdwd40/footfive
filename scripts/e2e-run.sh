@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Start isolated PocketBase test instance + Vite preview, run API + Playwright, cleanup.
+# --api-only: same disposable PocketBase, seed and cleanup, then only the API suites
+# (e2e-api, then account-security last); no browser libs, build, preview or Playwright.
 set -euo pipefail
+API_ONLY=0
+if [[ "${1:-}" == "--api-only" ]]; then
+  API_ONLY=1
+  shift
+fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PB_BIN="$ROOT/pocketbase/pocketbase"
 PB_DATA="$ROOT/pocketbase/pb_data_test"
@@ -11,7 +18,7 @@ export E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}"
 export VITE_POCKETBASE_URL="$E2E_PB_URL"
 
 # Vendor browser libs when system packages missing (local dev without root)
-if bash "$ROOT/scripts/ensure-playwright-libs.sh" >"$ROOT/.pw-lib-env" 2>/dev/null; then
+if [[ "$API_ONLY" == "0" ]] && bash "$ROOT/scripts/ensure-playwright-libs.sh" >"$ROOT/.pw-lib-env" 2>/dev/null; then
   # shellcheck disable=SC1091
   source "$ROOT/.pw-lib-env"
   export LD_LIBRARY_PATH
@@ -22,6 +29,10 @@ if [[ ! -x "$PB_BIN" ]]; then
   exit 1
 fi
 
+if [[ "$API_ONLY" == "1" ]] && (exec 3<>"/dev/tcp/127.0.0.1/${PB_PORT}") 2>/dev/null; then
+  echo "Port ${PB_PORT} is already in use; refusing to reset $PB_DATA (set E2E_PB_PORT)"
+  exit 1
+fi
 rm -rf "$PB_DATA"
 mkdir -p "$PB_DATA"
 
@@ -47,6 +58,14 @@ done
 curl -sf "http://127.0.0.1:${PB_PORT}/api/health" >/dev/null
 
 node "$ROOT/scripts/e2e-seed.mjs"
+
+if [[ "$API_ONLY" == "1" ]]; then
+  # Account-security runs last: its 429 checks exhaust the login rate-limit bucket.
+  node "$ROOT/tests/integration/e2e-api.mjs"
+  node "$ROOT/tests/integration/account-security.mjs"
+  echo "E2E API OK"
+  exit 0
+fi
 
 cd "$ROOT"
 # Build with test API URL baked in

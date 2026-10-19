@@ -1,6 +1,8 @@
 /**
  * Restart resilience test against running PocketBase (dev or rehearsal).
  * 1) catch-up while live 2) stop not automated here — simulates recovery API path
+ * Catch-up is admin-only: RECOVERY_ADMIN_EMAIL / RECOVERY_ADMIN_PASSWORD (default: the
+ * local e2e seed admin). Without an admin login that step is reported as skipped.
  * Usage: PB_URL=http://127.0.0.1:8090 node scripts/restart-recovery.mjs
  */
 const BASE = process.env.PB_URL || process.env.E2E_PB_URL || "http://127.0.0.1:8090";
@@ -41,7 +43,7 @@ async function main() {
   });
   const token = auth.data.token;
 
-  const before = await json("/api/footfive/scoreboard", { token });
+  const before = await json("/api/footfive/public-scoreboard");
   const fix = (before.data.fixtures || [])[0];
   let eventsBefore = 0;
   if (fix) {
@@ -51,8 +53,24 @@ async function main() {
   }
 
   // Simulate "after downtime": double catch-up must be idempotent
-  await json("/api/footfive/catch-up", { method: "POST", token });
-  await json("/api/footfive/catch-up", { method: "POST", token });
+  const admin = await json("/api/collections/users/auth-with-password", {
+    method: "POST",
+    body: {
+      identity: process.env.RECOVERY_ADMIN_EMAIL || "e2e_admin@test.local",
+      password: process.env.RECOVERY_ADMIN_PASSWORD || "adminpass99",
+    },
+  });
+  if (admin.ok && admin.data.token) {
+    for (let i = 0; i < 2; i++) {
+      const r = await json("/api/footfive/admin/world/catch-up", { method: "POST", token: admin.data.token });
+      if (!r.ok) {
+        console.error("FAIL admin catch-up", r.status, r.data.message || "");
+        process.exit(1);
+      }
+    }
+  } else {
+    console.log("SKIP catch-up: no admin login (set RECOVERY_ADMIN_EMAIL/RECOVERY_ADMIN_PASSWORD)");
+  }
 
   if (fix) {
     const id = fix.fixtureId || fix.id;

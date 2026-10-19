@@ -47,8 +47,8 @@ async function main() {
 
   await time("health", () => fetch(`${BASE}/api/health`));
   await time("world", () => fetch(`${BASE}/api/footfive/world`, { headers: h }));
-  await time("scoreboard", () =>
-    fetch(`${BASE}/api/footfive/scoreboard`, { headers: h }),
+  await time("public-scoreboard", () =>
+    fetch(`${BASE}/api/footfive/public-scoreboard`),
   );
   await time("records/overview", () =>
     fetch(`${BASE}/api/footfive/records/overview`, { headers: h }),
@@ -56,10 +56,6 @@ async function main() {
   await time("records/teams", () =>
     fetch(`${BASE}/api/footfive/records/teams`, { headers: h }),
   );
-  await time("catch-up", () =>
-    fetch(`${BASE}/api/footfive/catch-up`, { method: "POST", headers: h }),
-  );
-
   console.log("Note: admin timings require admin token; run separately if needed.");
 }
 
