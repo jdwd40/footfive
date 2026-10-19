@@ -278,6 +278,21 @@ describe("footfive-ci.yml contracts", () => {
     expect(pkg.scripts["test:admin-mutations"]).toBe("node tests/integration/admin-mutations.mjs");
   });
 
+  it("requires the HTTP body and safe-error regressions after admin mutations", () => {
+    const steps = job(ci, "api-e2e").split(/^ {6}- /m).slice(1);
+    const at = (run: string) => steps.findIndex((step) => step.split("\n").includes(`        run: ${run}`));
+    const http = steps.filter((step) => /^ {8}run: npm run test:http-errors$/m.test(step));
+    expect(http).toHaveLength(1);
+    expect(http[0]).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
+    expect(http[0]).toMatch(/^ {10}HTTP_ERRORS_PB_PORT: "8307"$/m);
+    expect(at("npm run test:admin-mutations")).toBeGreaterThan(-1);
+    expect(at("npm run test:http-errors")).toBeGreaterThan(at("npm run test:admin-mutations"));
+    expect(steps.findIndex((step) => step.startsWith("name: Start test PocketBase")))
+      .toBeGreaterThan(at("npm run test:http-errors"));
+    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["test:http-errors"]).toBe("node tests/integration/http-errors.mjs");
+  });
+
   it("lint is a hard gate (no || true on gate steps)", () => {
     expect(ci).not.toContain("npm run lint || true");
     expect(ci).not.toContain("npm run test || true");

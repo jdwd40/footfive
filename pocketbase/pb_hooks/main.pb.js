@@ -429,12 +429,13 @@ routerAdd(
   "POST",
   "/api/footfive/teams/{teamId}/claim",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const svc = require(`${__hooks}/lib/worldService.js`);
     try {
       const team = svc.claimTeam($app, e.auth.id, e.request.pathValue("teamId"));
       return e.json(200, { team: svc.teamPublic(team) });
     } catch (err) {
-      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+      throw http.fail(err, { route: "POST /api/footfive/teams/{teamId}/claim", fallback: "Could not claim this team" });
     }
   },
   $apis.requireAuth(),
@@ -444,15 +445,13 @@ routerAdd(
   "POST",
   "/api/footfive/matches/{fixtureId}/coaching",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const svc = require(`${__hooks}/lib/worldService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, svc.setCoaching($app, e.auth.id, e.request.pathValue("fixtureId"), body.stance));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+      throw http.fail(err, { route: "POST /api/footfive/matches/{fixtureId}/coaching", fallback: "Could not apply coaching" });
     }
   },
   $apis.requireAuth(),
@@ -487,15 +486,13 @@ routerAdd(
   "POST",
   "/api/footfive/bets",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const bet = require(`${__hooks}/lib/bettingService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, bet.placeBet($app, e.auth.id, body));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+      throw http.fail(err, { route: "POST /api/footfive/bets", fallback: "Could not place bet" });
     }
   },
   $apis.requireAuth(),
@@ -515,11 +512,12 @@ routerAdd(
   "POST",
   "/api/footfive/wallet/topup",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const bet = require(`${__hooks}/lib/bettingService.js`);
     try {
       return e.json(200, bet.topUp($app, e.auth.id));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+      throw http.fail(err, { route: "POST /api/footfive/wallet/topup", fallback: "Could not top up wallet" });
     }
   },
   $apis.requireAuth(),
@@ -540,15 +538,13 @@ routerAdd(
   "POST",
   "/api/footfive/my-team/mode",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, mgmt.setMode($app, e.auth.id, body.mode));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+      throw http.fail(err, { route: "POST /api/footfive/my-team/mode", fallback: "Could not change mode" });
     }
   },
   $apis.requireAuth(),
@@ -558,15 +554,13 @@ routerAdd(
   "POST",
   "/api/footfive/my-team/stance",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, mgmt.setDefaultStance($app, e.auth.id, body.stance));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err).replace(/^\w*Error: /, ""));
+      throw http.fail(err, { route: "POST /api/footfive/my-team/stance", fallback: "Could not change stance" });
     }
   },
   $apis.requireAuth(),
@@ -578,13 +572,14 @@ routerAdd(
   "GET",
   "/api/footfive/my-team",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
     try {
       return e.json(200, mgmt.getSquad($app, auth.id));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/my-team", fallback: "Team unavailable" });
     }
   },
   $apis.requireAuth(),
@@ -594,13 +589,14 @@ routerAdd(
   "GET",
   "/api/footfive/my-team/squad",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
     try {
       return e.json(200, mgmt.getSquad($app, auth.id));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/my-team/squad", fallback: "Squad unavailable" });
     }
   },
   $apis.requireAuth(),
@@ -610,19 +606,16 @@ routerAdd(
   "POST",
   "/api/footfive/my-team/lineup",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
-    let body = {};
-    try {
-      const info = e.requestInfo();
-      body = info.body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       // Raw values: omitted or null subs auto-fill; false, 0 or "" are rejected as malformed.
       return e.json(200, mgmt.setLineup($app, auth.id, body.starters, body.subs));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/my-team/lineup", fallback: "Could not save lineup" });
     }
   },
   $apis.requireAuth(),
@@ -632,21 +625,18 @@ routerAdd(
   "POST",
   "/api/footfive/my-team/intensity",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
-    let body = {};
-    try {
-      const info = e.requestInfo();
-      body = info.body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
         mgmt.setIntensity($app, auth.id, body.playerId, body.intensity),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/my-team/intensity", fallback: "Could not change intensity" });
     }
   },
   $apis.requireAuth(),
@@ -656,18 +646,16 @@ routerAdd(
   "POST",
   "/api/footfive/players/{id}/upgrade",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, mgmt.upgradePlayer($app, auth.id, id, body.attribute));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/players/{id}/upgrade", fallback: "Could not upgrade player" });
     }
   },
   $apis.requireAuth(),
@@ -677,17 +665,15 @@ routerAdd(
   "POST",
   "/api/footfive/team-shop/batteries/buy",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, mgmt.buyBattery($app, auth.id, body.count || 1));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/team-shop/batteries/buy", fallback: "Could not buy battery" });
     }
   },
   $apis.requireAuth(),
@@ -697,6 +683,7 @@ routerAdd(
   "POST",
   "/api/footfive/players/{id}/battery",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
@@ -704,7 +691,7 @@ routerAdd(
     try {
       return e.json(200, mgmt.useBattery($app, auth.id, id));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/players/{id}/battery", fallback: "Could not use battery" });
     }
   },
   $apis.requireAuth(),
@@ -714,18 +701,16 @@ routerAdd(
   "POST",
   "/api/footfive/players/{id}/repair",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, mgmt.repairPlayer($app, auth.id, id, body.points || 25));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/players/{id}/repair", fallback: "Could not repair player" });
     }
   },
   $apis.requireAuth(),
@@ -735,13 +720,14 @@ routerAdd(
   "GET",
   "/api/footfive/my-team/finances",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
     try {
       return e.json(200, mgmt.teamFinances($app, auth.id, 40));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/my-team/finances", fallback: "Finances unavailable" });
     }
   },
   $apis.requireAuth(),
@@ -751,13 +737,14 @@ routerAdd(
   "GET",
   "/api/footfive/command-charge",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
     try {
       return e.json(200, mgmt.getCommandChargeState($app, auth.id));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/command-charge", fallback: "Command Charge unavailable" });
     }
   },
   $apis.requireAuth(),
@@ -767,13 +754,11 @@ routerAdd(
   "POST",
   "/api/footfive/command-charge/spend",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const mgmt = require(`${__hooks}/lib/managementService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
@@ -786,7 +771,7 @@ routerAdd(
         ),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/command-charge/spend", fallback: "Could not spend Command Charge" });
     }
   },
   $apis.requireAuth(),
@@ -796,6 +781,7 @@ routerAdd(
   "GET",
   "/api/footfive/my-team/tactical-scan",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     try {
@@ -818,7 +804,7 @@ routerAdd(
       }
       return e.json(200, { scans: list });
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/my-team/tactical-scan", fallback: "Tactical scan unavailable" });
     }
   },
   $apis.requireAuth(),
@@ -952,18 +938,16 @@ routerAdd(
   "POST",
   "/api/footfive/admin/users",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, adm.createUser($app, auth.id, body));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/users", fallback: "Could not create user" });
     }
   },
   $apis.requireAuth(),
@@ -973,15 +957,13 @@ routerAdd(
   "POST",
   "/api/footfive/admin/users/{id}/disable",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     return e.json(200, adm.setUserDisabled($app, auth.id, id, true, body.reason || ""));
   },
   $apis.requireAuth(),
@@ -991,15 +973,13 @@ routerAdd(
   "POST",
   "/api/footfive/admin/users/{id}/enable",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     return e.json(200, adm.setUserDisabled($app, auth.id, id, false, body.reason || ""));
   },
   $apis.requireAuth(),
@@ -1009,19 +989,17 @@ routerAdd(
   "DELETE",
   "/api/footfive/admin/users/{id}",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, adm.deleteUser($app, auth.id, id, body.reason || "delete"));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "DELETE /api/footfive/admin/users/{id}", fallback: "Could not delete user" });
     }
   },
   $apis.requireAuth(),
@@ -1031,22 +1009,20 @@ routerAdd(
   "POST",
   "/api/footfive/admin/users/{id}/credits",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
         adm.adjustCredits($app, auth.id, id, body.mode || "add", body.amount, body.reason),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/users/{id}/credits", fallback: "Could not adjust credits" });
     }
   },
   $apis.requireAuth(),
@@ -1056,22 +1032,20 @@ routerAdd(
   "POST",
   "/api/footfive/admin/teams/{id}/treasury",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
         adm.adjustTreasury($app, auth.id, id, body.mode || "add", body.amount, body.reason),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/teams/{id}/treasury", fallback: "Could not adjust treasury" });
     }
   },
   $apis.requireAuth(),
@@ -1081,19 +1055,17 @@ routerAdd(
   "POST",
   "/api/footfive/admin/teams/{id}/assign",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(200, adm.assignTeam($app, auth.id, id, body.userId, body.reason || ""));
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/teams/{id}/assign", fallback: "Could not assign team" });
     }
   },
   $apis.requireAuth(),
@@ -1103,15 +1075,13 @@ routerAdd(
   "POST",
   "/api/footfive/admin/teams/{id}/release",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     return e.json(200, adm.releaseTeam($app, auth.id, id, body.reason || "release"));
   },
   $apis.requireAuth(),
@@ -1121,22 +1091,20 @@ routerAdd(
   "POST",
   "/api/footfive/admin/teams/{id}/reset",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
         adm.resetTeamOps($app, auth.id, id, body.mode || "energy", body.reason || "reset"),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/teams/{id}/reset", fallback: "Could not reset team" });
     }
   },
   $apis.requireAuth(),
@@ -1207,21 +1175,19 @@ routerAdd(
   "PATCH",
   "/api/footfive/admin/world/settings",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
         adm.patchWorldSettings($app, auth.id, body, body.reason || "settings"),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "PATCH /api/footfive/admin/world/settings", fallback: "Could not update world settings" });
     }
   },
   $apis.requireAuth(),
@@ -1231,22 +1197,20 @@ routerAdd(
   "POST",
   "/api/footfive/admin/world/apply-between-round",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const svc = require(`${__hooks}/lib/worldService.js`);
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
         svc.applyBetweenRoundToWaiting($app, auth.id, body.reason || "apply_between_round"),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/world/apply-between-round", fallback: "Could not apply between-round setting" });
     }
   },
   $apis.requireAuth(),
@@ -1362,13 +1326,14 @@ routerAdd(
   "GET",
   "/api/footfive/records/teams/{id}",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const rec = require(`${__hooks}/lib/recordsService.js`);
     try {
       return e.json(200, rec.teamDetail($app, e.request.pathValue("id")));
     } catch (err) {
-      throw new NotFoundError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/records/teams/{id}", fallback: "Team details unavailable", status: 404, notFound: "Team not found" });
     }
   },
   $apis.requireAuth(),
@@ -1378,13 +1343,14 @@ routerAdd(
   "GET",
   "/api/footfive/records/tournaments/{id}",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const rec = require(`${__hooks}/lib/recordsService.js`);
     try {
       return e.json(200, rec.tournamentDetail($app, e.request.pathValue("id")));
     } catch (err) {
-      throw new NotFoundError(String(err.message || err));
+      throw http.fail(err, { route: "GET /api/footfive/records/tournaments/{id}", fallback: "Tournament details unavailable", status: 404 });
     }
   },
   $apis.requireAuth(),
@@ -1407,15 +1373,13 @@ routerAdd(
   "POST",
   "/api/footfive/admin/users/{id}/password",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
     const adm = require(`${__hooks}/lib/adminService.js`);
     adm.requireAdmin(auth);
     const id = e.request.pathValue("id");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     try {
       return e.json(
         200,
@@ -1425,7 +1389,7 @@ routerAdd(
         }),
       );
     } catch (err) {
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/admin/users/{id}/password", fallback: "Could not reset password" });
     }
   },
   $apis.requireAuth(),
@@ -1564,12 +1528,10 @@ routerAdd(
   "POST",
   "/api/footfive/account/change-password",
   (e) => {
+    var http = require(__hooks + "/lib/http.js");
     const auth = e.auth;
     if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    let body = {};
-    try {
-      body = e.requestInfo().body || {};
-    } catch (_) {}
+    var body = http.readBody(e);
     const currentPassword = body.currentPassword || body.current_password || "";
     const newPassword = body.newPassword || body.new_password || "";
     if (!newPassword || String(newPassword).length < 8) {
@@ -1626,8 +1588,7 @@ routerAdd(
       log.info("password_change", { userId: auth.id, success: true });
       return e.json(200, { ok: true, must_change_password: false });
     } catch (err) {
-      if (err instanceof BadRequestError) throw err;
-      throw new BadRequestError(String(err.message || err));
+      throw http.fail(err, { route: "POST /api/footfive/account/change-password", fallback: "Could not change password" });
     }
   },
   $apis.requireAuth(),

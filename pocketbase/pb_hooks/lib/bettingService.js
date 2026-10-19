@@ -101,7 +101,7 @@ function claimConflict(tx, userId, teamId) {
 function fixtureCtx($app, fx, now) {
   var W = ws();
   if (W.drawHidden($app, $app.findRecordById("shared_rounds", fx.get("round")), now)) {
-    throw new Error("Betting opens when the fixtures are announced.");
+    throw new BadRequestError("Betting opens when the fixtures are announced.");
   }
   var teams = W.teamMap($app);
   var T = W.timing(W.ensureWorld($app));

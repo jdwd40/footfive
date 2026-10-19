@@ -69,6 +69,10 @@ jobs:
         env:
           ADMIN_MUTATIONS_PB_PORT: "8306"
         run: npm run test:admin-mutations
+      - name: HTTP body and safe error contracts (disposable PocketBase)
+        env:
+          HTTP_ERRORS_PB_PORT: "8307"
+        run: npm run test:http-errors
       - name: Start test PocketBase
         run: |
           rm -rf pocketbase/pb_data_test

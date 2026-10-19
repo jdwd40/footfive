@@ -867,8 +867,8 @@ async function run() {
     expectCase(
       "new: late delete failure keeps the user and the team manager",
       lateAssign.ok &&
-        !lateDelete.ok &&
-        says(lateDelete.data, "Injected delete failure") &&
+        lateDelete.status === 400 &&
+        says(lateDelete.data, "Could not delete user") &&
         !!userById(late.id) &&
         teamById(lateTeam).manager === late.id,
       JSON.stringify({
