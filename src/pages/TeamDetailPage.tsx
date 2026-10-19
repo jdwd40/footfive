@@ -133,13 +133,20 @@ export default function TeamDetailPage() {
           <li key={String(m.id)}>
             <Link
               to={`/records/matches/${String(m.id)}`}
-              className="flex justify-between rounded-lg px-2 py-1.5 hover:bg-white/5"
+              className="block rounded-lg px-2 py-1.5 hover:bg-white/5"
             >
-              <span>
-                {String(m.homeName)} {String(m.scoreHome)}–{String(m.scoreAway)}{" "}
-                {String(m.awayName)}
+              <span className="flex flex-wrap items-baseline justify-between gap-x-2">
+                <span className="min-w-0">
+                  {String(m.homeName)} {String(m.scoreHome)}–{String(m.scoreAway)}{" "}
+                  {String(m.awayName)}
+                </span>
+                <span className="text-xs text-muted">{String(m.roundKey)}</span>
               </span>
-              <span className="text-xs text-muted">{String(m.roundKey)}</span>
+              {m.wentShootout ? (
+                <span className="block text-xs text-amber">
+                  pens {String(m.shootoutHome)}–{String(m.shootoutAway)}
+                </span>
+              ) : null}
             </Link>
           </li>
         ))}
