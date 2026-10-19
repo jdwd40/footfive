@@ -1040,7 +1040,7 @@ describe("MatchPage coaching feedback", () => {
       expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Balanced.");
       await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
       expect(match).toHaveBeenCalledTimes(2);
-      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("2/3 coaching commands left this match")).toBeTruthy();
       expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
       expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
       expect(touchline().getByRole("button", { name: "attack" })).toHaveAttribute("aria-pressed", "false");
@@ -1067,7 +1067,7 @@ describe("MatchPage coaching feedback", () => {
       expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Balanced.");
       expect(touchline().getByRole("button", { name: "balanced" })).toHaveAttribute("aria-pressed", "true");
       await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
-      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("2/3 coaching commands left this match")).toBeTruthy();
       expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
       expect(touchline().getByRole("button", { name: "attack" })).toHaveAttribute("aria-pressed", "false");
       expect(touchline().getByRole("button", { name: "attack" }).className).not.toMatch(/bg-cyan/);
@@ -1116,7 +1116,7 @@ describe("MatchPage coaching feedback", () => {
       await mount();
       await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
       expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
-      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("2/3 coaching commands left this match")).toBeTruthy();
       expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
       expect(screen.queryByText("Match unavailable")).toBeNull();
       cleanup();
@@ -1128,8 +1128,8 @@ describe("MatchPage coaching feedback", () => {
       await mount();
       await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
       await act(async () => refresh!(withCoach({ stance: "balanced", pending: false, used: 0, max: 3 })));
-      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
-      expect(touchline().queryByText("3/3 commands left")).toBeNull();
+      expect(touchline().getByText("2/3 coaching commands left this match")).toBeTruthy();
+      expect(touchline().queryByText("3/3 coaching commands left this match")).toBeNull();
       expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
       expect(touchline().getByTestId("coaching-state").textContent).toContain(`Queued: Attack from ${minuteLabel(59)}.`);
       expect(touchline().getByTestId("coaching-state").textContent).not.toContain("Active:");
@@ -1146,11 +1146,11 @@ describe("MatchPage coaching feedback", () => {
     const coaching = vi.spyOn(footfiveApi, "coaching").mockRejectedValueOnce(new Error("Command recharging — available in 4s"));
     try {
       await mount();
-      expect(touchline().getByText("3/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("3/3 coaching commands left this match")).toBeTruthy();
       await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
       expect(touchline().getByRole("alert").textContent).toBe("Command recharging — available in 4s");
       expect(touchline().queryByRole("status")).toBeNull();
-      expect(touchline().getByText("3/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("3/3 coaching commands left this match")).toBeTruthy();
       expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Balanced.");
       expect(touchline().getByTestId("coaching-state").textContent).not.toContain("Queued:");
       expect(coaching).toHaveBeenCalledTimes(1);
@@ -1172,7 +1172,7 @@ describe("MatchPage coaching feedback", () => {
     expect(attack).toBeDisabled();
     expect(touchline().getByRole("button", { name: "balanced" })).toHaveAttribute("aria-pressed", "false");
     expect(touchline().getByRole("button", { name: "balanced" })).toBeEnabled();
-    expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+    expect(touchline().getByText("2/3 coaching commands left this match")).toBeTruthy();
     expect(touchline().queryByRole("status")).toBeNull();
   });
 
@@ -1183,14 +1183,16 @@ describe("MatchPage coaching feedback", () => {
     cleanup();
 
     await mount(withCoach({ used: 3, max: 3 }));
-    expect(touchline().getByText("0/3 commands left")).toBeTruthy();
+    expect(touchline().getByRole("heading", { name: "Live coaching" })).toBeTruthy();
+    expect(touchline().getByText("0/3 coaching commands left this match")).toBeTruthy();
+    expect(touchline().getByText(/separate from Command Charge on My Team/)).toBeTruthy();
     expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
     expect(touchline().getByRole("button", { name: "defend" })).toBeDisabled();
     expect(touchline().getByRole("button", { name: "balanced" })).toBeDisabled();
     cleanup();
 
     await mount(withCoach({ cooldownUntil: Date.now() + 60_000 }));
-    expect(touchline().getByTestId("coaching-state").textContent).toMatch(/Recharging:/);
+    expect(touchline().getByTestId("coaching-state").textContent).toMatch(/Coaching cooldown:/);
     expect(touchline().getByRole("button", { name: "attack" })).toBeDisabled();
     expect(touchline().getByText(/Commands affect future play only/)).toBeTruthy();
     cleanup();
@@ -1226,12 +1228,12 @@ describe("MatchPage coaching feedback", () => {
       });
       await act(async () => fireEvent.click(touchline().getByRole("button", { name: "attack" })));
       expect(touchline().getByRole("status").textContent).toBe(`Attack accepted from ${minuteLabel(59)}.`);
-      expect(touchline().getByText("2/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("2/3 coaching commands left this match")).toBeTruthy();
       await act(async () => fireEvent.click(screen.getByText("Switch fixture")));
       expect(touchline().queryByRole("status")).toBeNull();
       expect(touchline().queryByText(/Attack accepted/)).toBeNull();
       expect(touchline().queryByText(/Queued:/)).toBeNull();
-      expect(touchline().getByText("3/3 commands left")).toBeTruthy();
+      expect(touchline().getByText("3/3 coaching commands left this match")).toBeTruthy();
       expect(touchline().getByTestId("coaching-state").textContent).toContain("Active: Defend.");
     } finally {
       coaching.mockRestore();

@@ -724,12 +724,15 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
   }
   return (
     <section className="panel border-cyan/40 p-3" data-testid="coaching">
-      <div className="flex items-baseline justify-between">
-        <h2 className="panel-title">Touchline</h2>
-        <span className="text-xs text-muted tabular">
-          {left}/{max} commands left
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+        <h2 className="panel-title">Live coaching</h2>
+        <span className="min-w-0 text-xs text-muted tabular">
+          {left}/{max} coaching commands left this match
         </span>
       </div>
+      <p className="mt-1 text-xs text-muted">
+        These commands are for this match only and are separate from Command Charge on My Team.
+      </p>
       {c.ai ? (
         <p className="mt-2 text-sm text-muted">
           Your team is on Full AI. Switch to My settings in{" "}
@@ -769,7 +772,7 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
           </div>
           <p className="mt-2 text-xs text-muted" data-testid="coaching-state">
             {instruction ? `${instruction} ` : ""}
-            {cooling ? `Recharging: ${countdown(c.cooldownUntil - now)}. ` : ""}Commands affect future play only.
+            {cooling ? `Coaching cooldown: ${countdown(c.cooldownUntil - now)}. ` : ""}Commands affect future play only.
           </p>
         </>
       )}

@@ -131,6 +131,12 @@ function createdLabel(created: string | null): string | null {
   return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${hh}:${mm} UTC`;
 }
 
+/** Ledger rows always show a time. A missing legacy value is unavailable; it is not invented. */
+function ledgerTime(created: string | null | undefined): string {
+  if (typeof created !== "string") return "time unavailable";
+  return createdLabel(created) ?? "time unavailable";
+}
+
 export default function MyTeamPage() {
   const [world, setWorld] = useState<WorldSnapshot | null>(null);
   const [error, setError] = useState("");
@@ -213,7 +219,7 @@ function Claim({ onClaimed }: { onClaimed: () => void }) {
 function Manage({ world }: { world: WorldSnapshot }) {
   const [sq, setSq] = useState<Squad | null>(null);
   const [cc, setCc] = useState({ points: 0, max: 5, nextPointInMs: 0 });
-  const [fin, setFin] = useState<Array<{ amount: number; type: string; description: string }>>([]);
+  const [fin, setFin] = useState<Array<{ id?: string; amount: number; type: string; description: string; created?: string | null }>>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null); // starter ids while editing
@@ -557,6 +563,9 @@ function Manage({ world }: { world: WorldSnapshot }) {
                 {cc.points}/{cc.max}
               </span>
             </div>
+            <p className="mt-1 text-xs text-muted">
+              Funds management actions such as scans and Overclock, not live coaching commands.
+            </p>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-ink">
               <div className="h-full bg-gradient-to-r from-cyan to-magenta" style={{ width: `${(cc.points / Math.max(cc.max, 1)) * 100}%` }} />
             </div>
@@ -652,12 +661,15 @@ function Manage({ world }: { world: WorldSnapshot }) {
             {fin.length ? (
               <ul className="mt-3 space-y-1 text-xs">
                 {fin.map((f, i) => (
-                  <li key={i} className="flex justify-between gap-2 border-b border-line/60 py-1">
-                    <span className="truncate text-muted">{f.description || f.type}</span>
-                    <span className={`tabular ${f.amount >= 0 ? "text-lime" : "text-magenta"}`}>
-                      {f.amount >= 0 ? "+" : ""}
-                      {credits(f.amount)}
-                    </span>
+                  <li key={f.id || `legacy-${i}`} className="border-b border-line/60 py-1">
+                    <div className="flex min-w-0 items-baseline justify-between gap-2">
+                      <span className="min-w-0 truncate text-muted">{f.description || f.type}</span>
+                      <span className={`shrink-0 tabular ${f.amount >= 0 ? "text-lime" : "text-magenta"}`}>
+                        {f.amount >= 0 ? "+" : ""}
+                        {credits(f.amount)}
+                      </span>
+                    </div>
+                    <p className="text-muted">{ledgerTime(f.created)}</p>
                   </li>
                 ))}
               </ul>

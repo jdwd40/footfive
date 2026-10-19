@@ -44,11 +44,12 @@ async function mountSquads(
   reloaded: Squad,
   charge = { points: 0, max: 5, nextPointInMs: 0 },
   scans: () => Promise<{ scans: TacticalScan[] }> = async () => ({ scans: [] }),
+  finances: Awaited<ReturnType<typeof footfiveApi.teamFinances>> = { treasury: 500, entries: [] },
 ) {
   vi.mocked(footfiveApi.world).mockResolvedValue({ managedTeam: team, nextFixture: null } as unknown as WorldSnapshot);
   vi.mocked(footfiveApi.myTeam).mockResolvedValueOnce(first).mockResolvedValue(reloaded);
   vi.mocked(footfiveApi.commandCharge).mockResolvedValue(charge);
-  vi.mocked(footfiveApi.teamFinances).mockResolvedValue({ treasury: 500, entries: [] });
+  vi.mocked(footfiveApi.teamFinances).mockResolvedValue(finances);
   vi.mocked(footfiveApi.saveMyLineup).mockResolvedValue({ ok: true });
   vi.mocked(footfiveApi.useBattery).mockResolvedValue({ ok: true });
   vi.mocked(footfiveApi.tacticalScans).mockImplementation(scans);
@@ -963,5 +964,49 @@ describe("My Team line-up swaps and role groups", () => {
     expect(await screen.findByTestId("team-msg")).toHaveTextContent("Line-up saved — applies from your next kick-off.");
     expect(screen.queryByTestId("save-lineup")).not.toBeInTheDocument();
     expect(footfiveApi.saveMyLineup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("My Team resources and ledger times", () => {
+  const FIVE = ["g1", "o1", "o2", "o3", "o4"];
+
+  it("keeps Command Charge at 5/5 and shows ledger times without spending", async () => {
+    await mountSquads(
+      squad(FIVE),
+      squad(FIVE),
+      { points: 5, max: 5, nextPointInMs: 0 },
+      async () => ({ scans: [] }),
+      {
+        treasury: 500,
+        entries: [
+          { id: "l1", amount: -180, type: "battery", description: "Ledger battery test", balance_after: 500, created: "2026-10-18 14:33:20.000Z" },
+          { id: "l2", amount: 200, type: "reward", description: "Ledger missing time", balance_after: 680 },
+          { id: "", amount: -12, type: "repair", description: "Ledger invalid time", balance_after: 480, created: "bad-date" },
+        ],
+      } as Awaited<ReturnType<typeof footfiveApi.teamFinances>>,
+    );
+
+    const charge = screen.getByRole("heading", { name: "Command Charge" }).closest("section")!;
+    expect(charge).toHaveTextContent("5/5");
+    expect(charge).toHaveTextContent("Funds management actions such as scans and Overclock, not live coaching commands.");
+    expect(charge).not.toHaveTextContent("coaching commands left this match");
+
+    const ledger = screen.getAllByRole("listitem").filter((li) => (li.textContent || "").includes("Ledger"));
+    expect(ledger.map((li) => li.textContent)).toEqual([
+      expect.stringContaining("Ledger battery test"),
+      expect.stringContaining("Ledger missing time"),
+      expect.stringContaining("Ledger invalid time"),
+    ]);
+    expect(ledger[0]).toHaveTextContent("-180");
+    expect(ledger[0]).toHaveTextContent("18 Oct 2026, 14:33 UTC");
+    expect(ledger[1]).toHaveTextContent("+200");
+    expect(ledger[1]).toHaveTextContent("time unavailable");
+    expect(ledger[1]).not.toHaveTextContent("UTC");
+    expect(ledger[2]).toHaveTextContent("-12");
+    expect(ledger[2]).toHaveTextContent("time unavailable");
+    expect(ledger[2]).not.toHaveTextContent("bad-date");
+    expect(footfiveApi.spendCommandCharge).not.toHaveBeenCalled();
+    expect(footfiveApi.useBattery).not.toHaveBeenCalled();
+    expect(footfiveApi.saveMyLineup).not.toHaveBeenCalled();
   });
 });
