@@ -39,7 +39,8 @@ export default function LoginPage() {
           </p>
         ) : null}
         <label className="block space-y-1 text-sm">
-          <span className="text-muted">Email or username</span>
+          <span className="text-muted">Email</span>
+          <span className="block text-xs text-muted">Use the email you entered at registration.</span>
           <input
             className="input"
             type="text"
