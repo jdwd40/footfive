@@ -362,7 +362,19 @@ export default function MatchPage() {
         ))}
       </div>
       <Ticker key={fx.id} items={recent} label="Match events" badge="This match" empty="Goals, cards and penalties from this match appear here." />
-      {otherTicker.length ? <Ticker items={otherTicker} label="Other matches" badge="Around the grounds" empty="Goals, penalties, red cards and results from the other matches appear here." /> : null}
+      {otherTicker.length ? (
+        <Ticker items={otherTicker} label="Other matches" badge="Around the grounds" empty="Goals, penalties, red cards and results from the other matches appear here." />
+      ) : (
+        // Other matches can post an item at any time (and the round's fixture list may load late): hold the filled ticker's row
+        // (one line, its 2px compact padding, the 4px gap its "Other matches" label gets) from kick-off so its arrival or clearing
+        // never moves the scoreboard and pitch (#183). Not drawn.
+        <div className="panel invisible mb-1" aria-hidden data-testid="ticker-slot">
+          <div className="flex items-center gap-2 px-3 py-0.5 font-semibold">
+            <span>⚽</span>
+            <span>&nbsp;</span>
+          </div>
+        </div>
+      )}
 
       <Scoreboard view={shown} now={now} stale={stale} />
       {finished && !stay ? (
