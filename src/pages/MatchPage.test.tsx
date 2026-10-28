@@ -702,6 +702,43 @@ describe("MatchPage timeline player", () => {
     expect(other.queryByText("Our goal")).toBeNull();
     h.live = null;
   });
+
+  it("holds the Around the grounds row from kick-off through a late fixture list, an item arriving and clearing, as a direct child of the page (#183)", async () => {
+    const now = Date.now();
+    const card = (id: string) => ({ id, home: team(id === "fx1" ? "Virgin" : "Metro"), away: team(id === "fx1" ? "Tripper" : "Orleans"), st: null });
+    const goal = { id: "fx2:12", fixtureId: "fx2", seq: 12, at: now, t: "goal", side: "home", text: "GOAL! MET 1–0 ORL", min: 50 };
+    const frame = () => act(() => new Promise((r) => setTimeout(r, 60))); // the animation loop re-renders with the new live state
+    try {
+      // Kick-off with the round's fixture list not loaded yet: the row is already held (not drawn, not announced).
+      h.live = { fixtures: [], ticker: [] };
+      await mount(view([ev(1, now - 3000, "Pass")], null, now));
+      const page = document.querySelector(".match-page")!;
+      const slot = () => screen.queryByTestId("ticker-slot");
+      const around = () => screen.queryByRole("region", { name: "Other matches" });
+      const order = () => [...page.children].slice(0, 4).map((c) => c.getAttribute("data-testid") || c.getAttribute("aria-label"));
+      expect(around()).toBeNull();
+      expect(slot()?.parentElement).toBe(page);
+      expect(slot()).toHaveAttribute("aria-hidden", "true");
+      expect(slot()).toHaveClass("panel", "invisible", "mb-1");
+      expect(order()).toEqual(["Other matches", "ticker", "ticker-slot", "match-scoreboard"]);
+
+      // The other fixture and its goal arrive: the real ticker takes the same place (still a direct child for the compact page styles).
+      h.live = { fixtures: [card("fx1"), card("fx2")], ticker: [goal] };
+      await frame();
+      expect(slot()).toBeNull();
+      expect(around()?.parentElement).toBe(page);
+      expect(within(around()!).getByTestId("ticker-current")).toHaveTextContent("GOAL! MET 1–0 ORL");
+      expect(order()).toEqual(["Other matches", "ticker", "ticker", "match-scoreboard"]);
+
+      // The ticker clears (e.g. a new round's feed): the row is held again rather than collapsing.
+      h.live = { fixtures: [card("fx1"), card("fx2")], ticker: [] };
+      await frame();
+      expect(around()).toBeNull();
+      expect(order()).toEqual(["Other matches", "ticker", "ticker-slot", "match-scoreboard"]);
+    } finally {
+      h.live = null;
+    }
+  });
 });
 
 describe("MatchPage retained history and fixture ticker", () => {
