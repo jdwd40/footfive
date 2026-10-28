@@ -18,6 +18,9 @@ const ANCHORS: Pt[] = [
   [42, 40],
 ];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+/** #184: an attacking forward off the ball stays at least this far ahead of it, and this far to one side of its lane. */
+export const FWD_LEAD = 12;
+export const FWD_WIDTH = 14;
 /** Open-play scenes in which `scene.side` has the ball: that side's shape moves up the pitch with it (#102). */
 const IN_PLAY = new Set(["build_up", "pass", "through_ball", "dribble", "cross", "tackle", "interception", "shot", "bounce"]);
 /** Possession side of a scene, or null when nobody is building an attack (set pieces, breaks, results). */
@@ -35,7 +38,10 @@ export function shapeAt(i: number, bx: number, by: number, attacking: boolean, d
   if (attacking) {
     const push = (bx - 30) * (fwd ? 0.75 : 0.6); // the block moves up with the ball
     const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4, 4, fwd ? 94 : Math.max(8, bx - 4));
-    // Off the ball (#103): supporting runners find space — nobody stands in the carrier's lane; a forward offers width.
+    // #184: the forwards make the runs — a pass ahead of the ball and wide of its lane, one either side — so the support is out
+    // in space rather than round the ball; each moves smoothly with it. The defenders below keep their lanes behind the ball.
+    if (fwd) return [clamp(Math.max(x, bx + FWD_LEAD), 4, 94), clamp(by + (i === 3 ? -FWD_WIDTH : FWD_WIDTH), 4, 60)];
+    // Off the ball (#103): the supporting defenders find space — nobody stands in the carrier's lane.
     let y = ay + (by - ay) * 0.25;
     if (Math.abs(y - by) < 9) y = by + (y >= by ? 9 : -9);
     if (y < 4 || y > 60) y = by + (y < by ? 9 : -9);

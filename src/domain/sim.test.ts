@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_ADVANCE, DWELL_LINE, GAP, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player } from "./sim";
+import { DWELL_ADVANCE, DWELL_LINE, FWD_LEAD, FWD_WIDTH, GAP, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -637,6 +637,34 @@ describe("frameAt", () => {
     }
     expect(n).toBeGreaterThan(10000);
     expect(touch / n).toBeLessThan(0.002);
+  });
+
+  it("attacking forwards make the runs: a pass ahead of the ball and wide of its lane, one either side, moving smoothly with it — out of the crowd round the ball at both ends (#184)", () => {
+    for (let bx = 4; bx <= 96; bx += 2)
+      for (let by = 2; by <= 62; by += 2) {
+        const [x3, y3] = shapeAt(3, bx, by, true);
+        const [x4, y4] = shapeAt(4, bx, by, true);
+        for (const x of [x3, x4]) expect(x, `ball ${bx},${by}`).toBeGreaterThanOrEqual(Math.min(94, bx + FWD_LEAD) - 1e-9);
+        expect(y3, `ball ${bx},${by}`).toBeCloseTo(Math.max(4, by - FWD_WIDTH), 9);
+        expect(y4, `ball ${bx},${by}`).toBeCloseTo(Math.min(60, by + FWD_WIDTH), 9);
+      }
+    // The ball moving across the pitch never makes a forward jump sides (the old lane rule flipped him 18 across its lane).
+    for (const bx of [30, 50, 70])
+      for (const i of [3, 4]) {
+        let prev = shapeAt(i, bx, 2, true);
+        for (let by = 2.1; by <= 62; by += 0.1) {
+          const q = shapeAt(i, bx, by, true);
+          expect(Math.hypot(q[0] - prev[0], q[1] - prev[1]), `forward ${i}, ball ${bx},${by.toFixed(1)}`).toBeLessThan(0.2);
+          prev = q;
+        }
+      }
+    // Drawn, through the mirror and the spacing: in midfield both stay outside 16 of the ball (≈150 px on a desktop pitch).
+    for (const poss of ["home", "away"] as const)
+      for (let ox = 20; ox <= 70; ox += 5)
+        for (let by = 18; by <= 46; by += 4) {
+          const f = frameAt(shapeOnly(poss === "home" ? ox : 100 - ox, by, poss), 0.5, ms[0].lineups);
+          for (const p of f.players.filter((q) => q.side === poss).slice(3)) expect(Math.hypot(p.x - f.ball[0], p.y - f.ball[1]), `${poss} ${ox},${by} #${p.no}`).toBeGreaterThan(16);
+        }
   });
 
   it("the spacing adds no jump of its own: along a slow ball path, no player moves further per step than the shapes themselves do (#184)", () => {
