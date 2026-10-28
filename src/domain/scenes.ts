@@ -201,6 +201,11 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       const passer = from;
       const recv = ball;
       const run = e.t === "dribble";
+      // #184: a build-up names only its collector (`p`, no `p2`) — he has the ball on the engine's spot and the next pass is his —
+      // so he is the receiver here, and the team-mate who plays it to him from `from` is unlabelled. Routes and ids are unchanged.
+      const collector = e.t === "build_up" && !e.p2;
+      const pLabel = collector ? undefined : short(e.p);
+      const rLabel = collector ? short(e.p) : short(e.p2);
       const markerStart = clampPt([recv[0] + toward(atk, 6) + jit(s, 2, 3), recv[1] + jit(s, 3, 7)]);
       // A turnover (`turn`: the other side had the ball) is a contest for it, never a clearance: their player is on the ball where
       // the engine left it and the named player wins it (`won`: WON IT), then moves it on to the engine's spot. An outfielder is
@@ -209,7 +214,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       if (e.turn && (e.t === "pass" || e.t === "build_up")) {
         const lat = passer[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch
         const off = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(def, along), p[1] + lat * across]); // `along`: the old side's attacking direction
-        const r: Actor = { id: "r", side: atk, label: short(e.p2), path: [] };
+        const r: Actor = { id: "r", side: atk, label: rLabel, path: [] };
         const m: Actor = { id: "m", side: def, path: [] };
         if (toward(atk, passer[0] - goalX(atk)) >= -15) {
           const mid = lerp(passer, recv, 0.55);
@@ -224,7 +229,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
             actors: [
               { id: "lost", side: def, keeper: true, path: [passer, passer, off(passer, 2, 0), off(passer, 3, 0), off(passer, 3, 0)] },
               { id: "tgt", side: def, path: [off(mid, 9, -3), off(mid, 6.5, -2), off(mid, 4, -1.5), off(mid, 3.5, -1.5), off(mid, 3.5, -1.5)] }, // the pass he meant
-              { id: "p", side: atk, label: short(e.p), path: [off(mid, -2, 5), off(mid, -1, 2.5), mid, mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
+              { id: "p", side: atk, label: pLabel, path: [off(mid, -2, 5), off(mid, -1, 2.5), mid, mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
               r,
               m,
             ],
@@ -240,7 +245,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ball: [passer, c, c, recv],
           actors: [
             { id: "lost", side: def, path: [off(passer, -0.8, 0), off(c, -0.8, 0), off(c, 1.5, -2.2), off(c, 2.5, -2.8)] },
-            { id: "p", side: atk, label: short(e.p), path: [off(c, 6, 3), c, c, clampPt([c[0] + toward(atk, 1.5), c[1]])] },
+            { id: "p", side: atk, label: pLabel, path: [off(c, 6, 3), c, c, clampPt([c[0] + toward(atk, 1.5), c[1]])] },
             r,
             m,
           ],
@@ -267,8 +272,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ballHeight: [0, 0.7, 0, 0],
           actors: [
             { id: "clear", side: atk, keeper: true, path: [passer, passer, clampPt([passer[0] + toward(def, 2), passer[1]]), clampPt([passer[0] + toward(def, 3), passer[1]])] },
-            { id: "p", side: atk, label: short(e.p), path: [pStart, clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
-            { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] },
+            { id: "p", side: atk, label: pLabel, path: [pStart, clampPt([mid[0] - toward(atk, 1), mid[1] + 1]), mid, clampPt([mid[0] + toward(atk, 2), mid[1]])] },
+            { id: "r", side: atk, label: rLabel, path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 3), recv[1]]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] },
             { id: "m", side: def, path: [markerStart, markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
           ],
         };
@@ -352,8 +357,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ball: [passer, touchPt, recv],
           ballHeight: lift,
           actors: [
-            { id: "p", side: atk, label: short(e.p), path: [by(passer), by(touchPt), clampPt([touchPt[0] + toward(atk, 2), touchPt[1]])] },
-            { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 6), recv[1] + jit(s, 4, 4)]), lerp(recv, [recv[0] - toward(atk, 3), recv[1]], 0.5), recv] },
+            { id: "p", side: atk, label: pLabel, path: [by(passer), by(touchPt), clampPt([touchPt[0] + toward(atk, 2), touchPt[1]])] },
+            { id: "r", side: atk, label: rLabel, path: [clampPt([recv[0] - toward(atk, 6), recv[1] + jit(s, 4, 4)]), lerp(recv, [recv[0] - toward(atk, 3), recv[1]], 0.5), recv] },
             { id: "m", side: def, path: [markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
           ],
         };
@@ -368,8 +373,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ball: [passer, lerp(passer, recv, 0.5), recv],
           ballHeight: [0, 0.8, 0],
           actors: [
-            { id: "p", side: atk, label: short(e.p), path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
-            { id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 12), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 5), recv[1]]), recv] },
+            { id: "p", side: atk, label: pLabel, path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
+            { id: "r", side: atk, label: rLabel, path: [clampPt([recv[0] - toward(atk, 12), recv[1] + jit(s, 4, 4)]), clampPt([recv[0] - toward(atk, 5), recv[1]]), recv] },
             { id: "m", side: def, path: [markerStart, lerp(markerStart, recv, 0.4), clampPt([recv[0] + toward(atk, 2.5), recv[1] + 2])] },
           ],
         };
@@ -381,10 +386,10 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         ball: [passer, lerp(passer, recv, 0.5), recv],
         ballHeight: lift,
         actors: [
-          { id: "p", side: atk, label: run ? short(e.p) : short(e.p), path: run ? [passer, lerp(passer, recv, 0.5), recv] : [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
+          { id: "p", side: atk, label: pLabel, path: run ? [passer, lerp(passer, recv, 0.5), recv] : [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
           ...(run
             ? []
-            : [{ id: "r", side: atk, label: short(e.p2), path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] as Pt[] }]),
+            : [{ id: "r", side: atk, label: rLabel, path: [clampPt([recv[0] - toward(atk, 4), recv[1] + jit(s, 4, 4)]), lerp(recv, [recv[0] - toward(atk, 2), recv[1]], 0.5), recv] as Pt[] }]),
           { id: "m", side: def, path: [markerStart, lerp(markerStart, recv, 0.35), lerp(markerStart, recv, 0.6)] },
         ],
       };

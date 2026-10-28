@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_ADVANCE, DWELL_LINE, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "./sim";
+import { DWELL_ADVANCE, DWELL_LINE, FWD_LEAD, FWD_WIDTH, GAP, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -337,8 +337,12 @@ describe("frameAt", () => {
         return f.players.find((p) => p.side + ":" + p.no === f.carrier && Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) <= 1.6); // the ring: carrier in contact
       };
       expect(owner(0.02)?.side, `${name}: before the contest`).toBe(loser);
-      expect(owner(w + 0.02)?.name, `${name}: the named winner has it`).toBe(e.p);
+      // #184: a build-up's named player is its collector — a team-mate wins it and plays it to him on the engine's spot.
+      const collector = e.t === "build_up";
+      if (collector) expect(owner(w + 0.02)?.side, `${name}: a team-mate has won it`).toBe(e.side);
+      else expect(owner(w + 0.02)?.name, `${name}: the named winner has it`).toBe(e.p);
       expect(owner(1)?.side, `${name}: still theirs at the end`).toBe(e.side);
+      if (collector) expect(owner(1)?.name, `${name}: the named collector has it at the end`).toBe(e.p);
       const at = (ms: number) => frameAt(s, w + ms / s.ms, m.lineups);
       expect(frameAt(s, w - 0.02, m.lineups).won ?? null, name).toBeNull(); // never before he has it
       expect(at(20).won, name).toBe(e.side);
@@ -555,6 +559,161 @@ describe("frameAt", () => {
     expect(end.ref).toEqual([86, 19]); // beside the box, off the spot and the ball path
     expect(at(1.5).players.map((p) => [p.x, p.y])).toEqual(end.players.map((p) => [p.x, p.y])); // holds while the setup is awaited
   });
+
+  it("a build-up's collector has the ball at its end, and the pass that follows starts with him on it — plain, own box and turnover (#184)", () => {
+    let plain = 0;
+    let turn = 0;
+    for (const m of ms) {
+      let prev: Pt = [50, 32];
+      const scenes = m.events.map((e, i) => {
+        const s = sceneFor(e, prev, 15000, m.events[i + 1]) ?? idle(e, prev);
+        prev = s.ball[s.ball.length - 1];
+        return s;
+      });
+      m.events.forEach((e, i) => {
+        const next = m.events[i + 1];
+        if (e.t !== "build_up" || next?.t !== "pass" || next.p !== e.p) return;
+        const end = frameAt(scenes[i], 1, m.lineups);
+        const x = end.players.find((p) => p.side === e.side && p.name === e.p)!;
+        expect(end.carrier, `build_up #${e.seq}`).toBe(x.side + ":" + x.no);
+        expect(Math.hypot(x.x - end.ball[0], x.y - end.ball[1]), `build_up #${e.seq}`).toBeLessThanOrEqual(1.6);
+        const start = frameAt(scenes[i + 1], 0, m.lineups, undefined, 0, end.ball);
+        const y = start.players.find((p) => p.side === e.side && p.name === e.p)!;
+        expect(start.carrier, `pass #${next.seq}`).toBe(y.side + ":" + y.no);
+        expect(Math.hypot(y.x - start.ball[0], y.y - start.ball[1]), `pass #${next.seq}`).toBeLessThanOrEqual(1.6);
+        if (e.turn) turn++;
+        else plain++;
+      });
+    }
+    expect(plain).toBeGreaterThan(30);
+    expect(turn).toBeGreaterThan(30);
+  });
+
+  // #184: formation-only frames (no actors) over a grid of ball spots, so the two shapes alone meet.
+  const shapeOnly = (bx: number, by: number, poss: "home" | "away" | null): Scene => ({ key: "s", seq: 9500, type: poss ? "pass" : "foul", ms: 1500, ball: [[bx, by]], actors: [], caption: "", side: poss ?? "home" });
+  /** Pairs touching (kits overlap) where at least one is a formation outfielder: the only players the spacing may move. */
+  const touching = (f: Frame, pinned = new Set<Player>()) => {
+    const free = (p: Player) => !p.gk && !p.hot && !pinned.has(p);
+    return f.players.flatMap((p, i) => f.players.slice(i + 1).filter((q) => (free(p) || free(q)) && Math.hypot(p.x - q.x, p.y - q.y) < 2.9).map((q) => `${p.side}:${p.no}/${q.side}:${q.no}`));
+  };
+  /** A dwell's own movers (its two lanes and the closing marker): designed contact, never spaced. The marker was the nearest
+   * opponent when chosen; an actor can end up nearer, so the two nearest opponents stand in for him. */
+  const ROUTINE = new Set(["pass", "build_up", "dribble", "through_ball", "tackle", "interception", "bounce", "kickoff", "restart"]);
+  const dwellers = (s: Scene, t: number, f: Frame) => {
+    if (t <= 1 || s.flash || !s.side || !ROUTINE.has(s.type)) return new Set<Player>();
+    const byBall = (ps: Player[]) => ps.sort((p, q) => Math.hypot(p.x - f.ball[0], p.y - f.ball[1]) - Math.hypot(q.x - f.ball[0], q.y - f.ball[1]));
+    return new Set([...byBall(f.players.filter((p) => p.side === s.side && !p.gk)).slice(0, 2), ...byBall(f.players.filter((p) => p.side !== s.side && !p.gk)).slice(0, 2)]);
+  };
+
+  it("formation players don't stand on anyone: never over a grid of ball spots for both shapes and none, ten players or nine after a red card; all but a rare squeeze in real matches' open play (#184)", () => {
+    const m = ms[0];
+    const red = new Set([`home:${m.lineups.home.filter((p) => p.starter && p.role !== "gk")[2].name}`]);
+    for (let bx = 4; bx <= 96; bx += 4)
+      for (let by = 4; by <= 60; by += 4)
+        for (const poss of ["home", "away", null] as const)
+          for (const sentOff of [undefined, red]) {
+            const f = frameAt(shapeOnly(bx, by, poss), 0.5, m.lineups, sentOff);
+            expect(f.players).toHaveLength(sentOff ? 9 : 10);
+            const bad = touching(f);
+            if (bad.length) expect.fail(`ball ${bx},${by} ${poss} ${sentOff ? 9 : 10}: ${bad.join(" ")}`);
+          }
+    const SKIP = new Set(["kickoff", "second_half", "extra_time", "et_second_half", "half_time", "end_of_normal_time", "et_half_time", "match_end"]);
+    // Real play adds actors on their routes: a formation player squeezed between two of them may still brush one. Actors, the
+    // dwell's movers and challenges are designed contact and not counted.
+    let n = 0;
+    let touch = 0;
+    for (const mm of ms) {
+      let prev: Pt = [50, 32];
+      for (const e of mm.events) {
+        const s = sceneFor(e, prev, 15000) ?? idle(e, prev);
+        prev = s.ball[s.ball.length - 1];
+        if (s.cam || SKIP.has(s.type)) continue;
+        for (const t of [0, 0.5, 1, 1 + 1200 / Math.max(1, s.ms)]) {
+          const f = frameAt(s, t, mm.lineups, undefined, 1000);
+          if (touching(f, dwellers(s, t, f)).length) touch++;
+          n++;
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(10000);
+    expect(touch / n).toBeLessThan(0.002);
+  });
+
+  it("attacking forwards make the runs: a pass ahead of the ball and wide of its lane, one either side, moving smoothly with it — out of the crowd round the ball at both ends (#184)", () => {
+    for (let bx = 4; bx <= 96; bx += 2)
+      for (let by = 2; by <= 62; by += 2) {
+        const [x3, y3] = shapeAt(3, bx, by, true);
+        const [x4, y4] = shapeAt(4, bx, by, true);
+        for (const x of [x3, x4]) expect(x, `ball ${bx},${by}`).toBeGreaterThanOrEqual(Math.min(94, bx + FWD_LEAD) - 1e-9);
+        expect(y3, `ball ${bx},${by}`).toBeCloseTo(Math.max(4, by - FWD_WIDTH), 9);
+        expect(y4, `ball ${bx},${by}`).toBeCloseTo(Math.min(60, by + FWD_WIDTH), 9);
+      }
+    // The ball moving across the pitch never makes a forward jump sides (the old lane rule flipped him 18 across its lane).
+    for (const bx of [30, 50, 70])
+      for (const i of [3, 4]) {
+        let prev = shapeAt(i, bx, 2, true);
+        for (let by = 2.1; by <= 62; by += 0.1) {
+          const q = shapeAt(i, bx, by, true);
+          expect(Math.hypot(q[0] - prev[0], q[1] - prev[1]), `forward ${i}, ball ${bx},${by.toFixed(1)}`).toBeLessThan(0.2);
+          prev = q;
+        }
+      }
+    // Drawn, through the mirror and the spacing: in midfield both stay outside 16 of the ball (≈150 px on a desktop pitch).
+    for (const poss of ["home", "away"] as const)
+      for (let ox = 20; ox <= 70; ox += 5)
+        for (let by = 18; by <= 46; by += 4) {
+          const f = frameAt(shapeOnly(poss === "home" ? ox : 100 - ox, by, poss), 0.5, ms[0].lineups);
+          for (const p of f.players.filter((q) => q.side === poss).slice(3)) expect(Math.hypot(p.x - f.ball[0], p.y - f.ball[1]), `${poss} ${ox},${by} #${p.no}`).toBeGreaterThan(16);
+        }
+  });
+
+  it("the spacing adds no jump of its own: along a slow ball path, no player moves further per step than the shapes themselves do (#184)", () => {
+    const m = ms[0];
+    const raw = (side: "home" | "away", i: number, bx: number, by: number, poss: "home" | "away"): Pt => {
+      const own = (x: number) => (side === "away" ? 100 - x : x);
+      const [x, y] = shapeAt(i, own(bx), by, poss === side, poss !== side);
+      return [own(x), y];
+    };
+    for (const poss of ["home", "away"] as const) {
+      let last: Frame | null = null;
+      let lastRaw: Pt[] | null = null;
+      for (let k = 0; k <= 1000; k++) {
+        const bx = 8 + 0.084 * k;
+        const by = 6 + 0.052 * k; // 0.1 units a step, corner to corner
+        const f = frameAt(shapeOnly(bx, by, poss), 0.5, m.lineups);
+        const r = f.players.map((p, j) => (p.gk ? ([p.x, p.y] as Pt) : raw(p.side, j % 5, bx, by, poss)));
+        if (last && lastRaw) {
+          const moved = Math.max(...f.players.map((p, j) => Math.hypot(p.x - last!.players[j].x, p.y - last!.players[j].y)));
+          const shape = Math.max(...r.map((q, j) => Math.hypot(q[0] - lastRaw![j][0], q[1] - lastRaw![j][1])));
+          expect(moved, `${poss} step ${k}`).toBeLessThanOrEqual(shape + 0.6);
+        }
+        last = f;
+        lastRaw = r;
+      }
+    }
+  });
+
+  it("the ringed dwell holder keeps the ball at his feet as the drawn frame chases it (#184)", () => {
+    const lineups = {
+      home: Array.from({ length: 5 }, (_, i) => ({ name: `Home P${i}`, no: i + 1, role: i === 0 ? "gk" : "util", starter: true })),
+      away: Array.from({ length: 5 }, (_, i) => ({ name: `Away P${i}`, no: i + 1, role: i === 0 ? "gk" : "util", starter: true })),
+    };
+    const pass: MatchEvent = { seq: 9600, at: 0, t: "pass", min: 1, side: "home", p: "Home P3", p2: "Home P4", from: [30, 30], ball: [42, 34], text: "", st: ms[0].events[0].st };
+    const s = sceneFor(pass, [30, 30], 15000)!;
+    let drawn: Frame | null = null;
+    let worst = 0;
+    let n = 0;
+    for (let el = 0; el <= s.ms + 2400; el += 16) {
+      const target = frameAt(s, el / s.ms, lineups, undefined, 0);
+      drawn = smooth(drawn, target, 16);
+      if (el < s.ms + 300 || !drawn.carrier) continue; // the dwell has settled in
+      const h = drawn.players.find((p) => p.side + ":" + p.no === drawn!.carrier)!;
+      worst = Math.max(worst, Math.hypot(h.x - drawn.ball[0], h.y - drawn.ball[1]));
+      n++;
+    }
+    expect(n).toBeGreaterThan(100);
+    expect(worst).toBeLessThanOrEqual(0.9); // the dwell's own 0.8 behind the ball, not a trailing gap
+  });
 });
 
 describe("smooth", () => {
@@ -587,6 +746,49 @@ describe("smooth", () => {
     expect(Math.hypot(tick.ref[0] - 10, tick.ref[1] - 10)).toBeLessThan(0.3);
     expect(smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [13, 12] }, 100).ref).toEqual([10, 10]); // small shift: stays put
     expect(smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [15, 10] }, 100).ref[0]).toBeGreaterThan(10); // beyond the deadband: walks
+  });
+  it("the carrier on the ball keeps the ball's pace; flights, a lifted ball and a carrier not yet on it keep the ordinary chase, capped (#184)", () => {
+    const f = (x: number, ball: number, carrier: string | null, lift = 0): Frame => ({ ...at(x), ball: [ball, 32], lift, carrier });
+    const step = (target: Frame) => smooth(f(0, 0, null), target, 16).players[0].x;
+    const ordinary = 10 * (1 - Math.exp(-16 / 220));
+    expect(step(f(10, 10.5, null))).toBeCloseTo(ordinary, 9); // a flight: nobody is nominated
+    expect(step(f(10, 10.5, "home:7", 0.3))).toBeCloseTo(ordinary, 9); // in the air
+    expect(step(f(10, 14, "home:7"))).toBeCloseTo(ordinary, 9); // nominated but not on it in the target
+    expect(step(f(10, 10.5, "away:7"))).toBeCloseTo(ordinary, 9); // someone else's ball
+    expect(smooth({ ...f(0, 0, null), ball: [8, 32] }, f(10, 10.5, "home:7"), 16).players[0].x).toBeCloseTo(ordinary, 9); // still running in to it
+    expect(step(f(10, 10.5, "home:7"))).toBeCloseTo(10 * (1 - Math.exp(-16 / 90)), 9); // at his feet: the ball's own pace
+    expect(smooth(f(0, 0, null), f(50, 50.5, "home:7"), 16).players[0].x).toBeLessThanOrEqual((120 * 16) / 1000 + 1e-9); // never a teleport
+  });
+  it("spaceOut moves only formation outfielders, straight out to GAP, in a fixed order; keepers, actors and pinned movers stay put (#184)", () => {
+    const pl = (side: "home" | "away", no: number, x: number, y: number, extra: Partial<Player> = {}): Player => ({ side, name: side + no, no, gk: false, x, y, hot: false, ...extra });
+    const make = () => [pl("home", 1, 4, 32, { gk: true }), pl("home", 4, 50, 30), pl("home", 5, 50, 30.5, { hot: true }), pl("away", 1, 96, 32, { gk: true }), pl("away", 4, 50.5, 30), pl("away", 5, 60, 40), pl("away", 3, 6, 32), pl("home", 2, 30, 20), pl("away", 2, 30, 20, { hot: true })];
+    const run = () => {
+      const ps = make();
+      spaceOut(ps, new Set([ps[5]]), "away");
+      return ps;
+    };
+    const ps = run();
+    const before = make();
+    for (const i of [0, 2, 3, 5, 8]) expect(ps[i]).toEqual(before[i]); // keepers, actors, the pinned marker
+    for (const i of [1, 4, 6, 7]) for (const q of ps) if (q !== ps[i]) expect(Math.hypot(ps[i].x - q.x, ps[i].y - q.y)).toBeGreaterThanOrEqual(2.9); // kits never touch
+    expect(ps[7].x).toBeCloseTo(30 - GAP, 1); // exactly on a player: he steps goal-side, out to GAP
+    expect(ps[7].y).toBe(20);
+    expect(ps[6].x).toBeCloseTo(4 + GAP, 1); // straight away from his keeper, out to GAP
+    expect(ps[6].y).toBe(32);
+    // Squeezed between two players in a column: what cancels out takes him goal-side, out of the squeeze, kits clear of both.
+    const mid = [pl("home", 4, 39, 31), pl("away", 4, 39, 29, { hot: true }), pl("away", 5, 39, 35, { hot: true })];
+    spaceOut(mid, new Set(), "home");
+    expect(mid[0].x).toBeLessThan(39 - 1); // towards his own goal (home defends x=0)
+    for (const q of mid.slice(1)) expect(Math.hypot(mid[0].x - q.x, mid[0].y - q.y)).toBeGreaterThanOrEqual(2.9);
+    expect(run()).toEqual(ps); // deterministic
+    // A formation player passing close by an actor swings round him: small, smooth steps, never a jump.
+    let prev: Pt | null = null;
+    for (let x = 40; x <= 60; x += 0.05) {
+      const pair = [pl("home", 4, x, 33), pl("away", 4, 50, 32, { hot: true })];
+      spaceOut(pair, new Set(), "home");
+      if (prev) expect(Math.hypot(pair[0].x - prev[0], pair[0].y - prev[1])).toBeLessThan(0.5);
+      prev = [pair[0].x, pair[0].y];
+    }
   });
   it("a tick after a long gap (suspended tab) snaps to the target instead of chasing from stale positions", () => {
     expect(smooth(at(10), at(60), 1500)).toEqual(at(60));
