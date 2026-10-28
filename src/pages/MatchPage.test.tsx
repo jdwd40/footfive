@@ -736,6 +736,69 @@ describe("MatchPage retained history and fixture ticker", () => {
     expect(screen.getByTestId("event-feed").querySelectorAll("li")).toHaveLength(events.filter((e) => e.t !== "pass").length);
   });
 
+  it("keeps every counted shot listed through a quiet spell of routine play while the clock and statistics run on", async () => {
+    // Shape of the reported semi-final (#181): shots up to 58′, then only passes, tackles and a foul until the next shot at 72′.
+    const now = Date.now();
+    const rows: Array<[string, "home" | "away" | null, number, string]> = [
+      ["kickoff", null, 0, "Kick-off"],
+      ["shot", "home", 6, "Guidry shoots!"], ["save", "away", 6, "Cormier saves from Guidry"],
+      ["shot", "home", 13, "Guidry lets fly!"], ["miss", "home", 13, "Guidry drags it wide"],
+      ["shot", "home", 22, "Robichaux goes for goal"], ["block", "away", 22, "Cormier blocks Robichaux's shot"],
+      ["shot", "home", 36, "Leger shoots from range!"], ["woodwork", "home", 36, "Off the crossbar! Leger so close"],
+      ["shot", "home", 44, "Guidry shoots again!"], ["goal", "home", 44, "GOAL! Guidry scores"],
+      ["half_time", null, 45, "Half-time"], ["second_half", null, 45, "Second half under way"],
+      ["penalty_awarded", "home", 48, "PENALTY to Home!"], ["penalty_missed", "home", 48, "Leger misses the penalty"],
+      ["foul", "home", 52, "Robichaux fouls Delhomme"],
+      ["shot", "away", 58, "Delhomme lets fly!"], ["save", "home", 58, "Brilliant stop by Leblanc!"],
+      ["pass", "away", 60, "Delhomme finds Martin"], ["tackle", "home", 63, "Robichaux wins it back"],
+      ["foul", "home", 66, "Robichaux trips Martin"], ["pass", "home", 71, "Guidry finds Leger"],
+      ["shot", "away", 72, "Delhomme shoots!"],
+    ];
+    const sc = [0, 0];
+    const x = [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]];
+    const events: MatchEvent[] = rows.map(([t, side, min, text], i) => {
+      const k = side === "away" ? 1 : 0;
+      if (t === "shot" || t === "penalty_missed") x[k][0] += 1;
+      if (t === "foul") x[k][4] += 1;
+      if (t === "goal") sc[k] += 1;
+      const snap = { ...st!, ph: min > 45 ? "second_half" : "first_half", sc: [sc[0], sc[1]], clk: { s: min * 60, run: 1 }, x: x.map((r) => [...r]) };
+      // The routine pass at 71′ is under the playhead; the 72′ shot is not published to it yet.
+      const at = i === rows.length - 1 ? now + 60000 : i === rows.length - 2 ? now - 3000 : now - 60000 + i * 1000;
+      return { ...ev(i + 1, at, text), t, side, min, major: t === "goal" ? 1 : 0, st: snap } as MatchEvent;
+    });
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    // Small history pages: the feed is drained across several of them.
+    match.mockImplementation(async (_id, since = 0, through) => {
+      const fresh = events.filter((e) => e.seq > since && e.at <= now);
+      const v = page(fresh.slice(0, 5), through ?? now, fresh.length > 5, since);
+      v.fixture = { ...v.fixture, minuteMs: 15000 };
+      return v;
+    });
+    await mount();
+
+    expect(match.mock.calls.map((args) => args[1])).toEqual([0, 5, 10, 15, 20]);
+    expect(screen.getByTestId("commentary")).toHaveTextContent("Guidry finds Leger");
+    expect(screen.getByLabelText("Match clock").textContent).toMatch(/^71:/);
+    // Statistics are match totals, including the foul the feed leaves out.
+    expect(screen.getByTestId("stats")).toHaveTextContent("6Shots1");
+    expect(screen.getByTestId("stats")).toHaveTextContent("2Fouls0");
+    expect(screen.getByTestId("feed-note")).toHaveTextContent("every shot and its result");
+
+    const feed = screen.getByTestId("event-feed");
+    const listed = [...feed.querySelectorAll("li")].map((li) => li.textContent ?? "");
+    expect(listed[0]).toContain("Brilliant stop by Leblanc!");
+    const keyMoments = events.filter((e) => !["pass", "tackle", "foul"].includes(e.t) && e.at <= now);
+    expect(listed).toHaveLength(keyMoments.length);
+    for (const e of keyMoments) expect(feed).toHaveTextContent(e.text);
+    for (const t of ["shot", "save", "miss", "block", "woodwork", "goal", "penalty_missed"]) expect(keyMoments.some((e) => e.t === t)).toBe(true);
+    // Every counted shot (open play and penalty, both sides: 6 + 1) has its own entry.
+    expect(keyMoments.filter((e) => e.t === "shot" || e.t === "penalty_missed")).toHaveLength(7);
+    for (const routine of ["Delhomme finds Martin", "Robichaux wins it back", "Robichaux trips Martin", "Robichaux fouls Delhomme", "Delhomme shoots!"]) {
+      expect(feed).not.toHaveTextContent(routine);
+    }
+  });
+
   it("has a local feed even when the round ticker contains only this fixture's unrevealed goal", async () => {
     const now = Date.now();
     h.live = { fixtures: [], ticker: [{ id: "fx1:2", fixtureId: "fx1", seq: 2, at: now - 500, t: "goal", side: "home", text: "Server spoiler", min: 3 }] };

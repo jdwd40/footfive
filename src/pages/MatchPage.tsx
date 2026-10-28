@@ -399,6 +399,10 @@ export default function MatchPage() {
               <h2 className="panel-title">Match events</h2>
               <span className="text-xs text-muted">Match minutes</span>
             </div>
+            {/* The feed lists FEED_TYPES only; routine play is on the pitch and in the stats (#181). */}
+            <p className="mb-2 text-xs text-muted" data-testid="feed-note">
+              Key moments: every shot and its result, plus goals, cards and penalties. Passes, tackles and fouls are left out, so quiet spells are normal. Statistics are match totals.
+            </p>
             <EventFeed
               events={seen}
               view={view}
