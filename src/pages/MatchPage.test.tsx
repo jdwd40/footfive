@@ -110,23 +110,24 @@ describe("MatchPage timeline player", () => {
         v.fixture = { ...v.fixture, minuteMs: 60000 };
         return v;
       };
+      // The HUD runs on the lagged pitch clock: LAG_MS (1.5 s) is 1.5 match seconds at this pace.
       const clock = () => screen.getByLabelText("Match clock").textContent;
       const { footfiveApi } = await import("../lib/pocketbase");
       vi.mocked(footfiveApi.match).mockReset();
       const first = { ...ev(1, now - 10000, "Opening"), st: timed(20) };
       await mount(pace(view([first], null, now)));
-      expect(clock()).toBe("00:30");
+      expect(clock()).toBe("00:28");
       expect(screen.getByTestId("match-score").textContent).toBe("0–0");
       const lower = { ...ev(2, now - 6000, "Next"), st: timed(20) };
       vi.mocked(footfiveApi.match).mockResolvedValue(pace(view([first, lower], null, now)));
       await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 80)));
-      expect(clock()).toBe("00:30");
+      expect(clock()).toBe("00:28");
       vi.setSystemTime(now - 2000);
       await act(() => new Promise((r) => setTimeout(r, 40)));
-      expect(clock()).toBe("00:30");
+      expect(clock()).toBe("00:28");
       vi.setSystemTime(now + 6000);
       await act(() => new Promise((r) => setTimeout(r, 40)));
-      expect(clock()).toBe("00:32");
+      expect(clock()).toBe("00:30");
     } finally {
       serverClock.mockRestore();
     }
@@ -151,17 +152,17 @@ describe("MatchPage timeline player", () => {
       match.mockResolvedValueOnce(pace(view([old], null, now)));
       match.mockResolvedValueOnce(pace(view([old, { ...ev(2, now - 8000, "Late one"), st: timed(10) }, { ...ev(3, now - 4000, "Late three"), st: timed(10) }], null, now)));
       await mount();
-      expect(clock()).toBe("00:40");
+      expect(clock()).toBe("00:38");
       expect(screen.getByTestId("commentary").textContent).toBe("Old pass");
       await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 100)));
       expect(screen.getByTestId("commentary").textContent).toBe("Late one");
-      expect(clock()).toBe("00:40");
+      expect(clock()).toBe("00:38");
       vi.setSystemTime(now - 40000);
       await act(() => new Promise((r) => setTimeout(r, 40)));
       expect(screen.queryByLabelText("Match clock")).toBeNull();
       vi.setSystemTime(now - 15000);
       await act(() => new Promise((r) => setTimeout(r, 40)));
-      expect(clock()).toBe("00:40");
+      expect(clock()).toBe("00:38");
       expect(screen.getByTestId("match-score").textContent).toBe("0–0");
     } finally {
       serverClock.mockRestore();
@@ -195,11 +196,11 @@ describe("MatchPage timeline player", () => {
           </MemoryRouter>,
         );
       });
-      expect(screen.getByLabelText("Match clock").textContent).toBe("00:30");
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:28");
       await act(async () => {
         fireEvent.click(screen.getByText("Switch fixture"));
       });
-      expect(screen.getByLabelText("Match clock").textContent).toBe("00:10");
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:08");
       cleanup();
       const blank = view([ev(1, now - 3000, "No clock")], null, now);
       blank.fixture = { ...blank.fixture, minuteMs: 60000 };
@@ -229,14 +230,104 @@ describe("MatchPage timeline player", () => {
       v.fixture = { ...v.fixture, minuteMs: 60000 };
       skew = 0;
       await act(async () => { release(v); });
-      expect(screen.getByLabelText("Match clock").textContent).toBe("00:30");
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:28");
       vi.setSystemTime(now + 1000);
-      await act(() => new Promise((r) => setTimeout(r, 40)));
-      expect(screen.getByLabelText("Match clock").textContent).toBe("00:31");
+      // A step under a second is played through by the pitch clock (fast-forward), which the HUD follows.
+      await act(() => new Promise((r) => setTimeout(r, 500)));
+      expect(screen.getByLabelText("Match clock").textContent).toBe("00:29");
     } finally {
       serverClock.mockRestore();
     }
   }, 10000);
+
+  describe("period restarts (#182)", () => {
+    // The engine publishes a restart running, then holds the kick-off (walk-on, kickoffHoldMs) before the first play.
+    // Timings are the reported semi-final's seq 184–188, relative to half-time; minuteMs 5000 is 12 match seconds a real second.
+    const LAG = 1500;
+    const HT = Date.now() - 600000;
+    const R = HT + 30000;
+    const at = (ms: number, s: number, t: string, ph: string, run: 0 | 1 = 1, text = t): MatchEvent => ({
+      ...ev(0, R + ms, text), t, side: undefined, st: { ...st!, ph, clk: { s, run } } as NonNullable<MatchView["fixture"]["st"]>,
+    });
+    const secondHalf = () =>
+      [
+        at(-30000, 2700, "half_time", "half_time", 0, "Half-time: VIR 0–0 TRI"),
+        at(0, 2700, "second_half", "second_half", 1, "Second half under way"),
+        at(4866, 2710, "pass", "second_half", 1, "N. Flux knocks it to Q. Delhomme"),
+        at(5966, 2723, "pass", "second_half", 1, "Q. Delhomme knocks it to R. Babineaux"),
+        at(7066, 2736, "pass", "second_half", 1, "W. Arc collects from R. Babineaux"),
+      ].map((e, i) => ({ ...e, seq: 184 + i }));
+    const paced = (events: MatchEvent[]) => {
+      const v = view(events, null, R);
+      v.fixture = { ...v.fixture, minuteMs: 5000 };
+      return v;
+    };
+    const clock = () => (screen.getByLabelText("Match clock").textContent ?? "").replace("ET", "");
+    /** Puts the lagged pitch playhead at R + ms (a jump over 1 s snaps the pitch clock) and reads the HUD clock. */
+    const sampleAt = async (ms: number) => {
+      vi.setSystemTime(R + ms + LAG);
+      await act(() => new Promise((r) => setTimeout(r, 40)));
+      return clock();
+    };
+    const withClock = async (body: () => Promise<void>) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const live = await import("../lib/live");
+      const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
+      const { footfiveApi } = await import("../lib/pocketbase");
+      vi.mocked(footfiveApi.match).mockReset();
+      try {
+        await body();
+      } finally {
+        serverClock.mockRestore();
+        vi.mocked(footfiveApi.match).mockReset();
+      }
+    };
+
+    it("holds 45:00 through the second-half walk-on, then runs at normal pace from the first play without overshoot or freeze", async () => {
+      await withClock(async () => {
+        vi.setSystemTime(R - 500 + LAG);
+        await mount(paced(secondHalf()));
+        const samples = [await sampleAt(-500)];
+        for (const ms of [200, 1400, 2600, 3800, 4900, 6100, 7300]) samples.push(await sampleAt(ms));
+        expect(samples).toEqual(["45:00", "45:00", "45:00", "45:00", "45:00", "45:10", "45:24", "45:38"]);
+        expect(screen.getByTestId("commentary")).toHaveTextContent("W. Arc collects from R. Babineaux");
+      });
+    }, 10000);
+
+    it("keeps 45:00 while the first play is late, then fast-forwards the late batch without going back or freezing", async () => {
+      await withClock(async () => {
+        const events = secondHalf();
+        const { footfiveApi } = await import("../lib/pocketbase");
+        vi.mocked(footfiveApi.match).mockResolvedValueOnce(paced(events.slice(0, 2))).mockResolvedValue(paced(events));
+        vi.setSystemTime(R + 1000 + LAG);
+        await mount();
+        expect(clock()).toBe("45:00");
+        // The poll with the first plays arrives after they are due: the pitch rewinds to them and plays them through fast.
+        expect(await sampleAt(7300)).toBe("45:00");
+        const seen: string[] = [];
+        for (let i = 0; i < 40 && seen.at(-1) !== "45:38"; i++) {
+          await act(() => new Promise((r) => setTimeout(r, 100)));
+          seen.push(clock());
+        }
+        expect(seen.at(-1)).toBe("45:38");
+        expect(seen.every((c, i) => c >= "45:00" && (i === 0 || c >= seen[i - 1]))).toBe(true);
+        expect(seen.some((c) => c > "45:00" && c < "45:38")).toBe(true);
+      });
+    }, 15000);
+
+    it.each([
+      ["kickoff", "first_half", 0, 4200, 2, "00:00", "00:02"],
+      ["extra_time", "extra_time_1", 5400, 4724, 5408, "90:00", "90:08"],
+      ["et_second_half", "extra_time_2", 6300, 4770, 6309, "105:00", "105:09"],
+    ] as const)("holds the %s restart on its own time until the first play", async (t, ph, s0, gap, s1, held, first) => {
+      await withClock(async () => {
+        const events = [at(0, s0, t, ph), at(gap, s1, "pass", ph)].map((e, i) => ({ ...e, seq: i + 1 }));
+        vi.setSystemTime(R + 200 + LAG);
+        await mount(paced(events));
+        expect([clock(), await sampleAt(gap - 1200), await sampleAt(gap + 50)]).toEqual([held, held, first]);
+      });
+    }, 10000);
+  });
 
   it("drops SAVED once the save is over and does not resurrect it on a later pass", async () => {
     const { sceneFor } = await import("../domain/scenes");
