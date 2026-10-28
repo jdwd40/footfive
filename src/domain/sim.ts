@@ -166,6 +166,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   const actor = scene.actors.find(a => a.id === carrierActor(scene, t));
   const owner = actor && players.find(p => p.side === actor.side && (actor.keeper ? p.gk : actor.label ? short(p.name) === actor.label : p.side + ":" + p.no === bind[actor.id]));
   let carrier = owner ? owner.side + ":" + owner.no : null;
+  const pinned = new Set<Player>(); // #184: the dwell's own movers, kept out of the spacing like the scene's actors
   const rawOver = Math.max(0, t - 1) * scene.ms;
   if (rawOver > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
     // #105: a fast phase keeps running and moves it on quicker, a slow one jogs and keeps it longer (same bounded advance).
@@ -197,6 +198,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       marker.x = clamp(marker.x + (ball[0] + mdir * 4 - marker.x) * k, 0, 100);
       marker.y = clamp(marker.y + (ball[1] - marker.y) * k, 0, 64);
     }
+    for (const p of [a, m, marker]) if (p) pinned.add(p);
   } else if (t >= 1 && nowMs) {
     // Idle drift (#106): scene over, nothing newer yet — players ease slowly about their spot (a 6 s cycle, never an on-the-spot
     // wobble), the ball stays where it was, so the frame never looks frozen and nothing jitters.
@@ -206,6 +208,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
       p.y += Math.cos(nowMs / IDLE_TAU + ph) * IDLE_AMP * 0.5;
     }
   }
+  // Open play only: walks, penalties and the shootout (every scene with its own camera) keep their choreography.
+  if (!scene.cam && !WALK_OFF.has(scene.type) && !WALK_ON.has(scene.type)) spaceOut(players, pinned, possession(scene) ?? "home");
   const ownMs = elapsedMs != null ? elapsedMs : t * scene.ms;
   const ownFlash = scene.flash && (!transientFlash(scene) || ownMs < scene.ms + LINGER_MS) ? scene.flash : null;
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : ownFlash;
@@ -326,10 +330,47 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
+/** #184: the room a formation player keeps from everyone else (two kits touch at 2.9). */
+export const GAP = 4;
+/**
+ * Two shapes keyed off one ball stack opposite numbers on the same spot. Each formation outfielder (not an actor, keeper or
+ * pinned dwell mover) steps away from everyone already placed who is nearer than GAP — half the shortfall from each of them at
+ * once, a fixed few rounds, so one neighbour is left at GAP. Whatever cancels out (squeezed between two) takes him goal-side
+ * instead, out of the squeeze. The possession side goes first, each side in starter order: deterministic, and it moves smoothly
+ * with the ball. Actors, keepers, the ball and the ref never move.
+ */
+export function spaceOut(players: Player[], pinned: Set<Player>, first: Side) {
+  const fixed = players.filter((p) => p.gk || p.hot || pinned.has(p));
+  const free = players.filter((p) => !fixed.includes(p)).sort((p, q) => Number(p.side !== first) - Number(q.side !== first));
+  for (const p of free) {
+    const goalSide = p.side === "home" ? -1 : 1;
+    for (let round = 0; round < 8; round++) {
+      let dx = 0;
+      let dy = 0;
+      let need = 0;
+      for (const q of fixed) {
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (d >= GAP) continue;
+        const [ux, uy] = d > 1e-6 ? [(p.x - q.x) / d, (p.y - q.y) / d] : [goalSide, 0]; // exactly on him: goal-side
+        dx += (ux * (GAP - d)) / 2;
+        dy += (uy * (GAP - d)) / 2;
+        need += (GAP - d) / 2;
+      }
+      if (!need) break;
+      dx += goalSide * (need - Math.hypot(dx, dy));
+      p.x = clamp(p.x + dx, 1, 99);
+      p.y = clamp(p.y + dy, 2, 62);
+    }
+    fixed.push(p);
+  }
+}
+
 /** Rendered frame chases the target: exponential approach per value, players and the ref speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. The ref is a slow walker who ignores small target shifts, so he repositions rarely and never darts. */
 const MAX_SPEED = 60; // units per second
 const REF_SPEED = 14;
 const REF_DEADBAND = 4; // units: a target this close is "where he already is"
+/** #184: the carrier ring's contact reach (Pitch); within it, on the ground, the carrier is on the ball. */
+const CONTACT = 1.6;
 export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   if (!prev || dtMs > 1000) return target;
   dtMs = Math.min(100, dtMs); // a stutter still reads as a chase, not a jump
@@ -356,7 +397,11 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
     // Crosses compress a wide delivery and box arrival into the match pace.
     // Only its involved attackers sprint; everyone else keeps the ordinary chase.
     const crossSprint = target.type === "cross" && p.hot && p.side === target.side;
-    const [x, y] = chase(q.x, q.y, p.x, p.y, crossSprint ? k(70) : kp, crossSprint ? 120 : runSpeed);
+    // #184: the carrier with the ball at his feet (on the ground, within contact in the target, and already drawn by it) keeps the
+    // ball's pace, so the drawn ball stays there. Flights have no carrier and a carrier still running in keeps the ordinary chase.
+    // Capped at the sprint speed: never a teleport.
+    const onBall = target.carrier === p.side + ":" + p.no && target.lift < 0.05 && Math.hypot(p.x - target.ball[0], p.y - target.ball[1]) <= CONTACT && Math.hypot(q.x - prev.ball[0], q.y - prev.ball[1]) <= 2 * CONTACT;
+    const [x, y] = chase(q.x, q.y, p.x, p.y, onBall ? kb : crossSprint ? k(70) : kp, onBall || crossSprint ? 120 : runSpeed);
     return { ...p, x, y };
   });
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];

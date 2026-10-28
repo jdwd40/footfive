@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { FULL_CAM, penRefSpot, sample, sampleN, sceneFor, type Cam, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, penRefSpot, sample, sampleN, sceneFor, short, type Cam, type Pt, type Scene } from "./scenes";
 import type { MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -524,6 +524,32 @@ describe("highlight scenes agree with the simulation", () => {
     expect(s.by).toBe(e.st.by);
     expect(s.score).toEqual(e.st.sc);
     expect(s.ball).toEqual([[20, 30]]);
+  });
+
+  it("a build-up's named player is its collector: he ends on the engine's spot, whoever plays it to him is unlabelled — plain, own box and turnover alike — and the next pass is his (#184)", () => {
+    const kinds = { plain: 0, ownBox: 0, turn: 0 };
+    for (const m of matches) {
+      m.forEach((e, i) => {
+        if (e.t !== "build_up") return;
+        expect(e.p2, `#${e.seq}`).toBeUndefined(); // the engine names only the collector
+        const s = sceneFor(e, (e.from as Pt) ?? [50, 32], 15000)!;
+        const named = s.actors.filter((a) => a.side === e.side && a.label === short(e.p));
+        expect(named.map((a) => a.id), `#${e.seq}`).toEqual(["r"]);
+        expect(named[0].path[named[0].path.length - 1], `#${e.seq}`).toEqual(e.ball); // on the ball at the engine's spot
+        expect(end(s)).toEqual(e.ball);
+        expect(s.actors.find((a) => a.id === "p")!.label, `#${e.seq}`).toBeUndefined();
+        kinds[s.actors.some((a) => a.id === "lost") ? "turn" : s.actors.some((a) => a.id === "clear") ? "ownBox" : "plain"]++;
+        // The engine's own chain: the pass that follows is the collector's, from where he collected it.
+        const next = m[i + 1];
+        expect(next.t, `#${e.seq}`).toBe("pass");
+        expect(next.chain).toBe(e.chain);
+        expect(next.p).toBe(e.p);
+        expect(next.from).toEqual(e.ball);
+      });
+    }
+    expect(kinds.plain).toBeGreaterThan(100);
+    expect(kinds.ownBox).toBeGreaterThan(20);
+    expect(kinds.turn).toBeGreaterThan(100);
   });
 
   it("every live minute carries at least two on-pitch events", () => {
