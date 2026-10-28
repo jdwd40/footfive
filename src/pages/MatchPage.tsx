@@ -46,6 +46,10 @@ function advanceClock(clock: number | null, target: number, prevTarget: number |
   return Math.min(target, c + dt * (behind > 250 ? 1 + Math.max(CATCHUP_RATE - 1, behind / CATCHUP_TARGET_MS) : 1));
 }
 
+/** Period restarts are published running, but the engine holds the kick-off (walk-on) before the first play starts the minute.
+ * The HUD clock stays on the restart's own time until that play rather than run on and then wait for it (#182). */
+const RESTARTS = new Set(["kickoff", "second_half", "extra_time", "et_second_half"]);
+
 /** Live caption lifetime from the first moment that event seq is actually shown. Dwell after this is an ellipsis. */
 const CAPTION_MS = 5000;
 
@@ -320,7 +324,10 @@ export default function MatchPage() {
 
   const fx = view.fixture;
   const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
-  const clockNow = serverNow();
+  // HUD clock and its floor run on the pitch playhead (lagged, fast-forwarding a late batch), so they match the play shown.
+  // Never ahead of the synced lagged time: the first render after loading still holds the loading frame's clock.
+  const clockEvent = ph ? (liveRevealed || !ph.prev ? ph.cur : ph.prev) : null;
+  const clockNow = ph && clockEvent && RESTARTS.has(clockEvent.t) ? ph.cur.at : Math.min(anim.clock, serverNow() - LAG_MS);
   // Ignore a render that still holds the previous fixture: that view must not seed the new visit.
   if (fx.id === fixtureId && st && st.ph !== "shootout" && st.ph !== "finished") {
     const raw = clockSeconds(st, shown.fixture.at, clockNow, fx.minuteMs);
