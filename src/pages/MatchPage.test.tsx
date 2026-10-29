@@ -55,6 +55,12 @@ vi.mock("../lib/pocketbase", async (orig) => {
   return { ...m, footfiveApi: { ...m.footfiveApi, match: vi.fn() } };
 });
 
+// #189: pass-through spies, so a test can see which player starts each drawn target got and which frame it was chased from.
+vi.mock("../domain/sim", async (orig) => {
+  const m = await orig<typeof import("../domain/sim")>();
+  return { ...m, frameAt: vi.fn(m.frameAt), smooth: vi.fn(m.smooth) };
+});
+
 async function mount(v?: MatchView) {
   const { footfiveApi } = await import("../lib/pocketbase");
   if (v) vi.mocked(footfiveApi.match).mockResolvedValue(v);
@@ -1484,4 +1490,175 @@ describe("MatchPage early possession", () => {
     expect(bad).toMatch(/0%100%/);
     expect(bad).not.toContain("First minute");
   });
+});
+
+describe("MatchPage drawn player starts (#189)", () => {
+  afterEach(() => vi.useRealTimers());
+  const lineups = () => ({ home: names("Home"), away: names("Away") });
+  const wait = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)));
+  async function spies() {
+    const sim = await import("../domain/sim");
+    const frameAt = vi.mocked(sim.frameAt);
+    const smooth = vi.mocked(sim.smooth);
+    frameAt.mockClear();
+    smooth.mockClear();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.match).mockReset();
+    /** Every drawn target from call `from` on: its scene and the ninth argument (player starts). */
+    const targets = (from = 0) => frameAt.mock.calls.slice(from).map((c) => ({ seq: c[0].seq, scene: c[0], starts: c[8] }));
+    return { frameAt, smooth, targets };
+  }
+
+  it("a contiguous new scene starts from the frame actually drawn, not its authored spots, and holds that one snapshot through the scene and a poll rebuild", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { frameAt, smooth, targets } = await spies();
+    const now = Date.now();
+    const e1 = ev(1, now - 30000, "Pass");
+    const e2 = { ...ev(2, now + 1000, "Next pass"), from: [60, 20] as [number, number], ball: [75, 15] as [number, number] };
+    const { footfiveApi } = await import("../lib/pocketbase");
+    await mount(view([e1, e2], lineups(), now));
+    expect(targets().length).toBeGreaterThan(0);
+    expect(targets().every((c) => c.seq === 1 && c.starts === undefined)).toBe(true); // joined mid-dwell: nothing drawn before it
+    vi.setSystemTime(now + 1000 + 1500 + 20);
+    await wait(60);
+    const i = frameAt.mock.calls.findIndex((c) => c[0].seq === 2);
+    expect(i).toBeGreaterThan(0);
+    const snap = frameAt.mock.calls[i][8]!;
+    // The same tick chases from the committed drawn frame: the snapshot is exactly its players, keyed side:no, frozen.
+    const j = smooth.mock.invocationCallOrder.findIndex((o) => o > frameAt.mock.invocationCallOrder[i]);
+    const drawn = smooth.mock.calls[j][0]!;
+    expect(drawn.seq).toBe(1);
+    expect(snap).toEqual(Object.fromEntries(drawn.players.map((q) => [`${q.side}:${q.no}`, [q.x, q.y]])));
+    expect(Object.keys(snap)).toHaveLength(10);
+    expect(Object.isFrozen(snap)).toBe(true);
+    // Not the new scene's authored starts: the receiver (Home P4, home:5) is drawn well away from his authored first spot.
+    const real = await vi.importActual<typeof import("../domain/sim")>("../domain/sim");
+    const authored = real.frameAt(frameAt.mock.calls[i][0], 0, lineups()).players.find((q) => q.side === "home" && q.no === 5)!;
+    expect(Math.hypot(authored.x - snap["home:5"][0], authored.y - snap["home:5"][1])).toBeGreaterThan(1);
+    // Held, the same object, for every later frame of that scene, also once a poll rebuilds the scenes.
+    const firstScene = frameAt.mock.calls[i][0];
+    vi.mocked(footfiveApi.match).mockResolvedValue(view([e1, e2, ev(3, now + 60000, "Future pass")], lineups(), Date.now())); // server time as the faked clock: no offset step
+    const before = frameAt.mock.calls.length;
+    await wait(MATCH_POLL_MS + 120);
+    const later = targets(i);
+    expect(later.length).toBeGreaterThan(3);
+    expect(later.every((c) => c.seq === 2 && c.starts === snap)).toBe(true);
+    expect(targets(before).some((c) => c.scene !== firstScene)).toBe(true); // the rebuild really happened
+  }, 10000);
+
+  it("gets no drawn starts after a skip, under reduced motion, or for a new fixture's first scene", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let { targets } = await spies();
+    let now = Date.now();
+    const e1 = ev(1, now - 30000, "Pass");
+    // Skip: the playhead leaps from 1 to 3 (resumed tab).
+    await mount(view([e1, ev(2, now + 1000, "Two"), ev(3, now + 1100, "Three")], lineups(), now));
+    vi.setSystemTime(now + 1100 + 1500 + 300);
+    await wait(60);
+    expect(targets().some((c) => c.seq === 3)).toBe(true);
+    expect(targets().filter((c) => c.seq === 3).every((c) => c.starts === undefined)).toBe(true);
+    cleanup();
+
+    // Reduced motion: a contiguous 1 → 2 still gets none.
+    const prev = window.matchMedia;
+    window.matchMedia = reducedMotionList;
+    try {
+      ({ targets } = await spies());
+      now = Date.now();
+      await mount(view([ev(1, now - 30000, "Pass"), ev(2, now + 1000, "Two")], lineups(), now));
+      vi.setSystemTime(now + 1000 + 1500 + 20);
+      await wait(60);
+      expect(targets().some((c) => c.seq === 2)).toBe(true);
+      expect(targets().every((c) => c.starts === undefined)).toBe(true);
+    } finally {
+      window.matchMedia = prev;
+    }
+    cleanup();
+
+    // Fixture switch: fx1 drawn on seq 1, fx2 opens on seq 2 — contiguous numbers, different match.
+    ({ targets } = await spies());
+    now = Date.now();
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const { default: MatchPage } = await import("./MatchPage");
+    vi.mocked(footfiveApi.match).mockImplementation(async (id: string) => {
+      const v = view(id === "fx1" ? [ev(1, now - 3000, "One")] : [ev(1, now - 60000, "Old"), ev(2, now - 2000, "Two")], lineups(), now);
+      v.fixture = { ...v.fixture, id };
+      return v;
+    });
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={["/match/fx1"]}>
+          <Link to="/match/fx2">Switch fixture</Link>
+          <Routes>
+            <Route path="/match/:fixtureId" element={<MatchPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await wait(40);
+    const switchedAt = targets().length;
+    await act(async () => {
+      fireEvent.click(screen.getByText("Switch fixture"));
+    });
+    await wait(60);
+    expect(screen.getByTestId("commentary").textContent).toBe("Two");
+    const fx2 = targets(switchedAt).filter((c) => c.seq === 2);
+    expect(fx2.length).toBeGreaterThan(0);
+    expect(fx2.every((c) => c.starts === undefined)).toBe(true);
+  }, 10000);
+
+  it("a replay never inherits live starts — same seq, a second replay, or back to live", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const realNow = performance.now.bind(performance);
+    let extra = 0;
+    const perf = vi.spyOn(performance, "now").mockImplementation(() => realNow() + extra);
+    try {
+      const { targets } = await spies();
+      const { sceneFor } = await import("../domain/scenes");
+      const now = Date.now();
+      const one = { ...st!, sc: [1, 0] as [number, number] };
+      const two = { ...st!, sc: [2, 0] as [number, number] };
+      const g1 = { ...ev(1, now - 60000, "GOAL ONE"), t: "goal", target: [100, 32] as [number, number], st: one };
+      const g2 = { ...ev(2, now + 1000, "GOAL TWO"), t: "goal", target: [100, 32] as [number, number], st: two };
+      const ms = sceneFor(g2, [55, 35], 15000)!.ms;
+      await mount(view([g1, g2], lineups(), now));
+      // Live 1 → 2 is contiguous: the live scene gets its drawn starts (control).
+      vi.setSystemTime(now + 1000 + 1500 + 20);
+      await wait(60);
+      const live = targets().filter((c) => c.seq === 2);
+      expect(live.length).toBeGreaterThan(0);
+      expect(live.every((c) => c.starts !== undefined && c.starts === live[0].starts)).toBe(true);
+      vi.setSystemTime(now + 1000 + 1500 + ms + 500);
+      await wait(60);
+      // Replay the very scene on the pitch (same seq): none.
+      let from = targets().length;
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Replay: GOAL TWO"));
+      });
+      expect(screen.getByText("Replay")).toBeTruthy();
+      extra += 200;
+      await wait(60);
+      expect(targets(from).length).toBeGreaterThan(0);
+      expect(targets(from).every((c) => c.seq === 2 && c.starts === undefined)).toBe(true);
+      // A second replay straight after (seq 1, contiguous number): none.
+      from = targets().length;
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Replay: GOAL ONE"));
+      });
+      extra += 200;
+      await wait(60);
+      expect(targets(from).length).toBeGreaterThan(0);
+      expect(targets(from).every((c) => c.seq === 1 && c.starts === undefined)).toBe(true);
+      // Replay over: the live scene is picked up again without starts.
+      from = targets().length;
+      extra += 60000;
+      await wait(80);
+      expect(screen.queryByText("Replay")).toBeNull();
+      const back = targets(from).filter((c) => c.seq === 2);
+      expect(back.length).toBeGreaterThan(0);
+      expect(back.every((c) => c.starts === undefined)).toBe(true);
+    } finally {
+      perf.mockRestore();
+    }
+  }, 10000);
 });

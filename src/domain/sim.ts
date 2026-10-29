@@ -6,8 +6,10 @@ import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
+/** #189: where each player (side:no) was drawn on a scene's first tick, so its runners start from there. */
+export type PlayerStarts = Readonly<Record<string, Pt>>;
 
 // Home anchors; mirror x for away. GK first, then D, D, F, F by starter order.
 const ANCHORS: Pt[] = [
@@ -21,6 +23,8 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 /** #184: an attacking forward off the ball stays at least this far ahead of it, and this far to one side of its lane. */
 export const FWD_LEAD = 12;
 export const FWD_WIDTH = 14;
+/** #189: with the ball wide, the inner forward attacks the box this far past the goal's centre line. */
+export const FWD_BOX = 4;
 /** Open-play scenes in which `scene.side` has the ball: that side's shape moves up the pitch with it (#102). */
 const IN_PLAY = new Set(["build_up", "pass", "through_ball", "dribble", "cross", "tackle", "interception", "shot", "bounce"]);
 /** Possession side of a scene, or null when nobody is building an attack (set pieces, breaks, results). */
@@ -40,17 +44,24 @@ export function shapeAt(i: number, bx: number, by: number, attacking: boolean, d
     const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4, 4, fwd ? 94 : Math.max(8, bx - 4));
     // #184: the forwards make the runs — a pass ahead of the ball and wide of its lane, one either side — so the support is out
     // in space rather than round the ball; each moves smoothly with it. The defenders below keep their lanes behind the ball.
-    if (fwd) return [clamp(Math.max(x, bx + FWD_LEAD), 4, 94), clamp(by + (i === 3 ? -FWD_WIDTH : FWD_WIDTH), 4, 60)];
+    // #189: with the ball wide, the outer one holds the touchline (the clamp) and the inner one attacks the box beyond the goal's centre.
+    if (fwd) {
+      const w = Math.max(FWD_WIDTH, Math.abs(32 - by) + FWD_BOX);
+      return [clamp(Math.max(x, bx + FWD_LEAD), 4, 94), clamp(by + (i === 3 ? -w : w), 4, 60)];
+    }
     // Off the ball (#103): the supporting defenders find space — nobody stands in the carrier's lane.
     let y = ay + (by - ay) * 0.25;
     if (Math.abs(y - by) < 9) y = by + (y >= by ? 9 : -9);
     if (y < 4 || y > 60) y = by + (y < by ? 9 : -9);
+    // #189: the far-side one is the wide outlet — the further the ball is over the other side, the closer he holds his own touchline.
+    y += clamp(((32 - by) * Math.sign(ay - 32)) / 16, 0, 1) * ((ay > 32 ? 58 : 6) - y);
     return [x, clamp(y, 2, 62)];
   }
   if (defending) {
-    // Off the ball (#103): defenders track goal-side of the ball and squeeze across to it; forwards drop in to screen.
+    // Off the ball (#103): defenders track goal-side of the ball and squeeze across to it (#189: a third of the way, not half, so the
+    // block keeps its width); forwards drop in to screen.
     const x = fwd ? clamp(ax + (bx - ax) * 0.5, 6, Math.max(10, bx + 6)) : clamp(Math.min(ax + (bx - ax) * 0.45, bx - 5), 4, 80);
-    const y = ay + (by - ay) * (fwd ? 0.35 : 0.55);
+    const y = ay + (by - ay) * (fwd ? 0.35 : 0.3);
     return [x, clamp(y, 2, 62)];
   }
   return [clamp(ax + (bx - ax) * 0.3, 1, 99), clamp(ay + (by - ay) * 0.3, 2, 62)];
@@ -91,10 +102,13 @@ const TUNNEL: Pt = [50, 70];
 const WALK_OFF = new Set(["half_time", "end_of_normal_time", "et_half_time", "match_end"]);
 const WALK_ON = new Set(["kickoff", "second_half", "extra_time", "et_second_half"]);
 
+/** #189: formation slots go by role, not squad order — defenders take the back two, attackers the front two (unknown: util). */
+const ROLE_RANK = new Map([["def", 0], ["util", 1], ["mid", 2], ["att", 3]]); // a Map: no inherited keys ("constructor", "__proto__")
+const rank = (p: LineupPlayer) => ROLE_RANK.get(p.role) ?? 1;
 function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
   const live = list.filter((p) => p.starter && !sentOff?.has(side + ":" + p.name));
   const gk = live.find((p) => p.role === "gk") ?? live[0];
-  return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4)] : [];
+  return gk ? [gk, ...live.filter((p) => p !== gk).slice(0, 4).sort((a, b) => rank(a) - rank(b))] : [];
 }
 
 /** Result badges that outlive their scene: SAVED!, WOODWORK, WIDE/OVER/BLOCKED and every shootout reveal stay 2.5 s (real ms) after that scene ends, and only into a next scene that actually starts inside that window. Match goals have the banner, cards their own type-specific text. */
@@ -115,7 +129,9 @@ function transientFlash(scene: Scene): boolean {
 const DWELL_SPEED = 4.5; // units per second as the dwell starts (≈ a jog on a 40 m pitch), easing off as the advance runs out
 const DWELL_CYCLE = 3000; // ms between lay-offs
 const DWELL_PASS = 450; // ms the lay-off takes
-const DWELL_LANE = 6; // lateral gap between the two lanes
+/** #189: lateral gap between the two lanes (was 6: the pair crowded the ball), and how far in front the closing marker stands. */
+export const DWELL_LANE = 12;
+export const DWELL_MARK = 6;
 /** The next event starts where this scene left the ball, so whatever ground the dwell gains is given back at the transition.
  * The advance is therefore bounded, not timed: at most DWELL_ADVANCE (approached, never passed) and never beyond the attacking
  * side's DWELL_LINE (x70 for home, x30 for away), so nobody runs into the box ahead of a midfield or build-up event. After that the
@@ -160,9 +176,12 @@ function carrierActor(scene: Scene, t: number): string | null {
  * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
  * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 2.5 s.
  * `elapsedMs`: real ms since the scene began, when `t` stops tracking it (reduced motion holds t = 1, a replay holds its last frame); WON IT times off it.
+ * `startPlayers`: where everyone was drawn as this scene began (#189): its receiver, runner and marker run from there.
  */
-export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene, elapsedMs?: number): Frame {
-  const { ball: b, players, unlabelled, ref } = layout(startBall ? fromStart(scene, startBall) : scene, t, lineups, sentOff);
+export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene, elapsedMs?: number, startPlayers?: PlayerStarts): Frame {
+  const routed = startBall ? fromStart(scene, startBall) : scene;
+  const bridged = startPlayers ? bridge(scene, routed, startPlayers, lineups, sentOff) : null;
+  const { ball: b, players, unlabelled, ref } = layout(bridged?.scene ?? routed, t, lineups, sentOff);
   const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
   const bind = binding(scene, lineups, sentOff);
   for (const a of unlabelled) {
@@ -178,20 +197,25 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     // #105: a fast phase keeps running and moves it on quicker, a slow one jogs and keeps it longer (same bounded advance).
     const over = rawOver * dwellRate(scene.tempo);
     // Dwell: two lanes jog on from the scene end at DWELL_SPEED, easing to a stop within the bounded advance (never turning
-    // back, never past the line). The ball is laid off between the lanes every DWELL_CYCLE, so the two nearest teammates keep
-    // passing instead of one of them carrying forever; the nearest opponent closes to four in front of whoever has it.
+    // back, never past the line). The ball is laid off between the lanes every DWELL_CYCLE, so the carrier and a teammate keep
+    // passing instead of one of them carrying forever; the nearest opponent closes to DWELL_MARK in front of whoever has it.
     const dir = scene.side === "home" ? 1 : -1;
     const room = clamp(DWELL_LINE - (dir > 0 ? b[0] : 100 - b[0]), 0, DWELL_ADVANCE); // a ball already past the line is carried neither on nor back
     const x = b[0] + (room ? dir * room * (1 - Math.exp(-(DWELL_SPEED * over) / 1000 / room)) : 0);
     const mdir = dir; // the way they face: the advance only ever goes forward
-    const laneY = clamp(b[1] + (b[1] > 32 ? -DWELL_LANE : DWELL_LANE), 2, 62); // second lane, towards the middle of the pitch
+    // #189: the second lane is out towards the nearer touchline when it fits, so a move in a channel goes wide; on the touchline it
+    // comes inside.
+    const out = b[1] > 32 ? 1 : -1;
+    const laneY = clamp(b[1] + (Math.abs(b[1] + out * DWELL_LANE - 32) <= 28 ? out : -out) * DWELL_LANE, 2, 62);
     const cyc = over % DWELL_CYCLE;
     const n = Math.floor(over / DWELL_CYCLE);
     const s0 = n % 2; // lane holding the ball at the start of this cycle
     const s = cyc < DWELL_CYCLE - DWELL_PASS ? s0 : s0 + (1 - 2 * s0) * ((cyc - (DWELL_CYCLE - DWELL_PASS)) / DWELL_PASS); // 0 = first lane, 1 = second; eases across during the lay-off
     ball[0] = x + mdir * (s - 0.5) * 2 * 0.6; // the receiver is a touch ahead, so the lay-off goes forward
     ball[1] = clamp(b[1] + (laneY - b[1]) * s + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
-    const [a, m] = players.filter((p) => p.side === scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - b[0], p.y - b[1]) - Math.hypot(q.x - b[0], q.y - b[1]));
+    const [a, ...rest] = players.filter((p) => p.side === scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - b[0], p.y - b[1]) - Math.hypot(q.x - b[0], q.y - b[1]));
+    // #189: the lay-off goes to whoever is nearest the second lane, not the next man to the ball, so nobody leaves his run for it.
+    const m = rest.sort((p, q) => Math.hypot(p.x - b[0], p.y - laneY) - Math.hypot(q.x - b[0], q.y - laneY))[0];
     const onA = s < 0.5;
     const weaveY = clamp(b[1] + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
     if (a) Object.assign(a, { x: clamp(onA ? ball[0] - mdir * 0.8 : x - mdir * 2.5, 0, 100), y: onA ? ball[1] : weaveY, hot: onA });
@@ -200,8 +224,8 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     carrier = cyc < DWELL_CYCLE - DWELL_PASS && holder ? holder.side + ":" + holder.no : null;
     const marker = players.filter((p) => p.side !== scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - ball[0], p.y - ball[1]) - Math.hypot(q.x - ball[0], q.y - ball[1]))[0];
     if (marker) {
-      const k = Math.min(1, over / 1500); // closes down over the first 1.5 s, then tracks four in front of the ball
-      marker.x = clamp(marker.x + (ball[0] + mdir * 4 - marker.x) * k, 0, 100);
+      const k = Math.min(1, over / 1500); // closes down over the first 1.5 s, then tracks DWELL_MARK in front of the ball
+      marker.x = clamp(marker.x + (ball[0] + mdir * DWELL_MARK - marker.x) * k, 0, 100);
       marker.y = clamp(marker.y + (ball[1] - marker.y) * k, 0, 64);
     }
     for (const p of [a, m, marker]) if (p) pinned.add(p);
@@ -252,7 +276,50 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPt = [86, 19]; // beside the box, where setupScene / penaltyScene keep him (penRefSpot("home"))
     if (t < 0.7) cam = FULL_CAM;
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo };
+  const runs = bridged && t <= 1 && bridged.runs.length ? { runs: bridged.runs } : {};
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs };
+}
+
+/** #189: scenes whose receiver/runner (`r`, a cross's `h`) and marker (`m`) run from where they were drawn. Turnover contests (`lost`) and
+ * keeper distributions (`clear`) keep their own choreography; the passer, keepers, the ref and challenge paths never move. */
+const BRIDGED = new Set(["pass", "through_ball", "cross"]);
+const RUNNERS = new Set(["r", "h", "m"]);
+function bridge(scene: Scene, routed: Scene, starts: PlayerStarts, lineups: Lineups | null, sentOff?: Set<string>) {
+  if (!BRIDGED.has(scene.type) || scene.actors.some((a) => a.id === "lost" || a.id === "clear")) return null;
+  const bind = binding(scene, lineups, sentOff);
+  const key = (a: Actor) => {
+    if (a.side === "ref") return undefined;
+    const side = a.side;
+    if (!a.label) return bind[a.id];
+    const p = starters(lineups?.[side] ?? [], side, sentOff).find((q) => short(q.name) === a.label);
+    return p && side + ":" + p.no;
+  };
+  const runs: string[] = [];
+  const actors = routed.actors.map((a) => {
+    const k = RUNNERS.has(a.id) && !a.keeper ? key(a) : undefined;
+    const from = k ? starts[k] : undefined;
+    if (!k || !from) return a;
+    if (a.side === scene.side && a.id !== "m") runs.push(k); // the attackers sprint; the marker keeps the ordinary chase
+    return { ...a, path: runIn(a.path, from, routed.ball) };
+  });
+  return { scene: { ...routed, actors }, runs };
+}
+/** #189: `path` from `from`: the offset fades out over the keyframes before the actor's first contact with the ball (else his last
+ * keyframe), so he runs straight there rather than via his authored start, and that contact, his endpoint and the ball are untouched. */
+function runIn(path: Pt[], from: Pt, ball: Pt[]): Pt[] {
+  const n = path.length - 1;
+  if (!n) return path;
+  let c = n;
+  for (let i = 1; i < n; i++) {
+    const [bx, by] = sample(ball, i / n);
+    if (Math.hypot(path[i][0] - bx, path[i][1] - by) <= CONTACT) {
+      c = i;
+      break;
+    }
+  }
+  const dx = from[0] - path[0][0];
+  const dy = from[1] - path[0][1];
+  return path.map(([x, y], i): Pt => (i < c ? [x + dx * (1 - i / c), y + dy * (1 - i / c)] : [x, y]));
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
@@ -336,8 +403,8 @@ function place(p: Player, a: Actor, t: number) {
   p.hot = true;
 }
 
-/** #184: the room a formation player keeps from everyone else (two kits touch at 2.9). */
-export const GAP = 4;
+/** #184: the room a formation player keeps from everyone else (two kits touch at 2.9; #189: 6, was 4). */
+export const GAP = 6;
 /**
  * Two shapes keyed off one ball stack opposite numbers on the same spot. Each formation outfielder (not an actor, keeper or
  * pinned dwell mover) steps away from everyone already placed who is nearer than GAP — half the shortfall from each of them at
@@ -402,7 +469,8 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
     if (!q) return p;
     // Crosses compress a wide delivery and box arrival into the match pace.
     // Only its involved attackers sprint; everyone else keeps the ordinary chase.
-    const crossSprint = target.type === "cross" && p.hot && p.side === target.side;
+    // #189: so do the attackers running from where they were drawn (`runs`), or they arrive after the ball.
+    const crossSprint = (target.type === "cross" && p.hot && p.side === target.side) || !!target.runs?.includes(p.side + ":" + p.no);
     // #184: the carrier with the ball at his feet (on the ground, within contact in the target, and already drawn by it) keeps the
     // ball's pace, so the drawn ball stays there. Flights have no carrier and a carrier still running in keeps the ordinary chase.
     // Capped at the sprint speed: never a teleport.

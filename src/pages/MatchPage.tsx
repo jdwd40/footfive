@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { sceneFor, type Pt, type Scene } from "../domain/scenes";
-import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame } from "../domain/sim";
+import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -103,8 +103,13 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
   return { key: `${e.seq}`, seq: e.seq, type: e.t, phase: e.st?.ph, ms: 0, ball: [ball], actors: [], caption: e.text, side: e.side ?? null };
 }
 
-/** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball was when the current scene began. */
-type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
+/** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball and players were when the current scene began. */
+type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
+
+/** #189: a copy of every drawn player's spot, keyed side:no (pitch units, before any camera projection). */
+function starts(frame: Frame): PlayerStarts {
+  return Object.freeze(Object.fromEntries(frame.players.map((p) => [`${p.side}:${p.no}`, [p.x, p.y] as Pt])));
+}
 
 /** Public state as the pitch shows it: the current event's snapshot, or its predecessor's while a result is still hidden. */
 function shownState(ph: ReturnType<typeof playhead>, revealed: boolean): PubState | null {
@@ -129,7 +134,7 @@ export default function MatchPage() {
   const clockHold = useRef<{ id: string; sec: number }>({ id: fixtureId, sec: 0 });
   if (clockHold.current.id !== fixtureId) clockHold.current = { id: fixtureId, sec: 0 };
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
-  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() }));
+  const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set() }));
 
   // Reset when switching fixtures.
   useEffect(() => {
@@ -140,7 +145,7 @@ export default function MatchPage() {
     setLastOk(0);
     setStay(false);
     clockRef.current = { clock: null, target: null, seq: null };
-    setAnim({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() });
+    setAnim({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set() });
   }, [fixtureId]);
   useEffect(() => {
     setAnim((a) => ({ ...a, frame: null })); // replay start/end jumps the timeline: no chase across it
@@ -250,16 +255,22 @@ export default function MatchPage() {
       const scene = replay ? replay.scene : liveScene;
       const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
       const elapsed = replay ? t0 - replay.startedAt : ph?.elapsed ?? 0; // real scene time: p holds at 1 under reduced motion and at a replay's end
+      const src = replay ? replay.startedAt : null;
       setAnim((a) => {
-        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, sentOff: new Set(), liveSentOff: new Set() };
+        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set() };
         const same = a.frame?.seq === scene.seq;
         // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
         const jumped = !!a.frame && !same && Math.abs(scene.seq - a.frame.seq) > 1;
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
         const startBall = same ? a.startBall : jumped ? null : a.frame?.ball ?? null;
+        // #189: the named players start where they are drawn too. Taken once, from the frame drawn just before a contiguous new scene
+        // by the same source (live, or this one replay), and held for the scene's life. Late join, a skip, reduced motion and any
+        // switch between live and a replay (or between replays) get none: the scene's authored starts.
+        const fresh = !same && !jumped && !!a.frame && a.src === src;
+        const startPlayers = sysReduced ? null : same && a.src === src ? a.startPlayers : fresh ? starts(a.frame!) : null;
         // Red cards count from the events the playhead has shown; the card's own scene only once revealed (last tick's verdict).
         const sentOff = dismissed(same && a.revealed ? scene.seq : scene.seq - 1);
-        const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined, prevScene, elapsed);
+        const target = frameAt(scene, p, lineups, sentOff, sysReduced ? 0 : now, startBall ?? undefined, prevScene, elapsed, startPlayers ?? undefined);
         // A result event that landed late (scene already over) has the drawn ball still travelling: settle puts it on the impact this tick.
         const frame = settle(scene, p, sysReduced ? target : smooth(jumped ? null : a.frame, target, dt), same && a.reached);
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
@@ -270,7 +281,7 @@ export default function MatchPage() {
         const liveSentOff = replay && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
         // WON IT waits for the drawn ball to be at a player of the winning side, then holds for its window (no flicker as he moves it on).
         const wonSeen = !!frame.won && ((same && !!a.wonSeen) || (frame.lift < 0.05 && frame.players.some((q) => q.side === frame.won && Math.hypot(q.x - frame.ball[0], q.y - frame.ball[1]) <= 1.6)));
-        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed };
+        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed };
       });
     };
     step();

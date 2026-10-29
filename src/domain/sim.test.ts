@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_ADVANCE, DWELL_LINE, FWD_LEAD, FWD_WIDTH, GAP, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player } from "./sim";
+import { DWELL_ADVANCE, DWELL_LANE, DWELL_LINE, DWELL_MARK, FWD_BOX, FWD_LEAD, FWD_WIDTH, GAP, WON_MS, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player, type PlayerStarts } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -188,11 +188,11 @@ describe("frameAt", () => {
     const carrier = later.players.filter((p) => p.side === pass.side && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 1.5);
     expect(carrier).toHaveLength(1);
     expect(carrier[0].hot).toBe(true);
-    expect(later.players.some((p) => p.side === pass.side && p !== carrier[0] && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < 7)).toBe(true);
-    // The nearest opponent closes down: within 1.5 s he is four in front of the ball, and he stays on it.
+    expect(later.players.some((p) => p.side === pass.side && p !== carrier[0] && Math.hypot(p.x - later.ball[0], p.y - later.ball[1]) < DWELL_LANE + 2)).toBe(true);
+    // The nearest opponent closes down: within 1.5 s he is DWELL_MARK in front of the ball, and he stays on it.
     const def = (f: Frame) => f.players.filter((p) => p.side !== pass.side && !p.gk).map((p) => Math.hypot(p.x - f.ball[0], p.y - f.ball[1])).sort((a, b) => a - b)[0];
-    expect(def(later)).toBeLessThan(4.5);
-    expect(def(frameAt(s, 1 + 7000 / s.ms, m.lineups))).toBeLessThan(4.5);
+    expect(def(later)).toBeLessThan(DWELL_MARK + 0.5);
+    expect(def(frameAt(s, 1 + 7000 / s.ms, m.lineups))).toBeLessThan(DWELL_MARK + 0.5);
     // Every 3 s the ball is laid off to the mate: the player on the ball changes, the ball moves forward, nobody teleports.
     const who = (ms: number) => {
       const f = frameAt(s, 1 + ms / s.ms, m.lineups);
@@ -244,7 +244,7 @@ describe("frameAt", () => {
           expect(fwd, `${e.seq} @${t}`).toBeGreaterThanOrEqual(-0.6 - 1e-3); // never carried back (1e-3: sample() stops a hair short of the last keyframe)
           expect(fwd, `${e.seq} @${t}`).toBeLessThanOrEqual(DWELL_ADVANCE + 0.6 + 1e-3); // never accumulates
           expect(att(b[0]), `${e.seq} @${t}`).toBeLessThanOrEqual(line + 1e-3); // never on into the box
-          expect(Math.abs(b[1] - end[1])).toBeLessThanOrEqual(6 + 1.2 + 1e-3); // the other lane plus the weave
+          expect(Math.abs(b[1] - end[1])).toBeLessThanOrEqual(DWELL_LANE + 1.2 + 1e-3); // the other lane plus the weave
           still = prev && Math.hypot(b[0] - prev[0], b[1] - prev[1]) < 1e-6 ? still + 250 : 0;
           expect(still, `${e.seq} @${t}: frozen`).toBeLessThan(1000); // light circulation, not a freeze
           prev = b;
@@ -270,7 +270,7 @@ describe("frameAt", () => {
   });
 
   it("hands over to the next event from exactly where the dwell left the ball, with only the bounded advance to give back — for real and stale gaps", () => {
-    const LIMIT = Math.hypot(DWELL_ADVANCE + 0.6, 6 + 1.2);
+    const LIMIT = Math.hypot(DWELL_ADVANCE + 0.6, DWELL_LANE + 1.2);
     const ROUTINE = new Set(["pass", "build_up", "dribble", "through_ball", "cross", "tackle", "interception"]);
     const sides = new Set<string>();
     let checked = 0;
@@ -645,16 +645,20 @@ describe("frameAt", () => {
         const [x3, y3] = shapeAt(3, bx, by, true);
         const [x4, y4] = shapeAt(4, bx, by, true);
         for (const x of [x3, x4]) expect(x, `ball ${bx},${by}`).toBeGreaterThanOrEqual(Math.min(94, bx + FWD_LEAD) - 1e-9);
-        expect(y3, `ball ${bx},${by}`).toBeCloseTo(Math.max(4, by - FWD_WIDTH), 9);
-        expect(y4, `ball ${bx},${by}`).toBeCloseTo(Math.min(60, by + FWD_WIDTH), 9);
+        // #189: a wide ball widens them — the outer one on the touchline, the inner one beyond the goal's centre line, in the box.
+        const w = Math.max(FWD_WIDTH, Math.abs(32 - by) + FWD_BOX);
+        expect(y3, `ball ${bx},${by}`).toBeCloseTo(Math.max(4, by - w), 9);
+        expect(y4, `ball ${bx},${by}`).toBeCloseTo(Math.min(60, by + w), 9);
+        if (Math.abs(by - 32) >= 16) expect(Math.min(y3, y4) <= 4 || Math.max(y3, y4) >= 60, `ball ${bx},${by}`).toBe(true);
       }
-    // The ball moving across the pitch never makes a forward jump sides (the old lane rule flipped him 18 across its lane).
+    // The ball moving across the pitch never makes a forward jump sides (the old lane rule flipped him 18 across its lane). #189: as
+    // the ball goes wide the outer one heads for the touchline at up to twice its pace, never more.
     for (const bx of [30, 50, 70])
       for (const i of [3, 4]) {
         let prev = shapeAt(i, bx, 2, true);
         for (let by = 2.1; by <= 62; by += 0.1) {
           const q = shapeAt(i, bx, by, true);
-          expect(Math.hypot(q[0] - prev[0], q[1] - prev[1]), `forward ${i}, ball ${bx},${by.toFixed(1)}`).toBeLessThan(0.2);
+          expect(Math.hypot(q[0] - prev[0], q[1] - prev[1]), `forward ${i}, ball ${bx},${by.toFixed(1)}`).toBeLessThanOrEqual(0.2 + 1e-9);
           prev = q;
         }
       }
@@ -851,5 +855,207 @@ describe("playhead", () => {
     expect(after.cur).toBe(before.cur);
     expect(after.elapsed).toBe(1250);
     expect(before.elapsed).toBe(1250);
+  });
+});
+
+describe("#189: role slots, width, the dwell's lanes and runs from where players are drawn", () => {
+  const ms = matches(4);
+  type Squads = { home: LineupPlayer[]; away: LineupPlayer[] };
+  const squad = (tag: string, roles: string[]): LineupPlayer[] => roles.map((role, i) => ({ name: `${tag} P${i}`, no: i + 1, role, starter: true }));
+  const only = (bx: number, by: number, poss: "home" | "away"): Scene => ({ key: "o", seq: 9600, type: "pass", ms: 1500, ball: [[bx, by]], actors: [], caption: "", side: poss });
+  const roleOf = (L: Squads, p: Player) => L[p.side].find((q) => q.name === p.name)!.role;
+  const RANK = new Map([["def", 0], ["util", 1], ["mid", 2], ["att", 3]]);
+  const at = (f: Frame, key: string) => f.players.find((p) => p.side + ":" + p.no === key)!;
+  const near = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+  it("formation slots go by role — defenders at the back, attackers up front — with the same players and shirt numbers, squad order for unknown roles, and after a red card", () => {
+    const L: Squads = { home: squad("Home", ["att", "gk", "mid", "def", "util"]), away: squad("Away", ["gk", "def", "att", "def", "mid"]) };
+    const f = frameAt(only(50, 32, "home"), 0.5, L);
+    const slots = (g: Frame, l: Squads, side: "home" | "away") => g.players.filter((p) => p.side === side).map((p) => roleOf(l, p));
+    expect(slots(f, L, "home")).toEqual(["gk", "def", "util", "mid", "att"]);
+    expect(slots(f, L, "away")).toEqual(["gk", "def", "def", "mid", "att"]);
+    for (const side of ["home", "away"] as const) expect(f.players.filter((p) => p.side === side).map((p) => `${p.name}#${p.no}`).sort()).toEqual(L[side].map((p) => `${p.name}#${p.no}`).sort());
+    const home = f.players.filter((p) => p.side === "home");
+    expect(home.find((p) => roleOf(L, p) === "att")!.x).toBeGreaterThan(home.find((p) => roleOf(L, p) === "def")!.x + 10); // the striker leads the attack
+    // Unknown roles keep squad order; a red card leaves the rest in role order.
+    const U: Squads = { home: squad("Home", ["gk", "df", "df", "fw", "fw"]), away: L.away };
+    expect(frameAt(only(50, 32, "home"), 0.5, U).players.filter((p) => p.side === "home").map((p) => p.name)).toEqual(U.home.map((p) => p.name));
+    // A role named like an object built-in is just unknown too (util): it neither breaks the order nor outranks a real role.
+    for (const odd of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      const O: Squads = { home: squad("Home", ["gk", "att", odd, "def", odd]), away: L.away };
+      expect(frameAt(only(50, 32, "home"), 0.5, O).players.filter((p) => p.side === "home").map((p) => p.name), odd).toEqual(["Home P0", "Home P3", "Home P2", "Home P4", "Home P1"]);
+    }
+    const red = frameAt(only(50, 32, "home"), 0.5, L, new Set(["away:Away P1"]));
+    expect(slots(red, L, "away")).toEqual(["gk", "def", "mid", "att"]);
+    // Real squads (listed striker first): no slot holds a more attacking role behind a more defensive one.
+    for (const m of ms)
+      for (const side of ["home", "away"] as const) {
+        const ranks = frameAt(only(50, 32, "home"), 0.5, m.lineups).players.filter((p) => p.side === side && !p.gk).map((p) => RANK.get(roleOf(m.lineups, p)) ?? 1);
+        expect(ranks, side).toEqual([...ranks].sort((a, b) => a - b));
+      }
+  });
+
+  it("width: with the ball wide the attacking side spans the pitch (a forward on the touchline, one in the box, the far-side defender the outlet); defending defenders squeeze a third of the way; every rule moves smoothly with the ball", () => {
+    const L = ms[0].lineups;
+    for (const poss of ["home", "away"] as const)
+      for (let ox = 30; ox <= 70; ox += 10)
+        for (const by of [6, 10, 54, 58]) {
+          const f = frameAt(only(poss === "home" ? ox : 100 - ox, by, poss), 0.5, L);
+          const ys = f.players.filter((p) => p.side === poss && !p.gk).map((p) => p.y);
+          expect(Math.max(...ys) - Math.min(...ys), `${poss} ${ox},${by}`).toBeGreaterThan(44);
+        }
+    for (let by = 2; by <= 62; by += 2) {
+      expect(shapeAt(1, 40, by, false, true)[1]).toBeCloseTo(20 + (by - 20) * 0.3, 9);
+      expect(shapeAt(2, 40, by, false, true)[1]).toBeCloseTo(44 + (by - 44) * 0.3, 9);
+      if (by <= 16) expect(shapeAt(2, 40, by, true)[1]).toBeCloseTo(58, 9); // far side of a wide ball: on his touchline
+      if (by >= 48) expect(shapeAt(1, 40, by, true)[1]).toBeCloseTo(6, 9);
+    }
+    // Continuity: a lateral sweep moves the outlet (ball on the other half) and every defending slot by no more than the sweep allows.
+    for (const bx of [30, 50, 70]) {
+      const sweep = (i: number, attacking: boolean, from: number, to: number) => {
+        let prev = shapeAt(i, bx, from, attacking, !attacking);
+        for (let by = from + 0.1; by <= to; by += 0.1) {
+          const q = shapeAt(i, bx, by, attacking, !attacking);
+          expect(near(q, prev), `slot ${i} ${attacking ? "attacking" : "defending"}, ball ${bx},${by.toFixed(1)}`).toBeLessThan(0.2);
+          prev = q;
+        }
+      };
+      sweep(2, true, 2, 32);
+      sweep(1, true, 32, 62);
+      for (const i of [1, 2, 3, 4]) sweep(i, false, 2, 62);
+    }
+  });
+
+  it("dwell: the lay-off goes DWELL_LANE out to the nearer touchline when it fits (a move in a channel goes wide), inside from the touchline; the carrier stays on it and the marker closes to DWELL_MARK", () => {
+    const L = ms[0].lineups;
+    for (const side of ["home", "away"] as const)
+      for (const [y0, lane] of [[20, 8], [44, 56], [6, 18], [60, 48]]) {
+        const x0 = side === "home" ? 40 : 60;
+        const mdir = side === "home" ? 1 : -1;
+        const s: Scene = { key: `dw-${side}-${y0}`, seq: 9700, type: "pass", side, ms: 1500, ball: [[x0, y0]], actors: [], caption: "" };
+        const ys: number[] = [];
+        for (let t = 0; t <= 12000; t += 100) {
+          const f = frameAt(s, 1 + t / s.ms, L);
+          ys.push(f.ball[1]);
+          const cyc = t % 3000;
+          if (cyc >= 200 && cyc <= 2500) {
+            const on = f.players.filter((p) => p.side === side && near([p.x, p.y], f.ball) < 1.5);
+            expect(on, `${side} ${y0} @${t}`).toHaveLength(1);
+            expect(f.carrier).toBe(on[0].side + ":" + on[0].no);
+          }
+          if (t >= 1500) expect(f.players.some((p) => p.side !== side && !p.gk && Math.abs(p.x - (f.ball[0] + mdir * DWELL_MARK)) < 0.5 && Math.abs(p.y - f.ball[1]) < 0.5), `${side} ${y0} @${t}: marker`).toBe(true);
+        }
+        expect(Math.min(...ys.map((y) => Math.abs(y - lane))), `${side} ${y0}`).toBeLessThan(1.3); // the ball reaches the second lane
+        for (const y of ys) expect(y).toBeGreaterThanOrEqual(Math.min(y0, lane) - 1.2 - 1e-9);
+        for (const y of ys) expect(y).toBeLessThanOrEqual(Math.max(y0, lane) + 1.2 + 1e-9);
+      }
+  });
+
+  it("runs from where they are drawn: a pass, through ball or cross's receiver, runner and marker start exactly at their drawn spot however far, and reach their first contact and end as authored; the ball and the rest of the frame are unchanged; nothing is mutated; turnovers, keeper distributions and other scenes are untouched", () => {
+    let bridged = 0;
+    let contests = 0;
+    for (const m of ms) {
+      let prev: Pt = [50, 32];
+      for (const e of m.events) {
+        const s = sceneFor(e, prev, 5000) ?? idle(e, prev);
+        prev = s.ball[s.ball.length - 1];
+        if (s.cam || !s.ms) continue;
+        const plain0 = frameAt(s, 0, m.lineups);
+        // Everyone drawn at their spot reflected through the centre spot: starts up to the far side of the pitch.
+        const starts: PlayerStarts = Object.freeze(Object.fromEntries(plain0.players.map((p) => [p.side + ":" + p.no, Object.freeze([100 - p.x, 64 - p.y]) as unknown as Pt])));
+        const before = JSON.stringify(s);
+        const eligible = ["pass", "through_ball", "cross"].includes(s.type) && !s.actors.some((a) => a.id === "lost" || a.id === "clear");
+        if (["pass", "through_ball", "cross"].includes(s.type) && !eligible) contests++;
+        for (const t of [0, 0.25, 0.5, 0.75, 1, 1 + 1000 / s.ms]) {
+          const a = frameAt(s, t, m.lineups, undefined, 0, undefined, undefined, undefined, starts);
+          const b = frameAt(s, t, m.lineups);
+          expect(b.runs).toBeUndefined();
+          if (!eligible) {
+            expect(a, `${s.type} #${s.seq} @${t}`).toEqual(b);
+            continue;
+          }
+          const { players: pa, runs } = a;
+          expect({ ...a, players: [], runs: undefined }, `#${s.seq} @${t}`).toEqual({ ...b, players: [] }); // ball, lift, carrier, WON IT, ref, caption, flash, timings
+          if (t > 1) expect(runs).toBeUndefined();
+          if (t >= 1) for (const p of pa) expect(near([p.x, p.y], [at(b, p.side + ":" + p.no).x, at(b, p.side + ":" + p.no).y]), `#${s.seq} @${t} ${p.side}:${p.no}`).toBeLessThan(0.05);
+          for (const k of runs ?? []) expect(k.startsWith(s.side + ":"), `#${s.seq}: only attackers sprint`).toBe(true);
+        }
+        expect(JSON.stringify(s)).toBe(before);
+        if (!eligible) continue;
+        const a0 = frameAt(s, 0, m.lineups, undefined, 0, undefined, undefined, undefined, starts);
+        for (const act of s.actors.filter((x) => ["r", "h", "m"].includes(x.id) && !x.keeper && x.side !== "ref")) {
+          const p = plain0.players.find((q) => q.side === act.side && q.hot && near([q.x, q.y], act.path[0]) < 1e-6);
+          if (!p) continue;
+          const key = p.side + ":" + p.no;
+          expect(near([at(a0, key).x, at(a0, key).y], starts[key]), `#${s.seq} ${act.id}: drawn origin`).toBeLessThan(1e-9);
+          const n = act.path.length - 1;
+          let c = n;
+          for (let i = 1; i < n; i++) if (near(act.path[i], sample(s.ball, i / n)) <= 1.6) {
+            c = i;
+            break;
+          }
+          const ac = frameAt(s, c / n, m.lineups, undefined, 0, undefined, undefined, undefined, starts);
+          expect(near([at(ac, key).x, at(ac, key).y], [at(frameAt(s, c / n, m.lineups), key).x, at(frameAt(s, c / n, m.lineups), key).y]), `#${s.seq} ${act.id}: contact ${c}/${n}`).toBeLessThan(0.05);
+          if (act.id === "m") expect(a0.runs ?? []).not.toContain(key);
+          bridged++;
+        }
+      }
+    }
+    expect(bridged).toBeGreaterThan(500);
+    expect(contests).toBeGreaterThan(0);
+  });
+
+  describe("drawn at the live pace (16.7 ms ticks, minuteMs 5000)", () => {
+    const L: Squads = { home: squad("Home", ["gk", "util", "util", "util", "util"]), away: squad("Away", ["gk", "util", "util", "util", "util"]) };
+    const ev = (t: string, from: Pt, ball: Pt): MatchEvent => ({ seq: 60, t, side: "home", from, ball, p: "Home P2", p2: "Home P4", text: "", at: 0, min: 30 }) as unknown as MatchEvent;
+    /** Draws `s` up to progress `until` from a frame with `key` drawn at `D`; with `bridge`, the snapshot says so too. */
+    const draw = (s: Scene, key: string, D: Pt, until: number, bridge: boolean) => {
+      const first = frameAt(s, 0, L);
+      const starts: PlayerStarts = { ...Object.fromEntries(first.players.map((p) => [p.side + ":" + p.no, [p.x, p.y] as Pt])), [key]: D };
+      let drawn: Frame = { ...first, players: first.players.map((p) => (p.side + ":" + p.no === key ? { ...p, x: D[0], y: D[1] } : p)) };
+      const n = Math.ceil((until * s.ms) / 16.7);
+      const dt = (until * s.ms) / n;
+      const path: Pt[] = [D];
+      let peak = 0;
+      for (let i = 1; i <= n; i++) {
+        const next = smooth(drawn, frameAt(s, (i * dt) / s.ms, L, undefined, 0, undefined, undefined, undefined, bridge ? starts : undefined), dt);
+        const q = at(next, key);
+        peak = Math.max(peak, (near([q.x, q.y], path[path.length - 1]) / dt) * 1000);
+        path.push([q.x, q.y]);
+        drawn = next;
+      }
+      return { drawn, path, peak, gap: near(path[path.length - 1], drawn.ball) };
+    };
+    const length = (path: Pt[]) => path.slice(1).reduce((sum, p, i) => sum + near(p, path[i]), 0);
+
+    it("a through-ball runner runs straight from his drawn spot (no detour via the authored start) and is on the ball at reception no later than today", () => {
+      const s = sceneFor(ev("through_ball", [50, 25], [70, 20]), [50, 25], 5000)!;
+      const targetPath: Pt[] = [];
+      const starts: PlayerStarts = { "home:5": [62, 39] };
+      for (let t = 0; t <= 1; t += 0.01) targetPath.push([at(frameAt(s, t, L, undefined, 0, undefined, undefined, undefined, starts), "home:5").x, at(frameAt(s, t, L, undefined, 0, undefined, undefined, undefined, starts), "home:5").y]);
+      expect(near(targetPath[0], [62, 39])).toBeLessThan(1e-9);
+      expect(length(targetPath)).toBeLessThan(1.05 * near([62, 39], [70, 20])); // replacing only the first keyframe ran 29.9 for 20.6
+      for (const d of [24, 40]) {
+        const D: Pt = [70 - d * 0.8, 20 + d * 0.6];
+        const now = draw(s, "home:5", D, 1, true);
+        const today = draw(s, "home:5", D, 1, false);
+        expect(now.gap, `${d} u`).toBeLessThanOrEqual(today.gap + 1e-9);
+        expect(now.gap, `${d} u`).toBeLessThan(3.2); // within the #184 on-ball reach: the carrier then keeps the ball's pace
+        expect(now.peak, `${d} u`).toBeLessThanOrEqual(120 + 1e-6); // the cross's sprint cap: never a teleport
+      }
+    });
+
+    it("a cross winger runs from his drawn spot and is on the ball at the release (t 0.5) from 24 away; from 40 he is still arriving, at the sprint cap — never a teleport", () => {
+      const s = sceneFor(ev("cross", [62, 30], [80, 6]), [62, 30], 5000)!;
+      const D24: Pt = [80 - 24 * 0.8, 6 + 24 * 0.6];
+      const r24 = draw(s, "home:5", D24, 0.5, true);
+      const origin = at(frameAt(s, 0, L, undefined, 0, undefined, undefined, undefined, { "home:5": D24 }), "home:5");
+      expect(near([origin.x, origin.y], D24)).toBeLessThan(1e-9); // his run starts where he is drawn, not at the authored spot by the ball
+      expect(r24.gap).toBeLessThan(1.6); // the carrier ring's reach
+      expect(near(r24.path[r24.path.length - 1], [80, 6])).toBeLessThan(1.6);
+      const r40 = draw(s, "home:5", [80 - 40 * 0.8, 6 + 40 * 0.6], 0.5, true);
+      expect(r40.peak).toBeLessThanOrEqual(120 + 1e-6);
+      expect(r40.drawn.ball).toEqual(draw(s, "home:5", [80 - 40 * 0.8, 6 + 40 * 0.6], 0.5, false).drawn.ball); // the ball's flight is never his
+    });
   });
 });
