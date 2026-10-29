@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sampleN, sceneFor, short, touchStyle, type Actor, type Pt, type Scene } from "./scenes";
-import { frameAt, type Frame, type Lineups } from "./sim";
+import { frameAt, smooth, type Frame, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -23,7 +23,7 @@ const other = (side: Side): Side => (side === "home" ? "away" : "home");
 const end = (s: Scene): Pt => s.ball[s.ball.length - 1];
 const LINE_MARGIN = 3; // the runner starts this far behind his marker
 const MARKER_GAP = 3; // the beaten marker ends at least this far from the ball
-const LIFT_CAP = 0.3; // ground pass or a subtle lift
+const LIFT_CAP = 0.5; // bounded loft, grounded at reception
 
 /** The three choreographed players: passer (`e.p`), runner (`e.p2`) and the defender marking the runner. */
 function cast(s: Scene, e: MatchEvent) {
@@ -132,7 +132,8 @@ function expectThroughBall(s: Scene, e: MatchEvent) {
   for (let t = 0; t <= 1.0001; t += 0.05) {
     if (dist(sample(s.ball, t), spot) < 1) expect(dist(at(runner, t), spot), `${tag} t=${t.toFixed(2)}`).toBeLessThan(1.6);
   }
-  // Ground pass or a subtle lift, landing at his feet.
+  // FF-190: a visibly lofted through ball, landing at his feet.
+  expect(Math.max(...(s.ballHeight ?? [0])), tag).toBeGreaterThanOrEqual(0.4);
   expect(Math.max(...(s.ballHeight ?? [0])), tag).toBeLessThanOrEqual(LIFT_CAP);
   expect(sampleN(s.ballHeight, 1), tag).toBeLessThan(0.05);
 }
@@ -158,8 +159,8 @@ describe("through balls are a runner beating his marker into space (FF-70)", () 
     // A through ball is not a result or a contest: no badge, impact, WON IT cue, focus or camera move.
     expect(s.flash ?? null).toBeNull();
     for (const k of ["impact", "won", "focus", "cam"] as const) expect(s[k], k).toBeUndefined();
-    // Same pace as the pass it replaces, at a broadcast and at the live minute.
-    for (const ms of [15000, 8000]) expect(scene(e, ms).ms).toBe(sceneFor({ ...e, t: "pass" }, e.from as Pt, ms)!.ms);
+    // FF-190: quicker than an ordinary pass at both live and broadcast pace.
+    for (const ms of [5000, 8000, 15000]) expect(scene(e, ms).ms).toBeLessThan(sceneFor({ ...e, t: "pass" }, e.from as Pt, ms)!.ms);
     // The passer strikes it from where the engine put the ball.
     expect(dist(first(passer), e.from as Pt)).toBeLessThanOrEqual(1.6);
   });
@@ -263,3 +264,44 @@ function deepFreeze<T>(o: T): T {
   }
   return o;
 }
+
+
+describe("FF-190 drawn through-ball chase", () => {
+  it.each(CASES)("$name: lofts, lands and preserves the named receiver at live pace", ({ e }) => {
+    for (const ms of [5000, 8000]) {
+      const s = scene(e, ms);
+      let drawn = frameAt(s, 0, LINEUPS);
+      let peak = 0;
+      const startPlayers = Object.fromEntries(drawn.players.map(p => [p.side + ":" + p.no, [p.x, p.y] as Pt]));
+      expect(frameAt(s, 0, LINEUPS, undefined, 0, drawn.ball, undefined, 0, startPlayers).ball).toEqual(drawn.ball);
+      for (let elapsed = 16; elapsed <= s.ms + 800; elapsed += 16) {
+        const p = Math.min(1, elapsed / s.ms);
+        drawn = smooth(drawn, frameAt(s, p, LINEUPS, undefined, elapsed, undefined, undefined, elapsed, startPlayers), 16);
+        peak = Math.max(peak, drawn.lift);
+      }
+      expect(peak).toBeGreaterThan(0.2);
+      expect(dist(drawn.ball, e.ball as Pt)).toBeLessThan(0.1);
+      expect(contact(drawn)?.name).toBe(NAMES[e.side as Side][2]);
+    }
+  });
+
+  it.each(["home", "away"] as Side[])("%s: only runner and marker gain chase speed; passer, ref and ball retain their policy", side => {
+    const e = through(side, side === "home" ? [56, 30] : [44, 30], side === "home" ? [80, 34] : [20, 34]);
+    const target = { ...frameAt(scene(e), 0.5, LINEUPS), runs: undefined, carrier: null };
+    const previous = { ...target, ball: [30, 20] as Pt, ref: [30, 20] as Pt, players: target.players.map(p => ({ ...p, x: p.x - 10 })) };
+    const ordinary = smooth(previous, { ...target, type: "pass" }, 16);
+    const actual = smooth(previous, target, 16);
+    target.players.forEach((p, i) => {
+      const isChaser = p.hot && !p.gk && (p.side !== side || p.name === NAMES[side][2]);
+      const step = actual.players[i].x - previous.players[i].x;
+      const base = ordinary.players[i].x - previous.players[i].x;
+      if (isChaser) {
+        expect(step, p.name).toBeGreaterThan(base);
+        expect(step, p.name).toBeLessThanOrEqual((p.side === side ? 120 : 100) * 0.016 + 1e-9);
+      } else expect(actual.players[i], p.name).toEqual(ordinary.players[i]);
+    });
+    expect(actual.ball).toEqual(ordinary.ball);
+    expect(actual.ref).toEqual(ordinary.ref);
+    expect(actual.lift).toBe(ordinary.lift);
+  });
+});

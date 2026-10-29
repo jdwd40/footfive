@@ -137,21 +137,41 @@ function head(e: MatchEvent) {
  * connects across scene boundaries. `next`: the following published event, if already fetched — only a cross reads it,
  * and only to put its own header's runner on his box point (see the cross scene); nothing of it reaches the scene's metadata.
  */
-export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
+export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent, prevLift = 0): Scene | null {
   const s = build(e, prevBall, minuteMs, next);
   if (s) s.tempo = tempoFor(e, s);
+  const result = !!s && RESULTS.has(e.t) && !e.pen;
   // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.
   if (s && (s.ball[0][0] !== prevBall[0] || s.ball[0][1] !== prevBall[1])) {
     // #107: the previous scene already struck it a little way along this scene's first leg (a header off a cross): carry on from
-    // there instead of a lead-in back to the strike point, so the ball never doubles back.
-    if (s.ball.length > 1 && onLeg(s.ball[0], s.ball[1], prevBall)) {
+    // there instead of a lead-in back to the strike point, so the ball never doubles back. #190: a result does the same from any
+    // shot's short launch (off the line to a corner too), as long as its next keyframe is still ahead: impact and endpoints unchanged.
+    if (s.ball.length > 1 && (onLeg(s.ball[0], s.ball[1], prevBall) || (result && ahead(s.ball[0], s.ball[1], prevBall)))) {
       s.ball = [prevBall, ...s.ball.slice(1)];
+      if (result) carryLift(s, prevLift);
       return s;
     }
     s.ball = [prevBall, ...s.ball];
     if (s.ballHeight) s.ballHeight = [s.ballHeight[0], ...s.ballHeight];
-  }
+  } else if (result) carryLift(s!, prevLift);
   return s;
+}
+
+/** #190: results that carry on the shot's flight (penalties have their own). */
+const RESULTS = new Set(["goal", "save", "block", "miss", "woodwork"]);
+/** The longest launch a shot scene gives the ball before its result is published (long shots, see the shot scene), plus slack. */
+const LAUNCH_REACH = 3.5;
+/** Is `p` a short launch from strike `a` that has not yet reached `a`'s next keyframe `b`? */
+function ahead(a: Pt, b: Pt, p: Pt) {
+  return Math.hypot(p[0] - a[0], p[1] - a[1]) <= LAUNCH_REACH && (b[0] - p[0]) * (b[0] - a[0]) + (b[1] - p[1]) * (b[1] - a[1]) > 0;
+}
+/** A result taking over a lifted ball (header, long shot) starts at that height and comes down by its impact; from there its own heights. */
+function carryLift(s: Scene, lift: number) {
+  if (!(lift > 0)) return;
+  const i = s.impact ? s.ball.findIndex((p) => p[0] === s.impact![0] && p[1] === s.impact![1]) : -1;
+  const n = i > 0 ? i : 1;
+  const own = s.ballHeight ?? s.ball.map(() => 0);
+  s.ballHeight = own.map((h, k) => (k < n ? Math.max(h, lift * (1 - k / n)) : h));
 }
 
 /** Is `p` part-way along a → b (strictly after a, before b, within 2.5 of the line)? */
@@ -287,9 +307,9 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         const mStart = clampPt([rStart[0] + toward(atk, 3), rStart[1] - wide * 2]);
         return {
           ...base,
-          ms: d(1500),
+          ms: d(1300), // #190: quicker than a pass (1500) and lifted over the line, so it reads as a through ball
           ball: [passer, lerp(passer, recv, 0.5), recv],
-          ballHeight: [0, 0.15, 0],
+          ballHeight: [0, 0.45, 0],
           actors: [
             { id: "p", side: atk, label: short(e.p), path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
             { id: "r", side: atk, label: short(e.p2), path: [rStart, lerp(rStart, recv, 0.45), recv] },
@@ -417,34 +437,40 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       };
     }
     case "shot": {
-      const shotFrom = ball;
+      // #107/#190: every shot is struck at once — the ball leaves him towards goal centre from the first frame (neutral: the
+      // published shot only, nothing of its result) and covers only a short launch, which the result scene carries on from (see
+      // sceneFor). The launch stays short of the 4-unit block: a header or ground shot at most 2, a long shot 3 (lifted).
+      const aim: Pt = [goalX(atk), GOAL_Y];
+      const dist = Math.hypot(aim[0] - ball[0], aim[1] - ball[1]) || 1;
+      const at = (u: number): Pt => lerp(ball, aim, u / dist); // `u` units along the line to goal centre
+      const gk = keeperSpot(def);
+      const keeper: Actor = { id: "gk", side: def, keeper: true, path: [gk, [gk[0] + toward(atk, -1.5), GOAL_Y + (ball[1] - GOAL_Y) * 0.15], [gk[0] + toward(atk, -2), GOAL_Y + (ball[1] - GOAL_Y) * 0.2]] };
+      const closer: Actor = { id: "d", side: def, path: [clampPt([ball[0] + toward(atk, 6), ball[1] + 5]), clampPt([ball[0] + toward(atk, 4), ball[1] + 2]), clampPt([ball[0] + toward(atk, 3), ball[1] + 1])] };
       if (e.header) {
-        // #107: the runner meets the cross and heads it at once — the ball leaves his head towards goal from the first frame, no
-        // stand-still in the box. It covers only the first stretch (the result scene carries on from there, see onLeg).
-        const aim: Pt = [goalX(atk), GOAL_Y];
-        const gkH = keeperSpot(def);
         return {
           ...base,
           ms: d(1300),
-          ball: [shotFrom, lerp(shotFrom, aim, 0.1), lerp(shotFrom, aim, 0.2)],
+          ball: [ball, at(Math.min(0.1 * dist, 1)), at(Math.min(0.2 * dist, 2))],
           ballHeight: [0.6, 0.55, 0.5],
-          actors: [
-            { id: "s", side: atk, label: short(e.p), path: [shotFrom, lerp(shotFrom, aim, 0.06), lerp(shotFrom, aim, 0.08)] },
-            { id: "gk", side: def, keeper: true, path: [gkH, [gkH[0] + toward(atk, -1.5), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.15], [gkH[0] + toward(atk, -2), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.2]] },
-            { id: "d", side: def, path: [clampPt([shotFrom[0] + toward(atk, 6), shotFrom[1] + 5]), clampPt([shotFrom[0] + toward(atk, 4), shotFrom[1] + 2]), clampPt([shotFrom[0] + toward(atk, 3), shotFrom[1] + 1])] },
-          ],
+          actors: [{ id: "s", side: atk, label: short(e.p), path: [ball, at(Math.min(0.06 * dist, 0.6)), at(Math.min(0.08 * dist, 0.8))] }, keeper, closer],
         };
       }
+      // Front-loaded: most of the launch in the first stretch. A long shot is lofted from the strike. The shooter only follows
+      // through, a short step off the ball's line that stops, so the ball draws away from him (no carrier: it is a free ball).
+      const long = !!e.long;
+      const f = long ? Math.min(0.3 * dist, 3) : Math.min(0.2 * dist, 2);
+      const ux = (aim[0] - ball[0]) / dist;
+      const uy = (aim[1] - ball[1]) / dist;
+      // He peels off towards the near touchline (the ball heads for the middle), mostly sideways: never across or after the ball.
+      const [nx, ny] = ux * (ball[1] > GOAL_Y ? 1 : -1) >= 0 ? [-uy, ux] : [uy, -ux];
+      const step = long ? 0.7 : 0.5;
+      const follow = clampPt([ball[0] + (ux * 0.6 + nx * 0.8) * step, ball[1] + (uy * 0.6 + ny * 0.8) * step]);
       return {
         ...base,
         ms: d(1300),
-        ball: [prevBall, shotFrom, shotFrom],
-        ballHeight: e.header ? [0.6, 0.6, 0.6] : [0, 0, 0], // a header: the cross scene brought it to his head at the box point
-        actors: [
-          { id: "s", side: atk, label: short(e.p), path: e.header ? [shotFrom, shotFrom, shotFrom] : [clampPt([shotFrom[0] - toward(atk, 3), shotFrom[1] + 1]), shotFrom, shotFrom] },
-          { id: "gk", side: def, keeper: true, path: [keeperSpot(def), [keeperSpot(def)[0] + toward(atk, -1.5), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.15], [keeperSpot(def)[0] + toward(atk, -2), GOAL_Y + (shotFrom[1] - GOAL_Y) * 0.2]] },
-          { id: "d", side: def, path: [clampPt([shotFrom[0] + toward(atk, 6), shotFrom[1] + 5]), clampPt([shotFrom[0] + toward(atk, 4), shotFrom[1] + 2]), clampPt([shotFrom[0] + toward(atk, 3), shotFrom[1] + 1])] },
-        ],
+        ball: [ball, at(0.6 * f), at(0.9 * f), at(f)],
+        ballHeight: long ? [0, 0.35, 0.5, 0.55] : [0, 0, 0, 0],
+        actors: [{ id: "s", side: atk, label: short(e.p), path: [ball, follow, follow] }, keeper, closer],
       };
     }
     case "goal":

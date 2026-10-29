@@ -6,7 +6,7 @@ import MarketsPanel from "../components/MarketsPanel";
 import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
-import { sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { sampleN, sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
@@ -208,9 +208,11 @@ export default function MatchPage() {
   const scenes = useMemo(() => {
     const m = new Map<number, Scene>();
     let prev: Pt = [50, 32];
+    let lift = 0; // #190: a result carries on a lifted shot (header, long shot) from its height
     for (const [i, e] of events.entries()) {
-      const s = sceneFor(e, prev, minuteMs, events[i + 1]) ?? idleScene(e, prev); // a cross reads its own already-fetched header
+      const s = sceneFor(e, prev, minuteMs, events[i + 1], lift) ?? idleScene(e, prev); // a cross reads its own already-fetched header
       prev = s.ball[s.ball.length - 1];
+      lift = sampleN(s.ballHeight, 1);
       m.set(e.seq, s);
     }
     return m;
