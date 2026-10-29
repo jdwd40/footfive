@@ -164,7 +164,6 @@ function carrierActor(scene: Scene, t: number): string | null {
     case "block": return t >= 0.5 ? "b" : null;
     case "woodwork": return t >= 0.97 ? "gk" : null;
     case "bounce": return t >= 0.8 ? "c" : null;
-    case "shot": return t >= 0.5 ? "s" : null;
     case "restart": return "w";
     case "penalty_setup": case "shootout_setup": return t < 0.2 ? "taker" : null;
     case "penalty_goal": case "penalty_saved": case "penalty_missed": case "penalty_woodwork": case "shootout_kick": return t >= 0.43 && t <= 0.5 ? "taker" : null;
@@ -300,13 +299,17 @@ function bridge(scene: Scene, routed: Scene, starts: PlayerStarts, lineups: Line
     const from = k ? starts[k] : undefined;
     if (!k || !from) return a;
     if (a.side === scene.side && a.id !== "m") runs.push(k); // the attackers sprint; the marker keeps the ordinary chase
-    return { ...a, path: runIn(a.path, from, routed.ball) };
+    return { ...a, path: runIn(a.path, from, routed.ball, scene.type === "through_ball" && a.id === "r" ? scene.ms : 0) };
   });
   return { scene: { ...routed, actors }, runs };
 }
+/** #190: progress along a through-ball runner's straight race at evenly spaced keyframes: front-loaded, ending on his contact. */
+const RACE = [0, 0.35, 0.62, 0.82, 0.94, 1];
+/** #190: units/s on average (60 % of the 120 sprint) above which a through-ball runner's run-in races instead. */
+const RACE_SPEED = 72;
 /** #189: `path` from `from`: the offset fades out over the keyframes before the actor's first contact with the ball (else his last
  * keyframe), so he runs straight there rather than via his authored start, and that contact, his endpoint and the ball are untouched. */
-function runIn(path: Pt[], from: Pt, ball: Pt[]): Pt[] {
+function runIn(path: Pt[], from: Pt, ball: Pt[], raceMs = 0): Pt[] {
   const n = path.length - 1;
   if (!n) return path;
   let c = n;
@@ -317,6 +320,11 @@ function runIn(path: Pt[], from: Pt, ball: Pt[]): Pt[] {
       break;
     }
   }
+  // #190: a through ball's runner meets it at the end of a short scene. From far off (more than RACE_SPEED on average) the eased
+  // run-in would leave him behind it, so he races straight at that contact instead, most of the way early: `sample` eases only the
+  // first and last stretches, and the drawing's sprint cap still holds. Nearer, the run-in below arrives with the ball.
+  const [cx, cy] = path[n];
+  if (raceMs && c === n && Math.hypot(cx - from[0], cy - from[1]) > (RACE_SPEED * raceMs) / 1000) return RACE.map((f): Pt => [from[0] + (cx - from[0]) * f, from[1] + (cy - from[1]) * f]);
   const dx = from[0] - path[0][0];
   const dy = from[1] - path[0][1];
   return path.map(([x, y], i): Pt => (i < c ? [x + dx * (1 - i / c), y + dy * (1 - i / c)] : [x, y]));
@@ -471,11 +479,13 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
     // Only its involved attackers sprint; everyone else keeps the ordinary chase.
     // #189: so do the attackers running from where they were drawn (`runs`), or they arrive after the ball.
     const crossSprint = (target.type === "cross" && p.hot && p.side === target.side) || !!target.runs?.includes(p.side + ":" + p.no);
+    // #190: a through ball's runner races onto it and his marker chases, a step slower; the passer (and keepers) keep the ordinary chase.
+    const through = target.type === "through_ball" && target.p < 1 && p.hot && !p.gk ? (p.side !== target.side ? "mark" : short(p.name) !== short(target.who) ? "run" : null) : null;
     // #184: the carrier with the ball at his feet (on the ground, within contact in the target, and already drawn by it) keeps the
     // ball's pace, so the drawn ball stays there. Flights have no carrier and a carrier still running in keeps the ordinary chase.
     // Capped at the sprint speed: never a teleport.
     const onBall = target.carrier === p.side + ":" + p.no && target.lift < 0.05 && Math.hypot(p.x - target.ball[0], p.y - target.ball[1]) <= CONTACT && Math.hypot(q.x - prev.ball[0], q.y - prev.ball[1]) <= 2 * CONTACT;
-    const [x, y] = chase(q.x, q.y, p.x, p.y, onBall ? kb : crossSprint ? k(70) : kp, onBall || crossSprint ? 120 : runSpeed);
+    const [x, y] = chase(q.x, q.y, p.x, p.y, onBall ? kb : crossSprint || through === "run" ? k(70) : through === "mark" ? k(110) : kp, onBall || crossSprint || through === "run" ? 120 : through === "mark" ? 100 : runSpeed);
     return { ...p, x, y };
   });
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];

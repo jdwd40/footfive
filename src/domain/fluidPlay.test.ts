@@ -155,6 +155,8 @@ describe("#107 a runner who meets a cross heads it at once", () => {
           n++;
           const box = e.ball as Pt;
           expect(s.ball[0]).toEqual(box);
+          // FF-190: neutral header launch must remain short of an unchanged short-block impact.
+          expect(Math.hypot(s.ball.at(-1)![0] - box[0], s.ball.at(-1)![1] - box[1])).toBeLessThanOrEqual(2 + 1e-9);
           const gx = e.side === "home" ? 100 : 0;
           const toGoal = (p: Pt) => Math.abs(gx - p[0]);
           // Moving from the first frame up to the result event (published 1200 ms in, ≈ 0.92 of the scene).
