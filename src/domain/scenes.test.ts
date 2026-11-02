@@ -282,6 +282,25 @@ describe("highlight scenes agree with the simulation", () => {
     expect(n).toBeGreaterThan(20);
   });
 
+  it.each(["foul", "yellow_card", "red_card"])("the %s referee approaches, stops near the offender and holds his position, including at pitch edges", (type) => {
+    for (const at of [[1, 2], [50, 32], [99, 62]] as Pt[]) {
+      const event = { ...all[0], t: type, side: "home" as const, p: "Offender", p2: undefined, ball: type === "foul" ? at : undefined };
+      const original = JSON.stringify(event);
+      const scene = sceneFor(event, at, 15000)!;
+      const ref = scene.actors.find(a => a.side === "ref")!;
+      const offender = scene.actors.find(a => a.id === "o")!;
+      const end = sample(ref.path, 1);
+      const player = sample(offender.path, 1);
+      expect(Math.hypot(end[0] - player[0], end[1] - player[1])).toBeGreaterThanOrEqual(2);
+      expect(Math.hypot(end[0] - player[0], end[1] - player[1])).toBeLessThanOrEqual(3);
+      expect(sample(ref.path, 0)).not.toEqual(end);
+      for (const p of [0.4, 0.6, 0.8, 1]) expect(sample(ref.path, p)).toEqual(end);
+      expect(scene.ms).toBe(type === "foul" ? 1500 : 2200); // existing scene timing
+      expect(scene.ball).toEqual([at, at]);
+      expect(JSON.stringify(event)).toBe(original);
+    }
+  });
+
   it("setup scenes fill the engine's wait for the kick: taker places, walks back and settles; keeper bounces; the ref jogs in", () => {
     const setup = all.find((e) => e.t === "shootout_setup")!;
     const penSetup = all.find((e) => e.t === "penalty_setup")!;
