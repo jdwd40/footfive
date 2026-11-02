@@ -17,7 +17,7 @@ const cases = [
 ] as const;
 
 for (const scenario of cases) {
-  test(`${scenario.name}: visible contest, timely WON IT and winning-side possession without future results`, async ({ page }, testInfo) => {
+  test(`${scenario.name}: visible contest and winning-side possession without WON IT or future results`, async ({ page }, testInfo) => {
     const side = scenario.side === "home" ? "Home" : "Away";
     const opponent = scenario.side === "home" ? "Away" : "Home";
     const currentState: PubState = { ...state, ph: scenario.phase };
@@ -82,7 +82,7 @@ for (const scenario of cases) {
     const start = START + 4500; // Event publication plus the real MatchPage's 1500ms lag.
     await page.clock.runFor(start - await page.evaluate(() => Date.now()));
     let contested = false;
-    let firstBadgeMs: number | null = null;
+    let firstWinMs: number | null = null;
     const samples = [];
     for (let elapsed = 50; elapsed <= 2000; elapsed += 50) {
       await page.clock.runFor(50);
@@ -100,27 +100,24 @@ for (const scenario of cases) {
         return { ball: b, players };
       });
       const shown = await badge.isVisible();
+      await expect(badge).toHaveCount(0);
+      await expect(page.getByText("WON IT", { exact: true })).toHaveCount(0);
       samples.push({ elapsed, shown, ...drawing });
       if (["home", "away"].every((side) => drawing.players.some((p) => p.side === side && !p.keeper && p.distance <= 4.5))) contested = true;
-      if (shown) {
-        await expect(badge).toHaveText("WON IT");
-        if (firstBadgeMs === null) {
-          firstBadgeMs = elapsed;
-          expect(drawing.players.some((p) => p.side === scenario.side && p.no === 4 && !p.keeper && p.ring && p.distance <= 1.6), "first WON IT requires named winner P3 (shirt 4) in drawn contact with the ball").toBe(true);
-          await page.screenshot({ path: testInfo.outputPath("won-it.png") });
-        } else {
-          // The brief cue latches while the winner passes onward: free flight has
-          // no carrier ring, but an opposing carrier must never accompany WON IT.
-          expect(drawing.players.some((p) => p.side !== scenario.side && p.ring), "latched WON IT must not accompany opposing possession").toBe(false);
-        }
+      if (firstWinMs === null && drawing.players.some((p) => p.side === scenario.side && p.no === 4 && !p.keeper && p.ring && p.distance <= 1.6)) {
+        firstWinMs = elapsed;
+        await page.screenshot({ path: testInfo.outputPath("winner-contact.png") });
+      }
+      if (firstWinMs !== null) {
+        expect(drawing.players.some((p) => p.side !== scenario.side && p.ring), "winning possession must not show an opposing carrier").toBe(false);
       }
       if (elapsed === 500) await page.screenshot({ path: testInfo.outputPath("contest.png") });
       await hidden();
     }
     await testInfo.attach("challenge-samples", { body: JSON.stringify(samples), contentType: "application/json" });
     expect(contested, "both sides visibly meet at the ball").toBe(true);
-    expect(firstBadgeMs, "WON IT appears within two seconds").not.toBeNull();
-    expect(firstBadgeMs!).toBeLessThanOrEqual(2000);
+    expect(firstWinMs, "named winner P3 (shirt 4) reaches drawn contact within two seconds").not.toBeNull();
+    expect(firstWinMs!).toBeLessThanOrEqual(2000);
     // At two seconds the winner still owns the ball; it must not read as an opposing clearance.
     expect(samples.at(-1)!.players.some((p) => p.side === scenario.side && !p.keeper && p.ring && p.distance <= 1.6)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("winner-possession.png") });
