@@ -327,6 +327,86 @@ main {
   overflow-x: clip;
 }
 
+/* Decorative stands occupy the existing panel insets, outside the unchanged pitch box and camera. */
+.stadium {
+  --stadium-band: 8px;
+  isolation: isolate;
+}
+.stadium > .match-pitch { z-index: 1; }
+.stadium-stand {
+  position: absolute;
+  top: calc(-1 * var(--stadium-band));
+  bottom: calc(-1 * var(--stadium-band));
+  width: calc(50% + var(--stadium-band));
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid #354052;
+  background: #111b2a;
+}
+.stadium-home {
+  --fan-colour: var(--home);
+  left: calc(-1 * var(--stadium-band));
+  border-radius: calc(12px + var(--stadium-band)) 0 0 calc(12px + var(--stadium-band));
+}
+.stadium-away {
+  --fan-colour: var(--away);
+  right: calc(-1 * var(--stadium-band));
+  border-radius: 0 calc(12px + var(--stadium-band)) calc(12px + var(--stadium-band)) 0;
+}
+.stadium-stand::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  background-image:
+    radial-gradient(circle at 2px 2px, var(--fan-colour) 1.3px, transparent 1.6px),
+    radial-gradient(circle at 5px 5px, #e0e6ee 0.65px, transparent 1px);
+  background-size: 6px 6px;
+  opacity: 0.7;
+}
+.stadium-stand::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 12%;
+  width: 35%;
+  height: 3px;
+  background: repeating-linear-gradient(110deg, var(--fan-colour) 0 4px, #fff 4px 6px, transparent 6px 10px);
+  opacity: 0;
+  transform-origin: left center;
+}
+.stadium-away::after { left: auto; right: 12%; }
+.stadium-stand.cheer { border-color: var(--fan-colour); }
+.stadium-stand.cheer::before {
+  animation: stadium-cheer 2s ease-in-out both;
+  will-change: transform, opacity;
+}
+.stadium-stand.cheer::after {
+  animation: stadium-flags 2s ease-out both;
+  will-change: transform, opacity;
+}
+@keyframes stadium-cheer {
+  0%, 100% { transform: translateY(0); opacity: 0.85; }
+  15%, 45%, 75% { transform: translateY(-1.5px); opacity: 1; }
+  30%, 60%, 90% { transform: translateY(0.5px); opacity: 0.7; }
+}
+@keyframes stadium-flags {
+  0%, 100% { transform: scaleX(0.75); opacity: 0; }
+  20%, 70% { transform: translateY(-1px) scaleX(1); opacity: 0.95; }
+}
+@media (max-width: 359px) {
+  .stadium { --stadium-band: 3px; }
+  .stadium-stand::after { top: 0; height: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stadium-stand.cheer::before,
+  .stadium-stand.cheer::after {
+    animation: none !important;
+    transform: none;
+    opacity: 1;
+    will-change: auto;
+  }
+}
+
 @supports (padding: env(safe-area-inset-bottom)) {
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom);
