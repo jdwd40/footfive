@@ -2,8 +2,8 @@
  * Stateless SVG pitch: draws one Frame (10 players + ball). The parent ticks the playhead;
  * nothing animates in here.
  */
-import type { ReactNode } from "react";
-import type { TeamPublic } from "../lib/pocketbase";
+import { memo, type CSSProperties, type ReactNode } from "react";
+import type { Side, TeamPublic } from "../lib/pocketbase";
 import type { Frame } from "../domain/sim";
 import { FULL_CAM } from "../domain/scenes";
 
@@ -60,6 +60,18 @@ function Referee({ frame, projectX }: { frame: Frame; projectX: (x: number) => n
   );
 }
 
+/** Two patterned sections, with CSS doing the cheering. Ordinary pitch ticks do not update this subtree. */
+const Crowd = memo(function Crowd({ cheering, cue }: { cheering: Side | null; cue: string }) {
+  return (["home", "away"] as const).map(side => (
+    <div
+      key={cheering === side ? `${side}:${cue}` : side}
+      className={`stadium-stand stadium-${side}${cheering === side ? " cheer" : ""}`}
+      data-testid={`${side}-crowd`}
+      aria-hidden
+    />
+  ));
+});
+
 export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
@@ -110,12 +122,17 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
       : period
         ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber", big: false }
         : null;
+  const cheering = goal?.side ?? ft?.side ?? (frame?.type === "shootout_end" ? frame.side : null) ?? null;
+  // A goal and its celebration share a score; a new goal restarts the cheer even for consecutive goals by the same side.
+  const cue = goal && cheering ? `goal:${goal.score?.join("-") ?? goal.seq}` : cheering ? `winner:${cheering}` : "";
+  const pitchMaxWidth = `max(260px, calc((100vh - var(--pitch-chrome, 360px)) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))`;
 
   return (
     <>
-      
+      <div className="stadium relative mx-auto w-full" style={{ maxWidth: pitchMaxWidth, "--home": hc, "--away": ac } as CSSProperties} data-testid="stadium">
+      <Crowd cheering={cheering} cue={cue} />
       {/* Keep the camera aspect stable. Responsive chrome/insets live in CSS; tiny screens retain the old cap. */}
-      <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: `max(260px, calc((100vh - var(--pitch-chrome, 360px)) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))` }} data-testid="pitch">
+      <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: pitchMaxWidth }} data-testid="pitch">
         <svg viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <defs>
           <pattern id="stripes" width="12.5" height={H} patternUnits="userSpaceOnUse">
@@ -224,6 +241,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
         </div>
       ) : null}
         {replay ? <span className="chip chip-amber absolute right-2 top-2">Replay</span> : null}
+      </div>
       </div>
     </>
   );

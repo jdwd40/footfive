@@ -164,6 +164,94 @@ describe("Pitch referee signals", () => {
   });
 });
 
+describe("Pitch stadium crowd", () => {
+  const stand = (side: "home" | "away") => screen.getByTestId(`${side}-crowd`);
+  const cheers = (side: "home" | "away") => stand(side).classList.contains("cheer");
+
+  it("uses two empty patterned sections in the team colours, keeping the pitch's existing width cap", () => {
+    render(<Pitch frame={frame({})} home={home} away={away} revealed />);
+    const stadium = screen.getByTestId("stadium");
+    expect(stadium.style.getPropertyValue("--home")).toBe(home.primary_color);
+    expect(stadium.style.getPropertyValue("--away")).toBe(away.primary_color);
+    expect(stadium.querySelectorAll(".stadium-stand")).toHaveLength(2);
+    for (const side of ["home", "away"] as const) {
+      expect(stand(side).childElementCount).toBe(0); // dot patterns and flags use pseudo-elements, never per-fan DOM
+      expect(stand(side).getAttribute("aria-hidden")).toBe("true");
+      expect(cheers(side)).toBe(false);
+    }
+    expect(stadium.style.maxWidth).toBe(screen.getByTestId("pitch").style.maxWidth);
+  });
+
+  it.each(["goal", "penalty_goal"])("cheers the scoring side of a %s exactly when its GOOOAL banner is revealed", (type) => {
+    const { rerender } = render(<Pitch frame={null} home={home} away={away} revealed={false} />);
+    for (const side of ["home", "away"] as const) {
+      const f = frame({ type, side, flash: "goal", score: [1, 1], p: 0.8 });
+      rerender(<Pitch frame={f} home={home} away={away} revealed={false} />);
+      expect(screen.queryByTestId("goal-banner")).toBeNull();
+      expect(cheers("home") || cheers("away")).toBe(false);
+      rerender(<Pitch frame={f} home={home} away={away} revealed />);
+      expect(screen.getByTestId("goal-banner")).toBeTruthy();
+      expect(cheers(side)).toBe(true);
+      expect(cheers(side === "home" ? "away" : "home")).toBe(false);
+    }
+  });
+
+  it("keeps a goal's cheer through its celebration and ordinary ticks, but restarts it for the next goal", () => {
+    const f = frame({ type: "goal", side: "home", flash: "goal", score: [1, 0] });
+    const { rerender } = render(<Pitch frame={f} home={home} away={away} revealed />);
+    const first = stand("home");
+    const awayStand = stand("away");
+    rerender(<Pitch frame={{ ...f, p: 0.95 }} home={home} away={away} revealed />);
+    expect(stand("home")).toBe(first);
+    rerender(<Pitch frame={{ ...f, type: "celebration", seq: 2 }} home={home} away={away} revealed={false} />);
+    expect(stand("home")).toBe(first); // the banner already persists through this celebration
+    expect(cheers("home")).toBe(true);
+    rerender(<Pitch frame={{ ...f, seq: 3, score: [2, 0] }} home={home} away={away} revealed />);
+    expect(stand("home")).not.toBe(first);
+    expect(stand("away")).toBe(awayStand);
+    expect(cheers("home")).toBe(true);
+    rerender(<Pitch frame={frame({ seq: 4 })} home={home} away={away} revealed />);
+    expect(cheers("home") || cheers("away")).toBe(false);
+  });
+
+  it.each(["normal", "aet", "pens"] as const)("cheers the full-time winner (%s)", (by) => {
+    render(<Pitch frame={frame({ type: "match_end", side: "away", by })} home={home} away={away} revealed />);
+    expect(screen.getByTestId("ft-banner")).toBeTruthy();
+    expect(cheers("away")).toBe(true);
+    expect(cheers("home")).toBe(false);
+  });
+
+  it("cheers a shootout winner once through the following full-time announcement", () => {
+    const f = frame({ type: "shootout_end", side: "home", pens: [5, 4] });
+    const { rerender } = render(<Pitch frame={f} home={home} away={away} revealed />);
+    const winner = stand("home");
+    expect(cheers("home")).toBe(true);
+    expect(cheers("away")).toBe(false);
+    rerender(<Pitch frame={{ ...f, type: "match_end", seq: 2, by: "pens" }} home={home} away={away} revealed />);
+    expect(stand("home")).toBe(winner);
+  });
+
+  it.each([
+    ["save", "save"], ["miss", "miss"], ["block", "block"], ["woodwork", "wood"],
+    ["penalty_saved", "save"], ["penalty_missed", "miss"], ["penalty_woodwork", "wood"],
+    ["shootout_kick", "save"], ["shootout_kick", "miss"], ["shootout_kick", "wood"], ["shootout_kick", "goal"],
+  ] as const)("keeps both crowds calm for %s / %s", (type, flash) => {
+    render(<Pitch frame={frame({ type, flash, side: "home" })} home={home} away={away} revealed />);
+    expect(cheers("home") || cheers("away")).toBe(false);
+  });
+
+  it("retains the calm crowd nodes across ordinary frames and updates colours without adding fan nodes", () => {
+    const { rerender } = render(<Pitch frame={frame({})} home={home} away={away} revealed />);
+    const h = stand("home");
+    const a = stand("away");
+    rerender(<Pitch frame={frame({ seq: 99, p: 0.7 })} home={{ ...home, primary_color: "#ffffff" }} away={away} revealed />);
+    expect(stand("home")).toBe(h);
+    expect(stand("away")).toBe(a);
+    expect(screen.getByTestId("stadium").style.getPropertyValue("--home")).toBe("#ffffff");
+    expect(h.childElementCount + a.childElementCount).toBe(0);
+  });
+});
+
 describe("Pitch goal banner", () => {
   it("shows GOOOAL with scorer and score once the ball is in", () => {
     const { rerender } = render(<Pitch frame={frame({ type: "goal", flash: "goal", side: "away", who: "Jo Striker", score: [1, 2], p: 0.3 })} home={home} away={away} revealed={false} />);
