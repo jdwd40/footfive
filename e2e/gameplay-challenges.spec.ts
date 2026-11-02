@@ -99,10 +99,9 @@ for (const scenario of cases) {
         });
         return { ball: b, players };
       });
-      const shown = await badge.isVisible();
       await expect(badge).toHaveCount(0);
       await expect(page.getByText("WON IT", { exact: true })).toHaveCount(0);
-      samples.push({ elapsed, shown, ...drawing });
+      samples.push({ elapsed, ...drawing });
       if (["home", "away"].every((side) => drawing.players.some((p) => p.side === side && !p.keeper && p.distance <= 4.5))) contested = true;
       if (firstWinMs === null && drawing.players.some((p) => p.side === scenario.side && p.no === 4 && !p.keeper && p.ring && p.distance <= 1.6)) {
         firstWinMs = elapsed;
