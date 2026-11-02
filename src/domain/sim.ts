@@ -3,10 +3,11 @@
  * at formation anchors drifted toward the ball, so all 10 players are always on the pitch.
  */
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
-import { FULL_CAM, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
+import { FULL_CAM, goalX, sample, sampleN, short, type Actor, type Cam, type Pt, type Scene } from "./scenes";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
+export type RefPose = "run" | "whistle" | "point" | "card-yellow" | "card-red";
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; cam: Cam; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 /** #189: where each player (side:no) was drawn on a scene's first tick, so its runners start from there. */
 export type PlayerStarts = Readonly<Record<string, Pt>>;
@@ -276,7 +277,21 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     if (t < 0.7) cam = FULL_CAM;
   }
   const runs = bridged && t <= 1 && bridged.runs.length ? { runs: bridged.runs } : {};
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs };
+  // Signals last through the final frame too: reduced motion already renders t = 1 without smoothing.
+  let refPose: RefPose = "run";
+  let refAim: Pt | undefined;
+  if ((scene.type === "yellow_card" || scene.type === "red_card") && t >= 0.4) {
+    refPose = scene.type === "yellow_card" ? "card-yellow" : "card-red";
+    const offender = scene.actors.find(a => a.id === "o");
+    refAim = offender ? sample(offender.path, t) : ball;
+  } else if (scene.type === "foul") {
+    refPose = t < 0.4 ? "whistle" : "point";
+    refAim = [goalX(other(scene.side)), 32]; // foul.side is the offender, not the side taking the free kick
+  } else if (scene.type === "penalty_awarded" && t >= 0.3) {
+    refPose = "point";
+    refAim = scene.impact; // the actual penalty spot, including the mirrored away end
+  }
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, cam, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs };
 }
 
 /** #189: scenes whose receiver/runner (`r`, a cross's `h`) and marker (`m`) run from where they were drawn. Turnover contests (`lost`) and
@@ -446,7 +461,7 @@ export function spaceOut(players: Player[], pinned: Set<Player>, first: Side) {
   }
 }
 
-/** Rendered frame chases the target: exponential approach per value, players and the ref speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. The ref is a slow walker who ignores small target shifts, so he repositions rarely and never darts. */
+/** Rendered frame chases the target: exponential approach per value, players and the ref speed-capped so nobody teleports. A gap over a second (suspended tab) snaps instead: nothing to chase from. In open play the ref ignores small target shifts; officiating targets settle promptly at the same walking speed. */
 const MAX_SPEED = 60; // units per second
 const REF_SPEED = 14;
 const REF_DEADBAND = 4; // units: a target this close is "where he already is"
@@ -491,7 +506,9 @@ export function smooth(prev: Frame | null, target: Frame, dtMs: number): Frame {
   const ball: Pt = [prev.ball[0] + (target.ball[0] - prev.ball[0]) * kb, prev.ball[1] + (target.ball[1] - prev.ball[1]) * kb];
   const kc = k(350);
   const cam = target.cam.map((v, i) => prev.cam[i] + (v - prev.cam[i]) * kc) as Cam;
-  const ref = Math.hypot(target.ref[0] - prev.ref[0], target.ref[1] - prev.ref[1]) < REF_DEADBAND ? prev.ref : chase(prev.ref[0], prev.ref[1], target.ref[0], target.ref[1], k(900), REF_SPEED);
+  // A four-unit deadband would leave an officiating ref too far from the offender. Only his settling changes; speed stays capped.
+  const officiating = target.type === "foul" || target.type === "yellow_card" || target.type === "red_card" || target.type === "penalty_awarded";
+  const ref = Math.hypot(target.ref[0] - prev.ref[0], target.ref[1] - prev.ref[1]) < (officiating ? 0.05 : REF_DEADBAND) ? prev.ref : chase(prev.ref[0], prev.ref[1], target.ref[0], target.ref[1], k(officiating ? 150 : 900), REF_SPEED);
   return { ...target, ball, lift: prev.lift + (target.lift - prev.lift) * kb, players, ref, cam };
 }
 

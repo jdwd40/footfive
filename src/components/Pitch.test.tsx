@@ -48,7 +48,7 @@ describe("Pitch kits and numbers", () => {
   });
   it("every actor has the same radius and stroke — carrier, both keepers, away players and referee included", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
-    const actors = [...screen.getAllByTestId("player").map(n => n.querySelector("[data-kit]")!), screen.getByTestId("ref")];
+    const actors = [...screen.getAllByTestId("player").map(n => n.querySelector("[data-kit]")!), screen.getByTestId("ref").querySelector("[data-ref-body]")!];
     expect(actors.map(n => n.getAttribute("r"))).toEqual(actors.map(() => "1.45"));
     expect(actors.map(n => n.getAttribute("stroke-width"))).toEqual(actors.map(() => "0.3"));
   });
@@ -71,13 +71,16 @@ describe("Pitch kits and numbers", () => {
     render(<Pitch frame={frame({ players })} home={{ ...home, primary_color: "#0a84ff" }} away={away} revealed />);
     expect(numFill(0)).toBe("#fff"); // dark blue home kit → white number
   });
-  it("always draws the referee as an equal-sized yellow circle with a black stroke", () => {
+  it("draws the referee as a figure with a head, boots and an equal-sized yellow shirt", () => {
     render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
     const ref = screen.getByTestId("ref");
-    expect(ref.getAttribute("cx")).toBe("40");
-    expect(ref.getAttribute("cy")).toBe("20");
-    expect(ref.getAttribute("r")).toBe("1.45");
-    expect(ref.getAttribute("stroke")).toBe("#000");
+    expect(ref.tagName.toLowerCase()).toBe("g");
+    expect(ref.getAttribute("transform")).toBe("translate(40 20)");
+    expect(ref.getAttribute("data-pose")).toBe("run");
+    expect(ref.querySelectorAll("circle")).toHaveLength(2);
+    expect(ref.querySelector("path")).toBeTruthy();
+    expect(ref.querySelector("[data-ref-body]")!.getAttribute("r")).toBe("1.45");
+    expect(ref.querySelector("[data-ref-body]")!.getAttribute("stroke")).toBe("#000");
   });
   it("has no kit colour swatches by the score/clock: team colours live on the scoreboard (#99)", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
@@ -116,6 +119,48 @@ describe("Pitch kits and numbers", () => {
     expect(hud.textContent).toBe("HOM 1–0 AWY");
     expect(hud.className).toContain("left-2");
     expect(screen.getByText("Replay").className).toContain("right-2");
+  });
+});
+
+describe("Pitch referee signals", () => {
+  it.each([
+    ["yellow_card", "card-yellow", "#ffd400", "BOOKED"],
+    ["red_card", "card-red", "#ff3344", "RED CARD"],
+  ] as const)("draws the correct raised %s card and retains the result chip, live and replay", (type, refPose, colour, chip) => {
+    const { rerender } = render(<Pitch frame={null} home={home} away={away} revealed />);
+    for (const replay of [false, true]) {
+      rerender(<Pitch frame={frame({ type, refPose, refAim: [45, 32], flash: "card", p: 1 })} home={home} away={away} revealed replay={replay} />);
+      expect(screen.getByTestId("ref").getAttribute("data-pose")).toBe(refPose);
+      const card = screen.getByTestId("ref-card");
+      expect(card.getAttribute("fill")).toBe(colour);
+      expect(Number(card.getAttribute("y"))).toBeLessThan(-3);
+      expect(screen.getByText(chip)).toBeTruthy();
+      expect(screen.queryByTestId("won-badge")).toBeNull();
+    }
+  });
+
+  it("shows a whistle, then points toward the target; both the referee and his arm reflect at the change of ends", () => {
+    const f = frame({ type: "foul", ref: [40, 20], refPose: "whistle", refAim: [0, 20] });
+    const { rerender } = render(<Pitch frame={f} home={home} away={away} revealed />);
+    expect(screen.getByTestId("ref-whistle")).toBeTruthy();
+    for (const phase of ["first_half", "second_half"]) {
+      rerender(<Pitch frame={{ ...f, phase, refPose: "point", p: 1 }} home={home} away={away} revealed />);
+      const ref = screen.getByTestId("ref");
+      expect(screen.queryByTestId("ref-whistle")).toBeNull();
+      expect(ref.getAttribute("transform")).toBe(`translate(${phase === "first_half" ? 40 : 60} 20)`);
+      expect(Math.sign(Number(ref.querySelector("[data-ref-arm]")!.getAttribute("x2")))).toBe(phase === "first_half" ? -1 : 1);
+      expect(screen.queryByTestId("ref-card")).toBeNull();
+    }
+  });
+
+  it("points down toward the penalty spot on a final, static frame without adding animation", () => {
+    render(<Pitch frame={frame({ type: "penalty_awarded", ref: [86, 19], refAim: [89, 32], refPose: "point", p: 1, flash: "pen" })} home={home} away={away} revealed />);
+    const ref = screen.getByTestId("ref");
+    const arm = ref.querySelector("[data-ref-arm]")!;
+    expect(Number(arm.getAttribute("x2"))).toBeGreaterThan(0);
+    expect(Number(arm.getAttribute("y2"))).toBeGreaterThan(0);
+    expect(ref.querySelector("animate, animateTransform, [style]")).toBeNull();
+    expect(screen.getByText("PENALTY")).toBeTruthy();
   });
 });
 

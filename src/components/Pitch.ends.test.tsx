@@ -101,7 +101,7 @@ describe("Pitch event-snapshot end projection", () => {
           expect(actors[i].getAttribute("transform"), `${e.t}/${e.st.ph}/${progress}`).toBe(`translate(${x(p.x)} ${p.y})`);
           expect(actors[i].textContent).toBe(String(p.no));
         });
-        expect(container.querySelector('[data-testid="ref"]')!.getAttribute("cx")).toBe(String(x(f.ref[0])));
+        expect(container.querySelector('[data-testid="ref"]')!.getAttribute("transform")).toBe(`translate(${x(f.ref[0])} ${f.ref[1]})`);
         expect(container.querySelector('circle[stroke="#111"]')!.getAttribute("cx")).toBe(String(x(f.ball[0])));
         expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe([flip ? 100 - f.cam[0] - f.cam[2] : f.cam[0], ...f.cam.slice(1)].join(" "));
         expect(JSON.stringify(f)).toBe(original);

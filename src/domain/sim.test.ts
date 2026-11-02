@@ -488,6 +488,40 @@ describe("frameAt", () => {
     expect(edge[1]).toBeLessThanOrEqual(64);
   });
 
+  it.each(["home", "away"] as const)("derives referee poses from published %s events, including the final reduced-motion frame", (side) => {
+    const m = ms[0];
+    const offender = m.lineups[side].find(p => p.starter && p.role !== "gk")!.name;
+    const base: MatchEvent = { seq: 9500, at: 0, min: 1, t: "foul", side, p: offender, ball: [50, 32], text: "referee signal", st: m.events[0].st };
+    for (const type of ["yellow_card", "red_card"]) {
+      // Actual card payloads have neither ball nor victim; the preceding foul supplies the spot.
+      const s = sceneFor({ ...base, t: type, ball: undefined }, [50, 32], 8000)!;
+      expect(frameAt(s, 0.39, m.lineups).refPose).toBe("run");
+      for (const p of [0.4, 0.6, 0.9, 1]) {
+        const f = frameAt(s, p, m.lineups);
+        expect(f.refPose).toBe(type === "yellow_card" ? "card-yellow" : "card-red");
+        expect(f.refAim).toEqual(sample(s.actors.find(a => a.id === "o")!.path, p));
+      }
+    }
+    const foul = sceneFor(base, [50, 32], 8000)!;
+    expect(frameAt(foul, 0.1, m.lineups).refPose).toBe("whistle");
+    for (const p of [0.4, 0.8, 1]) {
+      const f = frameAt(foul, p, m.lineups);
+      expect(f.refPose).toBe("point");
+      expect(f.refAim).toEqual([side === "home" ? 0 : 100, 32]); // free kick belongs to the victim's side
+    }
+    const spot: Pt = [side === "home" ? 89 : 11, 32];
+    const pen = sceneFor({ ...base, t: "penalty_awarded", ball: spot }, [50, 32], 8000)!;
+    expect(frameAt(pen, 0.29, m.lineups).refPose).toBe("run");
+    for (const p of [0.3, 0.55, 1]) {
+      const f = frameAt(pen, p, m.lineups);
+      expect(f.refPose).toBe("point");
+      expect(f.refAim).toEqual(spot);
+    }
+    const next = frameAt(sceneFor({ ...base, t: "pass" }, [50, 32], 8000)!, 0.5, m.lineups);
+    expect(next.refPose).toBe("run");
+    expect(next.refAim).toBeUndefined();
+  });
+
   it("skips sent-off players and survives missing lineups", () => {
     const m = ms[0];
     const e = m.events[5];
@@ -738,6 +772,17 @@ describe("smooth", () => {
     expect(Math.hypot(tick.ref[0] - 10, tick.ref[1] - 10)).toBeLessThan(0.3);
     expect(smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [13, 12] }, 100).ref).toEqual([10, 10]); // small shift: stays put
     expect(smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [15, 10] }, 100).ref[0]).toBeGreaterThan(10); // beyond the deadband: walks
+  });
+
+  it.each(["foul", "yellow_card", "red_card", "penalty_awarded"])("lets the %s referee settle close enough to signal while retaining his 14 u/s speed cap", (type) => {
+    const target: Frame = { ...at(10), type, ref: [13, 12], refPose: "point" };
+    let f: Frame = { ...at(10), ref: [10, 10] };
+    for (let ms = 0; ms < 1000; ms += 20) {
+      const next = smooth(f, target, 20);
+      expect(Math.hypot(next.ref[0] - f.ref[0], next.ref[1] - f.ref[1])).toBeLessThanOrEqual(14 * 0.02 + 1e-9);
+      f = next;
+    }
+    expect(Math.hypot(f.ref[0] - target.ref[0], f.ref[1] - target.ref[1])).toBeLessThan(0.1);
   });
   it("the carrier on the ball keeps the ball's pace; flights, a lifted ball and a carrier not yet on it keep the ordinary chase, capped (#184)", () => {
     const f = (x: number, ball: number, carrier: string | null, lift = 0): Frame => ({ ...at(x), ball: [ball, 32], lift, carrier });

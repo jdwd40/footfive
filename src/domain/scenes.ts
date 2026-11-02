@@ -588,6 +588,12 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
     case "yellow_card":
     case "red_card": {
       const at = ball || prevBall;
+      // Approach from inside the pitch, then stop 2.8 units from the offender to signal. Keep every player and ball path intact.
+      const dx = at[0] < 10 ? 1 : -1;
+      const dy = at[1] < 10 ? 1 : -1;
+      const refStart = clampPt([at[0] + dx * 8, at[1] + dy * 8]);
+      const refEnd = clampPt([at[0] + dx * 2, at[1] + dy * 2]);
+      const approach = e.t === "foul" ? 0.25 : 0.4;
       return {
         ...base,
         ms: d(e.t === "foul" ? 1500 : 2200),
@@ -595,7 +601,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         actors: [
           { id: "o", side, label: short(e.p), path: [clampPt([at[0] + 3, at[1] + 2]), at] },
           ...(e.p2 ? [{ id: "v", side: other(side), label: short(e.p2), path: [clampPt([at[0] - 1, at[1]]), clampPt([at[0] - 1, at[1] + 1])] as Pt[] }] : []),
-          { id: "ref", side: "ref" as const, path: [clampPt([at[0] - 8, at[1] - 8]), clampPt([at[0] - 4, at[1] - 4])] },
+          { id: "ref", side: "ref" as const, path: keys(t => lerp(refStart, refEnd, Math.min(1, t / approach))) },
         ],
         flash: e.t === "foul" ? null : "card",
         impact: e.t === "foul" ? undefined : at,

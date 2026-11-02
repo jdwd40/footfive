@@ -28,6 +28,38 @@ function textOn(hex: string): string {
   return 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255) > 150 ? "#0b1404" : "#fff";
 }
 
+/** A figure with a fixed-size shirt, head and boots; gestures are drawn from the published event's pose, without CSS animation. */
+function Referee({ frame, projectX }: { frame: Frame; projectX: (x: number) => number }) {
+  const pose = frame.refPose ?? "run";
+  const aim = frame.refAim ?? [frame.ref[0] + 1, frame.ref[1]];
+  const dx = projectX(aim[0]) - projectX(frame.ref[0]);
+  const dy = aim[1] - frame.ref[1];
+  const distance = Math.hypot(dx, dy) || 1;
+  const arm: [number, number] = pose === "point" ? [dx / distance * 3.8, dy / distance * 3.8] : [dx < 0 ? -1.8 : 1.8, -3.4];
+  const card = pose === "card-yellow" || pose === "card-red";
+  return (
+    <g transform={`translate(${projectX(frame.ref[0])} ${frame.ref[1]})`} data-testid="ref" data-pose={pose} role="img" aria-label={`Referee: ${pose.replaceAll("-", " ")}`}>
+      <ellipse cy={2} rx={1.5} ry={0.55} fill="rgba(0,0,0,0.35)" />
+      <path d="M -0.6 1 L -1.1 2.3 M 0.6 1 L 1.1 2.3" fill="none" stroke="#111" strokeWidth={0.8} strokeLinecap="round" />
+      <circle r={R} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-ref-body />
+      <circle cy={-2.2} r={0.75} fill="#f2c6a0" stroke="#000" strokeWidth={0.25} />
+      {pose === "whistle" ? (
+        <g data-testid="ref-whistle">
+          <path d="M 1 0 L 2 -1 L 0.8 -2" fill="none" stroke="#ffd400" strokeWidth={0.7} strokeLinecap="round" />
+          <circle cx={0.9} cy={-2} r={0.35} fill="#fff" stroke="#000" strokeWidth={0.2} />
+          <path d="M 1.8 -3 L 2.8 -3.5 M 2 -2.2 L 3.1 -2.2" stroke="#fff" strokeWidth={0.3} />
+        </g>
+      ) : pose === "point" || card ? (
+        <>
+          <line x1={arm[0] * 0.25} y1={0} x2={arm[0]} y2={arm[1]} stroke="#111" strokeWidth={1} strokeLinecap="round" />
+          <line x1={arm[0] * 0.25} y1={0} x2={arm[0]} y2={arm[1]} stroke="#ffd400" strokeWidth={0.65} strokeLinecap="round" data-ref-arm />
+          {card ? <rect x={arm[0] - 0.7} y={arm[1] - 1.6} width={1.4} height={1.8} rx={0.15} fill={pose === "card-red" ? "#ff3344" : "#ffd400"} stroke="#111" strokeWidth={0.25} data-testid="ref-card" /> : <circle cx={arm[0]} cy={arm[1]} r={0.3} fill="#f2c6a0" />}
+        </>
+      ) : <path d="M -1 0 L -2 1 M 1 0 L 1.8 0.8" fill="none" stroke="#ffd400" strokeWidth={0.65} strokeLinecap="round" />}
+    </g>
+  );
+}
+
 export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
@@ -129,7 +161,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           );
         })}
 
-        {frame ? <circle cx={x(frame.ref[0])} cy={frame.ref[1]} r={R} fill="#ffd400" stroke="#000" strokeWidth={0.3} data-testid="ref" /> : null}
+        {frame ? <Referee frame={frame} projectX={x} /> : null}
 
         {/* ball: shadow on the ground, ball lifted by height */}
         <ellipse cx={ball[0]} cy={ball[1] + 0.9} rx={0.9} ry={0.35} fill="rgba(0,0,0,0.45)" />
