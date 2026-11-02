@@ -226,6 +226,26 @@ describe("legacy persisted-state compatibility", () => {
 });
 
 describe("odds", () => {
+  it.each([[0, 0], [0, 15], [15, 0]])("normalises current tuned rates and prices for pair %s/%s", (home, away) => {
+    const rates = eng.goalRates(match(1, home, away));
+    const p = odds.pairQualify({ lh: rates.home, la: rates.away });
+    const reverse = odds.pairQualify({ lh: rates.away, la: rates.home });
+    // The existing Poisson model truncates tiny score tails; use the same 0.5%
+    // mass tolerance as the final-score distribution check below.
+    expect(p + reverse).toBeGreaterThan(0.995);
+    expect(p + reverse).toBeLessThanOrEqual(1.000001);
+    for (const probability of [p, reverse]) {
+      expect(probability).toBeGreaterThan(0);
+      expect(probability).toBeLessThan(1);
+      expect(Number.isFinite(odds.price(probability))).toBe(true);
+      expect(odds.price(probability)).toBeGreaterThanOrEqual(1.01);
+    }
+    const distribution = odds.finalDist({ lh: rates.home, la: rates.away }, { sc: [0, 0], ph: "first_half", x: [[], []] }, 0);
+    const total = Object.values(distribution.dist as Record<string, number>).reduce((sum, probability) => sum + probability, 0);
+    expect(total).toBeGreaterThan(0.995);
+    expect(total).toBeLessThanOrEqual(1.000001);
+  });
+
   it("prices are valid and favour the stronger team", () => {
     const st = match(1, 0, 15); // A++ v C-
     const r = eng.goalRates(st);
@@ -349,7 +369,10 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
   // 1 - 0.35 × (share missing) instead of 0.65/0.70, so the in-match wear every side carries changes seeded outcomes.
   // Same 200 inputs, projection and assertions. RNG call sites and implementation are unchanged; per-match draw
   // counts may change with play.
-  const BASE_SHA256 = "ea5b06fd2b4bc44fcc5e49d375da92d0738b8ded6ae5feaa5afd21ed20a97ab8";
+  // Issue #195 re-pin (ea5b06fd… → 2d0870bf…): recommended on-target/save tuning intentionally
+  // changes seeded outcomes. Same 200 seeds, explicit legacy 8s snapshot and projection;
+  // no RNG implementation/call-site changes. Full old/new pins and calibration: docs/balance-195.md.
+  const BASE_SHA256 = "2d0870bfb62a6539a7119bc42088cddf863c1161e62a108fc2ba6c03e8f9da80";
   const liveTiming = eng.buildTiming(8000, 1);
   type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
   // Issue #73 transport projection: cosmetic rows (`cos: 1`) are dropped and the real rows' integer transport `seq` is
@@ -366,7 +389,7 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
     const manifest = [];
     for (let seed = 1000; seed < 1200; seed++) manifest.push(run(seed));
     const digest = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
-    expect(digest, "200-seed authoritative outcome manifest differs from base 33dc1b8").toBe(BASE_SHA256);
+    expect(digest, "200-seed authoritative outcome manifest differs from the #195 balance baseline").toBe(BASE_SHA256);
   });
 });
 

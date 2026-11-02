@@ -29,17 +29,20 @@ const { TEAMS } = lib("teams.js");
 const { defaultStarters } = lib("tournament.js");
 
 /**
- * Pre-#73 engine (git 2a17bda, identical to the lead's captured matchEngine-before.cjs), 200 seeds at the live 8 s pace.
+ * Pre-#73 engine (git 2a17bda, identical to the lead's captured matchEngine-before.cjs), 200 seeds at an explicit 8s snapshot.
  * Issue #135 re-pinned all three for the flatter fitness curve (seeded outcomes change by design; same 200 inputs,
  * projection and assertions): pin eef854d6… → ea5b06fd…, full e8da709c… → 318ca545…, steps 8014fab6… → 617b66e6….
+ * Issue #195 re-pins for intentional goal-rate tuning: pin ea5b06fd… → 2d0870bf…,
+ * full 318ca545… → b0c4a004…, steps 617b66e6… → ccee40cd…. Same inputs, pace,
+ * projection and assertions; cosmetic generation/RNG unchanged. See docs/balance-195.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
-  pin: "ea5b06fd2b4bc44fcc5e49d375da92d0738b8ded6ae5feaa5afd21ed20a97ab8",
+  pin: "2d0870bfb62a6539a7119bc42088cddf863c1161e62a108fc2ba6c03e8f9da80",
   /** Every field of every event plus the whole final state. */
-  full: "318ca545ec6e9230092ad924fc05dcb2fb2c64ac71aadf36188d3da5b9844992",
+  full: "b0c4a0049e34b0efed664c369944db95012815119a6c7c21dce74a126423398c",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "617b66e621fc3d8a20dc7577f98d2df0c6731cc200257d5c6009037fb6bba90f",
+  steps: "ccee40cdb59cbcf17e9b775bb61f33fbb090841ac40a121c7ee5990e08c4ce9d",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
@@ -86,7 +89,7 @@ const runs = SEEDS.map((seed) => {
 });
 
 describe("cosmetic attempts never change the real match (issue #73)", () => {
-  it("200 seeds at the live pace: every real event's full payload and the final state are the original engine's", () => {
+  it("200 seeds at an 8s snapshot: every real payload and final state match the pinned authoritative baseline", () => {
     const pin = [];
     const full = [];
     for (const { st, events } of runs) {

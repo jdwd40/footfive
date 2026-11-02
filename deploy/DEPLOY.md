@@ -71,10 +71,17 @@ Weak bootstrap passwords force `must_change_password=true`.
 
 ### Match speed
 
-- World field `match_minute_real_seconds` (default **15**).
-- 90′ ≈ 22m30s wall clock; admin range 1–60.
-- Snapshotted onto fixtures/match_states at kickoff; live matches keep snapshot.
+- World field `match_minute_real_seconds` (default **6**, mirrored as `match_minute_real_ms = 6000`).
+- 90′ ≈ 9 minutes wall clock, plus unchanged result/goal holds and breaks; admin range 1–60.
+- Snapshotted onto rounds/fixtures/match_states at kickoff; live matches keep their snapshot.
+- Migration `1750000020_match_speed_6s.js` moves every existing world to 6s/6000ms on start,
+  without changing kicked-off rounds, fixtures or match states. Reapplying it is a no-op.
+  Its best-effort down restores unchanged 6s/6000ms rows to 8s/8000ms; prior custom settings
+  were not recorded, and later admin overrides are preserved.
 - Admin UI: “Real seconds per match minute”.
+- #195 intentionally changes outcomes: `onTargetBase = 0.50`, `saveBase = 0.48` target
+  about 3 goals per 90′. Deploy between rounds with at least 45 minutes until kickoff
+  so main CI and the automatic backup/deploy finish before the next round starts.
 
 ### App admin account
 

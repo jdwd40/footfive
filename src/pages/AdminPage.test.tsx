@@ -73,6 +73,21 @@ async function openUsers() {
   await userEvent.click(screen.getByRole("button", { name: "Users" }));
 }
 
+describe("Admin match speed", () => {
+  it("uses the 6s default when no speed is returned", async () => {
+    vi.mocked(footfiveApi.adminOverview).mockResolvedValue({ users: 1 });
+    render(<MemoryRouter><AdminPage /></MemoryRouter>);
+    await screen.findByTestId("match-minute-seconds");
+    expect(screen.getByTestId("match-minute-seconds")).toHaveValue(6);
+    expect(screen.getByTestId("match-speed-estimate")).toHaveTextContent("6s per match minute · 90′ ≈ 9m");
+  });
+
+  it("retains a returned admin override", async () => {
+    render(<MemoryRouter><AdminPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByTestId("match-minute-seconds")).toHaveValue(8));
+  });
+});
+
 describe("Admin user search and pager", () => {
   it("requests the first page and keeps the returned user row", async () => {
     vi.mocked(footfiveApi.adminUsers).mockResolvedValue(listed([person("ada")], 1, 1, false));

@@ -15,7 +15,7 @@ export default function AdminPage() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [betweenMins, setBetweenMins] = useState(1);
-  const [matchSec, setMatchSec] = useState(8);
+  const [matchSec, setMatchSec] = useState(6);
   const [gapMins, setGapMins] = useState(10);
   const [windowMins, setWindowMins] = useState(5);
   const [tab, setTab] = useState<
@@ -39,7 +39,7 @@ export default function AdminPage() {
       setOverview(o);
       const bm = Number(o.betweenRoundMinutes ?? 1);
       if (!Number.isNaN(bm) && bm >= 1) setBetweenMins(bm);
-      const ms = Number(o.matchMinuteRealSeconds ?? 8);
+      const ms = Number(o.matchMinuteRealSeconds ?? 6);
       if (!Number.isNaN(ms) && ms >= 1) setMatchSec(ms);
       setGapMins(Number(o.championshipGapMinutes ?? 10));
       setWindowMins(Number(o.fixturesWindowMinutes ?? 5));

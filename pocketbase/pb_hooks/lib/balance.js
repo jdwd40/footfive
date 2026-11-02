@@ -3,9 +3,9 @@
  * Team treasury ≠ personal betting credits.
  */
 var BALANCE = {
-  // Official default: 1 in-game minute = 8 real seconds (12m for 90')
-  matchMinuteRealMs: 8000,
-  matchMinuteRealSeconds: 8,
+  // Official default: 1 in-game minute = 6 real seconds (9m for 90', plus holds/breaks)
+  matchMinuteRealMs: 6000,
+  matchMinuteRealSeconds: 6,
   halfTimeBreakMs: 30000,
   etHalfTimeBreakMs: 15000,
   shootoutKickSpacingMs: 10000,
@@ -52,18 +52,18 @@ var BALANCE = {
   topUpCooldownMs: 60 * 60 * 1000,
 
   // Match engine v2 (per-minute model; see matchEngine.js). Tuned by
-  // scripts/engine-calibrate.mjs to ~2.1 goals per 90' (the historic average).
+  // scripts/engine-calibrate.mjs to ~3 goals per 90' (#195 recommended tuning).
   match: {
     edgeOffset: 18, // attack − defence is ≈ −18 for evenly matched sides
     seqBase: 0.28,
     seqK: 0.006,
     shotBase: 0.54,
     shotK: 0.004,
-    onTargetBase: 0.45,
+    onTargetBase: 0.50,
     onTargetK: 0.003,
     blockRate: 0.22,
     woodworkRate: 0.12,
-    saveBase: 0.57,
+    saveBase: 0.48,
     saveK: 0.004,
     // Occasional long-range effort: fraction of shots taken from deep (x 58–70)
     // without final-third progression; the keeper's save chance gets this bonus.

@@ -82,7 +82,7 @@ try {
     for (let i = 0; i < config.seeds; i++) {
       const input = { seed: config.seedStart + i, profile: PROFILES[i % PROFILES.length],
         subjectSide: i % 2 ? 'away' : 'home', variant: VARIANTS[i % VARIANTS.length],
-        minuteMs: [8000, 15000, 1000][i % 3] };
+        minuteMs: [6000, 8000, 15000, 1000][i % 4] };
       for (const queued of [null, input.variant === 'attack' ? 'defend' : 'attack']) {
         const reference = full(eng, input, queued);
         validate(reference.st, reference.events);
