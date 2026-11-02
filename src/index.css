@@ -374,7 +374,7 @@ main {
   opacity: 0;
   transform-origin: left center;
 }
-.stadium-away::after { left: auto; right: 12%; }
+.stadium-away::after { left: auto; right: 12%; transform-origin: right center; }
 .stadium-stand.cheer { border-color: var(--fan-colour); }
 .stadium-stand.cheer::before {
   animation: stadium-cheer 2s ease-in-out both;
