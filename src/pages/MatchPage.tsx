@@ -6,6 +6,7 @@ import MarketsPanel from "../components/MarketsPanel";
 import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
+import { commentaryLine } from "../domain/commentary";
 import { sampleN, sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
@@ -205,6 +206,8 @@ export default function MatchPage() {
 
   // Scene per event, chained so the ball carries over between scenes, lengths scaled to the match pace.
   const minuteMs = view?.fixture.minuteMs ?? 15000;
+  const homeLabel = view?.fixture.home.abbreviation ?? "";
+  const awayLabel = view?.fixture.away.abbreviation ?? "";
   const scenes = useMemo(() => {
     const m = new Map<number, Scene>();
     let prev: Pt = [50, 32];
@@ -213,10 +216,10 @@ export default function MatchPage() {
       const s = sceneFor(e, prev, minuteMs, events[i + 1], lift) ?? idleScene(e, prev); // a cross reads its own already-fetched header
       prev = s.ball[s.ball.length - 1];
       lift = sampleN(s.ballHeight, 1);
-      m.set(e.seq, s);
+      m.set(e.seq, { ...s, caption: commentaryLine(events, i, { home: homeLabel, away: awayLabel }) });
     }
     return m;
-  }, [events, minuteMs]);
+  }, [events, minuteMs, homeLabel, awayLabel]);
 
   const lineups = view?.lineups ?? null;
   const serverSentOff = view?.sentOff;
@@ -351,7 +354,7 @@ export default function MatchPage() {
   // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
   const holding = !!(current && !liveRevealed && ph?.prev);
   const presentedSeq = current ? (holding ? ph!.prev!.seq : current.seq) : null;
-  const presentedText = holding ? ph!.prev!.text : current?.text ?? null;
+  const presentedText = presentedSeq == null ? null : scenes.get(presentedSeq)?.caption ?? null;
   // Events as the playhead has shown them: nothing newer, and the current one only once its result is revealed.
   const seen = ph ? events.filter((e) => e.seq < ph.cur.seq || (liveRevealed && e.seq === ph.cur.seq)) : [];
   const recent: TickerItem[] = seen.filter((e) => e.major).slice(-30).reverse().map((e) => ({
