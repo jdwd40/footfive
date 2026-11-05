@@ -104,6 +104,18 @@ describe("MatchPage timeline player", () => {
     expect(screen.getByTestId("commentary").textContent).toBe("Current pass");
   });
 
+  it("commentary counts only shots the playhead has reached (#84)", async () => {
+    const now = Date.now();
+    const at = (s: number) => ({ ...st!, clk: { s, run: 1 as const } });
+    const shot = (seq: number, ms: number, s: number): MatchEvent => ({ ...ev(seq, ms, `Shot ${seq}`), t: "shot", chain: seq, ball: [80, 32], from: null, st: at(s) });
+    // Published but still ahead of the lagged playhead: the 4th shot must not raise the 3rd's count.
+    await mount(view([shot(1, now - 90000, 60), shot(2, now - 60000, 90), shot(3, now - 3000, 120), shot(4, now - 500, 121)], { home: names("Home"), away: names("Away") }, now));
+    const line = screen.getByTestId("commentary").textContent;
+    expect(line).toContain("3rd");
+    expect(line).toContain("HOM");
+    expect(line).toContain("Shot 3");
+  });
+
   it("holds the displayed clock across a lower snapshot and a server step back, then advances", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     // Whole-second fixtures: ignore the smoothed global offset. The browser proof covers the real offset.

@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { expect, test } from "@playwright/test";
+import { commentaryLine } from "../src/domain/commentary";
 import type { FixtureCard, LineupPlayer, LiveView, MatchEvent, MatchView, TeamPublic } from "../src/lib/pocketbase";
 import { injectAuth } from "./helpers";
 
@@ -65,6 +66,9 @@ for (const key of KEYS) {
     // Same rows, same relative times; only the transport seq and the absolute clock are re-based for the mock.
     const events: MatchEvent[] = [run.prev, ...run.cos, run.next].map((e, i) => ({ ...e, seq: i + 1, at: e.at + shift }));
     const [prev, cShot, cResult, cBounce, next] = events;
+    // The caption is the #84 line, not the row's engine text; the feed below still carries the engine text.
+    const line = (e: MatchEvent) => commentaryLine(events, events.indexOf(e), { home: team("Home").abbreviation, away: team("Away").abbreviation });
+    expect(line(cShot), "a cosmetic shot is captioned as a long-range effort").toMatch(/long.range|distance/i);
     const origin = bounce.ball!; // where real play left the ball (the next real event starts here)
     const flip = FLIP.has(prev.st.ph);
     const canonicalSeq = (now: number) => (now >= next.at ? next : prev); // the card stays on the last REAL published event
@@ -117,7 +121,7 @@ for (const key of KEYS) {
     }).toBe(1);
     bootstrapped = true; // mounted; every row is published only once its time has come, so the run arrives in later polls
     await page.clock.runFor(prev.at + LAG_MS + 100 - (await page.evaluate(() => Date.now())));
-    await expect(page.getByTestId("commentary")).toContainText(prev.text);
+    await expect(page.getByTestId("commentary")).toContainText(line(prev));
 
     const sc = `${prev.st.sc[0]}–${prev.st.sc[1]}`;
     const row = (label: string, k: number) => `${prev.st.x[0][k]}${label}${prev.st.x[1][k]}`;
@@ -166,7 +170,7 @@ for (const key of KEYS) {
       samples.push({ now, caption, badge, ball: d.ball, elevation: d.elevation, rings: d.players.filter((p) => p.ring).map((p) => p.side) });
       expect(d.badges.some((t) => /GOAL/.test(t)), "a cosmetic attempt never shows a goal").toBe(false);
 
-      if (caption.includes(cShot.text)) {
+      if (caption.includes(line(cShot))) {
         expect(badge, `${badgeWord} never shows while the shot itself is current`).toBe(false);
         if (d.players.some((p) => p.side === shooting && !p.keeper && p.distance <= 1.6)) shotContact = true;
         if (!shots.has("shot") && shotContact) { shots.add("shot"); await page.screenshot({ path: testInfo.outputPath("cosmetic-shot.png") }); }
@@ -176,10 +180,10 @@ for (const key of KEYS) {
         badgeFirst = { text: badgeWord, dx: Math.abs(d.ball[0] - goalLine), elevation: d.elevation,
           contact: d.players.some((p) => p.side === blockerSide && !p.keeper && p.distance <= 1.6) };
         badgeFirstAt = now;
-        if (!caption.includes(cResult.text)) badgeBeforeCaption = true;
+        if (!caption.includes(line(cResult))) badgeBeforeCaption = true;
         await page.screenshot({ path: testInfo.outputPath("cosmetic-result.png") });
       }
-      if (blockerNo !== null && badge && caption.includes(cResult.text)) {
+      if (blockerNo !== null && badge && caption.includes(line(cResult))) {
         const named = d.players.find((p) => p.side === cResult.side && p.no === blockerNo);
         if (!blockerContact && named?.ring && named.distance <= 1.6) {
           blockerContact = { now, elevation: d.elevation };
@@ -187,13 +191,13 @@ for (const key of KEYS) {
         }
         if (d.players.some((p) => p.side === shooting && p.ring)) opposingRingDuringResult = true;
       }
-      if (caption.includes(cBounce.text)) {
+      if (caption.includes(line(cBounce))) {
         const back = Math.hypot(d.ball[0] - origin[0], d.ball[1] - origin[1]) <= 2.5;
         const ours = d.players.some((p) => p.side === shooting && p.ring);
         if (back && ours && !returned) { returned = true; await page.screenshot({ path: testInfo.outputPath("cosmetic-return.png") }); }
         if (returned && d.players.some((p) => p.side !== shooting && p.ring)) opposingRingDuringReturn = true;
       }
-      const nextCurrent = caption.includes(next.text);
+      const nextCurrent = caption.includes(line(next));
       if (nextCurrent && handover === null) handover = Math.hypot(d.ball[0] - origin[0], d.ball[1] - origin[1]);
       if (!nextCurrent && n % 6 === 0) {
         // Official numbers hold the last real snapshot through the whole cosmetic run.

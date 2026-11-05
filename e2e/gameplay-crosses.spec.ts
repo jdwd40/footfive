@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { commentaryLine } from "../src/domain/commentary";
 import type { FixtureCard, LiveView, MatchEvent, MatchView, PubState, TeamPublic } from "../src/lib/pocketbase";
 import { injectAuth } from "./helpers";
 
@@ -34,6 +35,9 @@ for (const scenario of cases) {
       { seq: 3, at: START + 60000, t: "goal", min: 2, side: "home", p: "Home P3", target: [100, 32], ball: [85, 32],
         text: "FF71 future goal must stay hidden", major: 1, st: goalState },
     ];
+    // The caption is the #84 header line, not the row's engine text.
+    const headerLine = commentaryLine(events, 1, { home: team("Home").abbreviation, away: team("Away").abbreviation });
+    expect(headerLine, "the header is captioned with the named shooter").toMatch(new RegExp(`${events[1].p}.*header|header.*${events[1].p}`, "i"));
     const fixture: FixtureCard = { id: "ff71-crosses", slot: "a", index: 0, home: team("Home"), away: team("Away"),
       status: "live", kickoffAt: START - 60000, minuteMs: 8000, st: state, at: events[2].at, seq: 3, last: null, odds: null };
   const errors: string[] = [];
@@ -111,7 +115,7 @@ for (const scenario of cases) {
       const headerCurrent = now >= events[1].at + 1500;
       if (!headerCurrent) {
         expect(winger.y, "winger holds his wide line while delivering").toBeLessThan(13);
-        await expect(page.getByTestId("commentary")).not.toContainText(events[1].text);
+        await expect(page.getByTestId("commentary")).not.toContainText(headerLine);
         await expect(shotRow).toHaveText("0Shots0");
         if (drawing.elevation > 1 && shooter.distance <= 1.6 && (scenario.side === "home" ? shooter.x > 80 : shooter.x < 20)) crossContact = true;
       } else {
@@ -148,7 +152,7 @@ for (const scenario of cases) {
       expect(largestBallStep, "late header geometry must not teleport the ball at 16ms").toBeLessThan(2);
       expect(largestShooterStep, "late named shooter must follow bounded 16ms cross sprint motion").toBeLessThanOrEqual(120 * 16 / 1000 + 0.01);
     }
-    await expect(page.getByTestId("commentary")).toContainText(events[1].text);
+    await expect(page.getByTestId("commentary")).toContainText(headerLine);
     expect(unexpectedApi).toEqual([]);
     expect(errors).toEqual([]);
   });
