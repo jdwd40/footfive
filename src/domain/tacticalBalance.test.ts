@@ -65,10 +65,12 @@ const authored = (i: number) => {
 describe("balanced v balanced manual matches are unchanged by #133", () => {
   // Captured from the pre-#133 engine (base 88b0b64); a later balance change must update these knowingly.
   // Seed 13 refreshed from main ed72f0c (pre-#133 engine after #145/#146 fitness/overclock changes).
+  // #195 recommended goal tuning deliberately re-pins seeds 11/13; seed12 is unchanged.
+  // Same inputs, timing and strict score/event/RNG assertions; see docs/balance-195.md.
   const GOLDEN = [
-    { seed: 11, h: 0, a: 15, rc: 2254, score: [2, 1], events: 409, hash: "e5d2e3853031bd1f779251c5f3a020401d1fab057dd59c1ec061be5e41c6a4be" },
+    { seed: 11, h: 0, a: 15, rc: 2265, score: [5, 2], events: 423, hash: "2e8a828f43125a52d168ef85fafffcb37dbe24f5d688b76c76174fc185649eae" },
     { seed: 12, h: 5, a: 6, rc: 2068, score: [2, 0], events: 367, hash: "283e19375049323e703ae1b7b51de620be4ae70832b8b3bf2f19619fe6c95b61" },
-    { seed: 13, h: 9, a: 2, rc: 2096, score: [0, 2], events: 367, hash: "449ba750e54bfcef17b7c62e56676f1ad0aa374c0b36ccee7e78183b797dcc1a" },
+    { seed: 13, h: 9, a: 2, rc: 2668, score: [2, 1], events: 475, hash: "0c3c21d38d4a29b626c4a4fc5a1e659cd2a81d8f90c3eaa49bcde6a84c437fc4" },
   ];
 
   it.each(GOLDEN)("seed $seed reproduces the identical event stream, score and RNG count", (g) => {

@@ -114,7 +114,8 @@ function sql(db, query) {
 // and PB system tables; users compared without tokenKey/updated — those two
 // are the intentional upgrade changes). Every original column, value and row is
 // compared by column name; the only column a later migration may add is listed
-// in ADDED with the value every pre-existing row must read.
+// in ADDED with the value every pre-existing row must read. #195 intentionally
+// updates only the world's two speed fields (and the save timestamp if needed).
 const PRESERV_PY = `
 import sqlite3, json, sys
 db, mode, snap = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -125,6 +126,27 @@ def cols(t):
     return [x[1] for x in c.execute('pragma table_info("' + t + '")')]
 def dump(t, names):
     return sorted((list(r) for r in c.execute('select ' + ','.join('"'+n+'"' for n in names) + ' from "' + t + '"').fetchall()), key=repr)
+def expected_rows(t, names, rows, current):
+    if t != 'world':
+        return rows
+    targets = {'match_minute_real_seconds': 6, 'match_minute_real_ms': 6000}
+    indexes = {n: names.index(n) for n in targets}
+    by_id = {r[names.index('id')]: r for r in current}
+    expected = []
+    for old in rows:
+        row = list(old)
+        needs_save = any(row[indexes[n]] != value for n, value in targets.items())
+        for n, value in targets.items():
+            row[indexes[n]] = value
+        if needs_save and 'updated' in names:
+            after = by_id.get(row[names.index('id')])
+            updated = names.index('updated')
+            # Only the migration's saved rows may get a newer timestamp. Every
+            # other original column, including world lease/bookkeeping, stays exact.
+            if after and after[updated] >= row[updated]:
+                row[updated] = after[updated]
+        expected.append(row)
+    return sorted(expected, key=repr)
 ucols = [x[1] for x in c.execute('pragma table_info(users)') if x[1] not in ('tokenKey', 'updated')]
 users = sorted((list(r) for r in c.execute('select ' + ','.join('"'+n+'"' for n in ucols) + ' from users').fetchall()), key=repr)
 if mode == 'snapshot':
@@ -139,7 +161,8 @@ else:
         added = [n for n in now if n not in b['columns']]
         if missing or sorted(added) != sorted(ADDED.get(t, {})):
             column_changes.append({'table': t, 'missing': missing, 'added': added})
-        if missing or b['rows'] != dump(t, b['columns']):
+        current = [] if missing else dump(t, b['columns'])
+        if missing or expected_rows(t, b['columns'], b['rows'], current) != current:
             changed.append(t)
         for n, v in ADDED.get(t, {}).items():
             if n in added and any(r[0] != v for r in c.execute('select "' + n + '" from "' + t + '"')):
@@ -311,7 +334,7 @@ async function main() {
     const preservRun = spawnSync("python3", [preservPy, DB, "check", snapFile], { encoding: "utf8" });
     if (preservRun.status) throw new Error(`preservation check failed: ${preservRun.stderr}`);
     const preservRes = JSON.parse(preservRun.stdout.trim());
-    ok("upgrade: business tables preserved (F6)", preservRes.changed_tables.length === 0, JSON.stringify(preservRes.changed_tables));
+    ok("upgrade: business tables preserved, except exact #195 world speed update (F6)", preservRes.changed_tables.length === 0, JSON.stringify(preservRes.changed_tables));
     ok(
       "upgrade: only proball_teams.overclock_cost_pending added, false on every existing team (F6)",
       preservRes.column_changes.length === 0 && preservRes.bad_added_values.length === 0,

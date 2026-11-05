@@ -34,7 +34,7 @@
  * The fault spec may instead name {op: "update", field, value}: updating a record of
  * `collection` whose `field` becomes `value` throws once more than `after` have passed.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -408,6 +408,44 @@ async function main() {
     ok(fixturesOf(again.id).length === 6, `${status}: slot repair rolled back (missing fixtures not committed)`);
     ok(setupRows() === retained, `${status}: no state, lineup or round change committed; retained rows byte-identical`);
   }
+
+  console.log("S12 #195 world speed migration preserves played snapshots");
+  await stopPb();
+  // Run the actual PocketBase migration command with no app hooks/cron. All SQL
+  // fixtures below belong to this disposable test database, with its server stopped.
+  const migration = "1750000020_match_speed_6s.js";
+  const emptyHooks = path.join(TMP, "migration-hooks");
+  fs.mkdirSync(emptyHooks);
+  const migrate = (...args) => {
+    const result = spawnSync(PB_BIN, ["migrate", ...args, `--dir=${DATA}`, `--hooksDir=${emptyHooks}`, `--migrationsDir=${path.join(ROOT, "pocketbase/pb_migrations")}`], { encoding: "utf8", input: "y\n", timeout: 30000 });
+    if (result.status !== 0) throw new Error(`migration ${args.join(" ")} failed: ${result.error || ""}\n${result.stdout}\n${result.stderr}`);
+  };
+  const originalWorld = q("select * from world where key = 'main'")[0];
+  ok(originalWorld.match_minute_real_seconds === 6 && originalWorld.match_minute_real_ms === 6000, "new worlds default to 6s/6000ms");
+  exec("update world set match_minute_real_seconds = 8, match_minute_real_ms = 8000 where key = 'main'");
+  for (const [i, sec, ms] of [[1, 15, 15000], [2, 6, 8000], [3, 6, 6000]]) {
+    const row = { ...originalWorld, id: String(i).padStart(15, "s"), key: `speed-test-${i}`, match_minute_real_seconds: sec, match_minute_real_ms: ms };
+    const cols = Object.keys(row);
+    exec(`insert into world (${cols.map(c => `"${c}"`).join(",")}) values (${cols.map(() => "?").join(",")})`, ...Object.values(row));
+  }
+  const snapshots = setupRows();
+  const worldRows = () => q("select * from world order by id");
+  const forget = () => exec("delete from _migrations where file = ?", migration);
+  forget();
+  migrate("up");
+  ok(worldRows().length === 4 && worldRows().every(w => w.match_minute_real_seconds === 6 && w.match_minute_real_ms === 6000), "actual up migrates all old, inconsistent and already-correct worlds to 6s/6000ms");
+  ok(setupRows() === snapshots, "up leaves every round, fixture, match state, event and RNG snapshot byte-identical");
+  const migrated = JSON.stringify(worldRows());
+  forget();
+  migrate("up");
+  ok(JSON.stringify(worldRows()) === migrated, "actual up is idempotent, including world timestamps");
+  exec("update world set match_minute_real_seconds = 12, match_minute_real_ms = 12000 where key = 'speed-test-1'");
+  migrate("down", "1");
+  ok(worldRows().every(w => w.key === "speed-test-1" ? w.match_minute_real_seconds === 12 && w.match_minute_real_ms === 12000 : w.match_minute_real_seconds === 8 && w.match_minute_real_ms === 8000), "best-effort down restores 8s/8000ms while preserving a later admin override");
+  ok(setupRows() === snapshots, "down leaves played snapshots byte-identical");
+  migrate("up");
+  ok(worldRows().every(w => w.match_minute_real_seconds === 6 && w.match_minute_real_ms === 6000), "actual migration can be reapplied after down");
+  ok(setupRows() === snapshots, "reapplication still leaves played snapshots byte-identical");
 }
 
 try {
