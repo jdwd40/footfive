@@ -1312,8 +1312,8 @@ function fixtureCard($app, fx, teams, now, T) {
       var minute = stx ? Math.floor(oddsMod.clockMinute(stx.clk, card.at, now, card.minuteMs)) : 0;
       var fd = oddsMod.finalDist(model, stx || { sc: [0, 0], ph: "pre" }, minute, true);
       card.odds = {
-        home: mkt.okP(fd.qualifyHome),
-        away: mkt.okP(1 - fd.qualifyHome),
+        home: mkt.okP(fd.qualifyHome, oddsMod.inPlay(stx)),
+        away: mkt.okP(1 - fd.qualifyHome, oddsMod.inPlay(stx)),
         closed: state.closed,
       };
     }
