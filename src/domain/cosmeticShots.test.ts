@@ -38,14 +38,19 @@ const { defaultStarters } = lib("tournament.js");
  * Issue #217 re-pins for the more-shots tuning: pin 2d0870bf… → 32359e37…, full b0c4a004… → 969d5225…,
  * steps ccee40cd… → c0dceaf4…. Same inputs, pace, projection and assertions; cosmetic generation/RNG unchanged.
  * See docs/balance-217.md.
+ * Issue #218 re-pins for final-third turnovers (half the failed attacks now draw a progression and a stop): pin 32359e37… →
+ * 8bd5c427…, full 969d5225… → 1cfad7d3…, steps c0dceaf4… → 0cf460db…. Same inputs, pace, projection and assertions; cosmetic
+ * generation/RNG unchanged. See docs/balance-218.md.
+ * #218 review: a through-ball keeper claim is now gathered inside the area (x 86–92, same single draw), which moves ball
+ * positions only: full 1cfad7d3… → 4143b324…, steps 0cf460db… → b874c167…; pin unchanged. See docs/balance-218.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
-  pin: "32359e3717fd564731f85cbcc81eb8911f93280cc21c1eddc903a4eeb6b336df",
+  pin: "8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81",
   /** Every field of every event plus the whole final state. */
-  full: "969d52256f8d9f8dfb3d4ec2e71e6b8ea654425f33e350095a9d434d5e3a2fe1",
+  full: "4143b324ba836466981ea53fc864594729bb070b14c041904bb6176c7a76f7d7",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "c0dceaf40a4b8ad414b96b90ef66b3e1a82b3ce324bd6db94822fe6c5dce30c1",
+  steps: "b874c167e744da1de29debf440822a180a1d219507e90bf08f547e4433b2af22",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
@@ -102,7 +107,7 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
     }
     expect(sha(pin), "engine.test.ts pin").toBe(ORIGINAL.pin);
     expect(sha(full), "full real payload + final state").toBe(ORIGINAL.full);
-  });
+  }, 20000); // heavy deterministic test (~3 s alone) that times out at 5 s under full-suite parallel load
 
   it("saved and reloaded every step: the same stream, cosmetic rows included, and the original match state after every step", () => {
     const steps = createHash("sha256");
@@ -156,7 +161,7 @@ describe("cosmetic rows (issue #73)", () => {
     }
     // Every cosmetic row belongs to exactly one shot → miss|block → bounce run.
     expect(attempts.length * 3).toBe(all.flat().filter(cosmetic).length);
-  });
+  }, 20000); // heavy deterministic test (~3 s alone) that times out at 5 s under full-suite parallel load
 
   it("flagged, never a goal, no chain, never major or ticker; both misses and blocks", () => {
     for (const { rows } of attempts) {
@@ -237,8 +242,9 @@ describe("cosmetic rows (issue #73)", () => {
     }
   });
 
-  // #217: more real attacking minutes leave fewer minutes with spare time, so the 8 s mean over these 200 seeds fell from 2.28 to 1.84.
-  it("spectacle stays moderate: about two extra attempts a match at the live pace (real shots: about 21); none at a 1 s test pace", () => {
+  // #217: more real attacking minutes leave fewer minutes with spare time, so the 8 s mean over these 200 seeds fell from 2.28 to 1.84
+  // (#218: 2.00). These matches run at the legacy 8 s snapshot (LIVE), not the 6 s live pace, where the mean is about 1.6.
+  it("spectacle stays moderate: about two extra attempts a match at an 8 s snapshot (real shots: about 20); none at a 1 s test pace", () => {
     const per = all.map((events) => events.filter((e) => cosmetic(e) && e.t === "shot").length);
     const mean = per.reduce((a, b) => a + b, 0) / per.length;
     expect(mean).toBeGreaterThan(1.5);

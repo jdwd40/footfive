@@ -153,7 +153,7 @@ function head(e: MatchEvent) {
  * and only to put its own header's runner on his box point (see the cross scene); nothing of it reaches the scene's metadata.
  */
 export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent, prevLift = 0): Scene | null {
-  const s = build(e, prevBall, minuteMs, next);
+  const s = build(e, prevBall, minuteMs, next, prevLift);
   if (s) {
     s.tempo = tempoFor(e, s);
     const move = moveOf(e, prevBall, prevLift);
@@ -189,6 +189,51 @@ function moveOf(e: MatchEvent, prevBall: Pt, prevLift: number): Move | undefined
   return undefined;
 }
 
+/**
+ * #218: a failed attack dealt with in the final third. `e.side` is the defending side, `from` where the ball is met (the end of
+ * the through ball, the box point a cross is delivered to), `ball` where the defending side has it.
+ * `lifted`: the ball arrives in the air (a cross).
+ * - claim: the keeper comes off his line and gathers it at `ball` (WON IT as he has it); the attacker arrives too late.
+ * - clear: a defender meets it goal-side of the attacker and clears it upfield (WON IT on contact), a team-mate collects at `ball`.
+ * Engine spots unchanged; the ball ends with the defending side, so the next scene starts from it.
+ */
+function stopScene(e: MatchEvent, base: ReturnType<typeof head>, at: Pt, end: Pt, d: (base: number, floor?: number) => number, lifted: boolean): Scene {
+  const side = (e.side || "home") as Side; // the defending side, which wins it
+  const atk = other(side); // the attacking side, which loses it
+  const s = e.seq;
+  const lat = at[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch
+  const off = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(atk, along), p[1] + lat * across]); // `along`: towards the defended goal
+  if (e.stop === "claim") {
+    const gk = keeperSpot(side);
+    const meet = lerp(at, end, 0.5);
+    return {
+      ...base,
+      ms: d(1800),
+      won: 0.5,
+      ball: [at, meet, end, end, end],
+      ballHeight: lifted ? [0.6, 0.55, 0.45, 0.4, 0.35] : [0, 0, 0, 0, 0], // a cross is caught in the air
+      actors: [
+        { id: "win", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, end, 0.6), end, end, end] },
+        { id: "lost", side: atk, label: short(e.p2), path: [off(at, -3, 2), off(meet, -2.5, 1.5), off(end, -2, 1.5), off(end, -1.5, 1.8), off(end, -1.5, 2)] },
+      ],
+    };
+  }
+  const c = off(at, 1, 0); // contact: a touch on from where it was met, goal-side of the attacker
+  const flight = lerp(c, end, 0.5);
+  return {
+    ...base,
+    ms: d(2200),
+    won: 0.25,
+    ball: [at, c, flight, end, end],
+    ballHeight: [lifted ? 0.6 : 0, lifted ? 0.65 : 0.3, 0.9, 0, 0], // headed away off a cross, else hacked clear
+    actors: [
+      { id: "win", side, label: short(e.p), path: [off(c, 4, 2.5), c, off(c, 1, -0.5), off(c, 1.5, -1), off(c, 1.5, -1)] },
+      { id: "lost", side: atk, label: short(e.p2), path: [off(at, -2, 1.5), off(c, -1.5, 1.5), off(c, -1, 1.8), off(c, -0.5, 2), off(c, -0.5, 2)] },
+      { id: "col", side, path: [off(end, -4, 3 + jit(s, 5, 2)), off(end, -3, 2), off(end, -1.5, 1), end, off(end, -1.5, 0)] }, // collects the clearance
+    ],
+  };
+}
+
 /** #190: results that carry on the shot's flight (penalties have their own). */
 const RESULTS = new Set(["goal", "save", "block", "miss", "woodwork"]);
 /** The longest launch a shot scene gives the ball before its result is published (long shots, see the shot scene), plus slack. */
@@ -217,7 +262,7 @@ function onLeg(a: Pt, b: Pt, p: Pt) {
   return u > 0 && u < 1 && perp < 2.5;
 }
 
-function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent): Scene | null {
+function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent, prevLift = 0): Scene | null {
   const d = pace(minuteMs);
   const side = (e.side || "home") as Side;
   const atk = side;
@@ -354,9 +399,12 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         // box and meets the lifted ball there. Runner and box point come from the next published event when it is this cross's own
         // header (a shot with `header`, same side and chain, the very next seq): the player who heads it is the one who arrives — the
         // feeder himself carries on into the box when he is the one. Otherwise an unlabelled runner attacks the far post: no named
-        // outcome is invented. Nothing else is read from `next`; the scene's metadata is this event's.
+        // outcome is invented. #218: when the next row is this cross's claim or clearance, it is delivered to that row's `from` (still
+        // unlabelled). Nothing else is read from `next`; the scene's metadata is this event's.
         const header = next && next.t === "shot" && !!next.header && next.side === e.side && next.chain === e.chain && next.seq === e.seq + 1 && next.ball ? next : null;
-        const box: Pt = header ? (header.ball as Pt) : [goalX(atk) - toward(atk, 13), recv[1] < GOAL_Y ? GOAL_Y + 4 : GOAL_Y - 4];
+        // #218: a cross the defence deals with (the chain's very next row is its claim or clearance) is delivered to where it is met.
+        const stopped = !header && next && next.stop && next.side !== e.side && next.chain === e.chain && next.seq === e.seq + 1 && next.from ? next : null;
+        const box: Pt = header ? (header.ball as Pt) : stopped ? (stopped.from as Pt) : [goalX(atk) - toward(atk, 13), recv[1] < GOAL_Y ? GOAL_Y + 4 : GOAL_Y - 4];
         const hLabel = header && short(header.p) !== short(e.p2) ? short(header.p) : undefined;
         const feederRuns = !!hLabel && hLabel === short(e.p);
         const fwd = (p: Pt, k: number): Pt => clampPt([p[0] + toward(atk, k), p[1]]);
@@ -448,7 +496,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
     }
     case "tackle":
     case "interception": {
-      // A visible challenge: the loser has the ball at `from` and takes it on (tackle) or plays it (interception) towards `ball`;
+      if (e.stop === "claim" || e.stop === "clear") return stopScene(e, base, from, ball, d, prevLift > 0);
+      // A visible challenge (#218: a last-ditch tackle in the final third too): the loser has the ball at `from` and takes it on (tackle) or plays it (interception) towards `ball`;
       // the winner closes from goal-side and has it there halfway through (`won`: WON IT), then keeps it. Engine spots unchanged.
       const at = from;
       const end = ball;

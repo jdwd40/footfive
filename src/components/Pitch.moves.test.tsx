@@ -246,7 +246,9 @@ function team(i: number) {
 
 describe("Pitch move effects at catch-up speed (#205)", () => {
   it("never pile up: a fast-forwarded backlog keeps the same four effect nodes and a bounded drawing every tick", () => {
-    const st = eng.createMatch({ fixtureId: "cu", seed: 4242, kickoffAt: 0, home: team(3), away: team(9), timing: eng.buildTiming(6000, 1) });
+    // #218: the final-third turnovers' extra draws left seed 4242's first 100 events with no cross or long shot; 4243 has
+    // through balls, crosses and a long shot.
+    const st = eng.createMatch({ fixtureId: "cu", seed: 4243, kickoffAt: 0, home: team(3), away: team(9), timing: eng.buildTiming(6000, 1) });
     const events: MatchEvent[] = eng.advanceTo(st, 1e12).slice(0, 100);
     const lineups = Object.fromEntries((["home", "away"] as Side[]).map((s) => [s, st.teams[s].players.map((p: { name: string; no: number; role: string; is_starter: boolean }) => ({ name: p.name, no: p.no, role: p.role, starter: p.is_starter }))])) as Lineups;
     const scenes: Scene[] = [];

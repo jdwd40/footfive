@@ -84,7 +84,8 @@ function engineCrosses(n = 24) {
     const events: MatchEvent[] = eng.advanceTo(st, 1e12);
     let prev: Pt = [50, 32];
     events.forEach((e, k) => {
-      if (e.t === "cross") out.push({ c: e, n: events[k + 1], prev, lineups: { home: lineup(home), away: lineup(away) } });
+      // #218: a cross the defence claims or clears is followed by that turnover, not a header (see finalThirdStops.test.ts).
+      if (e.t === "cross" && events[k + 1]?.t === "shot") out.push({ c: e, n: events[k + 1], prev, lineups: { home: lineup(home), away: lineup(away) } });
       const s = sceneFor(e, prev, 15000, events[k + 1]);
       if (s) prev = end(s);
     });

@@ -590,6 +590,11 @@ function attack(st, out, ctx, side, c) {
     last = recv;
   }
 
+  // #218: about half of the failed attacks get into the final third first — a progression shaped like the shot path's — and die
+  // there: a last-ditch tackle or a clearance after a dribble or through ball, a keeper claim or a clearance after a cross or
+  // through ball. Markets suspend with the progression and reopen with the turnover, as for a shot and its result.
+  if ((outcome === "tackle" || outcome === "interception") && rnd(st) < M.deepTurnoverRate) return deepTurnover(st, out, ctx, side, outcome, chain, f, last, x, y, ball);
+
   if (outcome === "tackle" || outcome === "interception") {
     f += STEP;
     var d = defender(st, def);
@@ -729,6 +734,93 @@ function attack(st, out, ctx, side, c) {
   if (outcome === "miss" || (outcome === "block" && rnd(st) < 0.45)) bounce(st, out, ctx, f + 0.06, def, chain);
 }
 
+/**
+ * #218: a failed attack that reaches the final third. `outcome` (tackle / interception) is already decided; this only says where
+ * and how the move dies. The progression (x 74–82, the shot path's shapes) is published with markets suspended; the turnover
+ * row (same type as before, `stop`: "tackle" | "clear" | "claim") reopens them and leaves the ball with the defending side.
+ * `from` on the turnover is where the defender (or keeper) meets the ball: the end of a dribble or through ball, the box point a
+ * cross is delivered to. All randomness via rnd(st).
+ */
+function deepTurnover(st, out, ctx, side, outcome, chain, f, last, x, y, ball) {
+  var def = OTHER[side];
+  var STEP = 0.11;
+  f += STEP;
+  var kind = outcome === "tackle" ? pick(st, ["dribble", "through_ball"]) : pick(st, ["cross", "through_ball", "cross"]);
+  var stop = outcome === "tackle" ? (rnd(st) < 0.6 ? "tackle" : "clear") : rnd(st) < 0.5 ? "claim" : "clear";
+  var runner = kind === "dribble" ? last : attacker(st, side, last);
+  var from = ball;
+  x = 74 + rnd(st) * 8;
+  y = kind === "cross" ? (y < 32 ? 5 + rnd(st) * 6 : 53 + rnd(st) * 6) : clamp(20 + rnd(st) * 24, 14, 50);
+  ball = pos(side, x, y);
+  st.danger = true;
+  emit(st, out, ctx.at(f), kind, {
+    side: side,
+    chain: chain,
+    p: kind === "dribble" ? runner.name : last.name,
+    p2: runner.name,
+    from: from,
+    ball: ball,
+    text:
+      kind === "through_ball"
+        ? pick(st, [last.name + " threads a through ball for " + runner.name, "Defence split — " + last.name + " releases " + runner.name])
+        : kind === "dribble"
+          ? pick(st, [runner.name + " drives at the " + abbr(st, def) + " defence", runner.name + " skips past a challenge"])
+          : last.name + " goes wide to " + runner.name + ", who crosses",
+    clk: ctx.clk(f),
+  });
+
+  // Where the ball is met: a cross is delivered into the box (the header's spot on the shot path); otherwise at the progression.
+  var mx = x;
+  var my = y;
+  if (kind === "cross") {
+    mx = 84 + rnd(st) * 6;
+    my = 24 + rnd(st) * 16;
+  }
+  var meet = pos(side, mx, my);
+  var victim = kind === "cross" ? attacker(st, side, runner) : runner;
+  var who = stop === "claim" ? keeper(st, def) : defender(st, def);
+  var end;
+  var text;
+  if (stop === "claim") {
+    // He comes off his line and gathers it inside his area (x 86–92; the box starts at 85): the cross carrying on a few yards,
+    // the through ball running through to him. One draw either way.
+    end = pos(side, kind === "cross" ? Math.min(mx + 2 + rnd(st) * 3, 92) : 86 + rnd(st) * 6, my + (32 - my) * 0.3);
+    text =
+      kind === "cross"
+        ? pick(st, [who.name + " comes for the cross and claims it", "Safe hands — " + who.name + " plucks it out of the air", who.name + " rises above " + victim.name + " to catch it"])
+        : pick(st, [who.name + " races off his line to gather", who.name + " is out quickly to smother it at " + victim.name + "'s feet", "Too heavy — " + who.name + " collects"]);
+  } else if (stop === "clear") {
+    // Cleared upfield, where a team-mate collects it.
+    end = pos(side, 42 + rnd(st) * 14, clamp(my + (rnd(st) - 0.5) * 30, 8, 56));
+    text =
+      kind === "cross"
+        ? pick(st, [who.name + " heads it clear", who.name + " gets in front of " + victim.name + " and heads it away", "Cleared! " + who.name + " attacks the cross"])
+        : pick(st, [who.name + " gets back to clear the danger", who.name + " hacks it clear before " + victim.name + " can shoot", "Cleared! " + who.name + " sweeps it away"]);
+  } else {
+    // Last-ditch tackle: he slides in as the attacker takes it on, and has it just short of the box.
+    end = pos(side, Math.min(mx + 2 + rnd(st) * 3, 84), clamp(my + (rnd(st) - 0.5) * 8, 6, 58));
+    text = pick(st, ["Last-ditch tackle! " + who.name + " stops " + victim.name, who.name + " slides in to deny " + victim.name + " at the last", "Great challenge — " + who.name + " takes it off " + victim.name + "'s toe"]);
+  }
+
+  // A cross or dribble scene runs longer than a through ball's: the stop waits for it, so the live view never cuts it short.
+  f += kind === "through_ball" ? STEP : 0.15;
+  st.danger = false; // the turnover is public with this event, so markets reopen
+  emit(st, out, ctx.at(f), outcome, {
+    side: def,
+    chain: chain,
+    p: who.name,
+    p2: victim.name,
+    from: meet,
+    ball: end,
+    stop: stop,
+    text: text,
+    clk: ctx.clk(f),
+  });
+  st.ball = end;
+  st.counter = def;
+  st.bs = def;
+}
+
 /** Ball hits a board and comes back into play; `side` is the team that picks it up. */
 function bounce(st, out, ctx, f, side, chain) {
   var wall = rnd(st) < 0.5 ? "side" : "end";
@@ -758,7 +850,7 @@ function bounce(st, out, ctx, f, side, chain) {
  * before nextAt and never touch ctx.pause, so no real event moves; stats, score, danger, markets and outcomes are untouched.
  */
 var COS = {
-  rate: 0.3, // chance per eligible minute: two or three extra attempts a match at the live pace (real shots: about 16)
+  rate: 0.3, // chance per eligible minute: about one and a half extra attempts a match at the live 6 s pace (real shots: about 21)
   minAlong: 45, // the side in possession has the ball at least this far up the pitch (its attacking direction)
   missShare: 0.6, // otherwise blocked
   // Spacing in fractions of a minute, as a real move: after the last real event, to the result, back off the boards, and

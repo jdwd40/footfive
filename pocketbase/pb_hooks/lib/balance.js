@@ -73,6 +73,9 @@ var BALANCE = {
     longShotMinX: 58,
     longShotMaxX: 70,
     longShotSaveBonus: 0.15,
+    // #218: share of tackle/interception attacks that first reach the final third (a cross, through ball or dribble into
+    // x 74–82) and die there to a last-ditch tackle, a clearance or a keeper claim. Outcomes are unchanged; only where they happen.
+    deepTurnoverRate: 0.5,
     possK: 0.004,
     penBase: 0.006,
     penK: 0.0002,

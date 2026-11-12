@@ -161,7 +161,11 @@ function carrierActor(scene: Scene, t: number): string | null {
       if (scene.touch === "carry" || scene.touch === "hold") return t <= 0.48 ? "p" : t >= 0.97 ? "r" : null; // on the ball until the release (#104)
       return scene.type === "dribble" ? "p" : t <= 0.08 ? "p" : t >= 0.97 ? "r" : null;
     }
-    case "tackle": case "interception": return t >= (scene.won ?? 0.5) ? "win" : t <= (scene.type === "tackle" ? 0.45 : 0.08) ? "lost" : null;
+    case "tackle": case "interception": {
+      if (scene.actors.some(a => a.id === "col")) return t >= 0.75 ? "col" : t >= 0.2 && t <= 0.3 ? "win" : null; // #218 clearance: the header/hack, then the collector
+      if (scene.actors.some(a => a.id === "win" && a.keeper)) return t >= (scene.won ?? 0.5) ? "win" : null; // #218 keeper claim: a free ball until he has it
+      return t >= (scene.won ?? 0.5) ? "win" : t <= (scene.type === "tackle" ? 0.45 : 0.08) ? "lost" : null;
+    }
     case "save": return t >= 2 / 3 ? "gk" : null;
     case "block": return t >= 0.5 ? "b" : null;
     case "woodwork": return t >= 0.97 ? "gk" : null;

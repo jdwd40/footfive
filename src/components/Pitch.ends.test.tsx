@@ -19,7 +19,9 @@ const team = (i: number) => {
 // Seed 1024 checked against the #133 engine: these two manual Balanced sides play extra time
 // and a shootout with kicks from both. The engine's seeded outcomes shift with any engine
 // tuning (see the 200-seed pin in engine.test.ts); the precondition test below says so first.
-const state = eng.createMatch({ seed: 1024, fixtureId: "ends", kickoffAt: 0, home: team(10), away: team(9), timing: eng.buildTiming(8000, 1) });
+// #218: the final-third turnovers' extra draws moved seed 1024 off a shootout; 1031 is the next seed that plays extra time and a
+// shootout with kicks from both, with the ball off-centre at every break.
+const state = eng.createMatch({ seed: 1031, fixtureId: "ends", kickoffAt: 0, home: team(10), away: team(9), timing: eng.buildTiming(8000, 1) });
 const events = eng.advanceTo(state, 1e13) as MatchEvent[];
 const lineups = Object.fromEntries(["home", "away"].map(side => [side, state.teams[side].players.map((p: { name: string; no: number; role: string; is_starter: boolean }) => ({ name: p.name, no: p.no, role: p.role, starter: p.is_starter }))])) as { home: LineupPlayer[]; away: LineupPlayer[] };
 const home = { name: "Home", abbreviation: "HOM" } as TeamPublic;

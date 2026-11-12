@@ -62,6 +62,7 @@ export type MatchEvent = {
   turn?: number; // 1 on the first touch after the ball changed hands (build_up / first pass of a minute)
   header?: number;
   long?: number; // 1 on a shot from distance (engine-published)
+  stop?: "tackle" | "clear" | "claim"; // #218: a tackle/interception that ends an attack in the final third: last-ditch tackle, clearance or keeper claim
   post?: string;
   pen?: PenPlan;
   kick?: { no: number; sd: number; must?: number; win?: number; outcome?: string; decisive?: number };
