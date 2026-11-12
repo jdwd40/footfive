@@ -52,14 +52,22 @@ Live view (`src/domain/scenes.ts`, `sim.ts`):
 Measured on 2026-11-12. Baseline: the #217 head 6e61cec (PR #221), on which this
 branch is stacked. Main is b4b7467, for context.
 
-### Harness: production pace, all 240 pairings, 4,800 matches
+### Production pace, all 240 pairings, 4,800 matches
 
 ```bash
-node harness/engine-stats.mjs --root <root> --matches 4800 --workers 3
+node scripts/engine-calibrate.mjs 4800 --pairs all                 # in-repo, reproduces every engine figure below
+node scripts/engine-calibrate.mjs 4800 --pairs all --prefix alt    # seed-robustness rows (also: zz)
+node harness/engine-stats.mjs --root <root> --matches 4800 --workers 3   # external harness, same fixtures and numbers
 ```
 
+`--pairs all` uses the harness's fixtures. Match `i` is seeded `hashSeed(prefix + i)`, the
+fixtures walk all 240 ordered pairings with equal weight, and matches run at 6 s minutes.
+Its `goalsPerMatch`, `shotsPerMatch`, `longestShotGap`, `longestChanceGap`,
+`finalThirdEntries` and `modelVsSim` match the harness's figures exactly (#217: 3.37 /
+21.1 / 14.76 / 13.88 / 19.45 / +2.5%; #218: 3.41 / 21.1 / 14.84 / 10.76 / 27.33 / +1.8%).
+
 The harness lives outside the repo, in `ff-wt/harness`. For #218, the run used a copy
-with one change to its definitions:
+with one change to its definitions, which the in-repo `longestChanceGap` shares:
 
 - **Chance gap.** The "longest gap between chances" now counts a real progression into
   the final third (through ball, dribble or cross) as a chance, as well as real shots and
@@ -122,10 +130,10 @@ more time in the final third.
 
 ### `node scripts/engine-calibrate.mjs 3000`
 
-The script now also reports `finalThirdEntries`, `finalThirdStops` and
-`longestChanceGap`. Unlike the harness, it does not count cosmetic tries as chances. It
-uses its own 16 pairings and a 15 s snapshot. The "Before" column ran the updated script
-against #217's engine.
+The script now also reports `goalsPerMatch`, `finalThirdEntries`, `finalThirdStops`
+and `longestChanceGap` (real shots, progressions and cosmetic tries). Without
+`--pairs all`, it keeps its own 16 pairings and a 15 s snapshot. The "Before" column ran
+the updated script against #217's engine.
 
 | Metric | Before (#217) | After |
 |---|---:|---:|
@@ -135,7 +143,7 @@ against #217's engine.
 | Favourite wins | 83% | 83% |
 | Shots/match | 21.0 | 21.2 |
 | Longest shot gap, mean / p90 (min) | 14.80 / 21.1 | 14.90 / 21.2 |
-| Longest chance gap (min) | 14.70 | 11.26 |
+| Longest chance gap (min) | 13.60 | 10.59 |
 | Final-third entries / stops per match | 19.37 / 0 | 27.48 / 7.96 |
 | Model vs sim | +4.0% | +2.3% |
 
@@ -158,6 +166,11 @@ Seeds, timing, projections and strict equality assertions are unchanged.
 | 13 | [0, 3] / 2325 / 417 | [1, 2] / 2488 / 453 | `3254f936fda617155618c0bde31ac6e5af3125529f101aa15940777a386167b0` |
 
 Other test changes:
+- `cosmeticShots.test.ts`, "spectacle stays moderate": these matches run at the legacy 8 s
+  snapshot, and the title now says so. The 8 s mean is 2.00 (#217: 1.84); the bounds are
+  unchanged. At the live 6 s pace the mean is about 1.6, and `COS.rate`'s comment now says
+  so. The pinned-baseline and transport tests get the same 20 s timeout as the
+  save/reload test. All three are heavy and can time out at 5 s under full-suite load.
 - `scenes.test.ts`:
   - The contest test skips claims and clearances, which have their own scene. A
     last-ditch tackle is still checked as a contest.

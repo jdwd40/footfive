@@ -849,7 +849,7 @@ function bounce(st, out, ctx, f, side, chain) {
  * before nextAt and never touch ctx.pause, so no real event moves; stats, score, danger, markets and outcomes are untouched.
  */
 var COS = {
-  rate: 0.3, // chance per eligible minute: two or three extra attempts a match at the live pace (real shots: about 16)
+  rate: 0.3, // chance per eligible minute: about one and a half extra attempts a match at the live 6 s pace (real shots: about 21)
   minAlong: 45, // the side in possession has the ball at least this far up the pitch (its attacking direction)
   missShare: 0.6, // otherwise blocked
   // Spacing in fractions of a minute, as a real move: after the last real event, to the result, back off the boards, and
