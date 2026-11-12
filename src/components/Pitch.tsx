@@ -242,6 +242,18 @@ function MoveFx({ fx, players, projectX, revealed }: { fx: Fx | null; players: F
   );
 }
 
+/** #216: the chasing side has the ball: a soft band pulses along the goal line it attacks, in its colour. One fixed node, hidden
+ * otherwise and during a replay (it marks live play only); reduced motion holds it steady (CSS). */
+function UrgePulse({ side, right, colour }: { side: Side | null; right: boolean; colour: string }) {
+  const at = (w: number) => (right ? W - w : 0);
+  return (
+    <g className="urge-pulse" display={side ? undefined : "none"} pointerEvents="none" data-testid="urge-pulse" data-side={side ?? undefined}>
+      <rect x={at(7)} y={0} width={7} height={H} fill={colour} opacity={0.12} />
+      <rect x={at(1.4)} y={0} width={1.4} height={H} fill={colour} opacity={0.45} />
+    </g>
+  );
+}
+
 export default function Pitch({ frame, home, away, replay, revealed, hud, minute, replayed }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
@@ -330,6 +342,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud, minute
       <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: pitchMaxWidth }} data-testid="pitch">
         <svg viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <Field />
+        <UrgePulse side={replay ? null : frame?.urge ?? null} right={!!frame?.urge && x(frame.urge === "home" ? W : 0) > W / 2} colour={frame?.urge === "away" ? ac : hc} />
         <MoveFx fx={held ? null : frame?.fx ?? null} players={frame?.players ?? []} projectX={x} revealed={revealed} />
 
         {frame?.players.map((p) => {

@@ -447,3 +447,31 @@ describe("Pitch stadium frame (#204)", () => {
     expect(container.querySelectorAll("svg *").length).toBeLessThan(200);
   });
 });
+
+describe("Pitch late pressure pulse (#216)", () => {
+  const pulse = () => screen.getByTestId("urge-pulse");
+  const band = () => pulse().querySelector("rect")!;
+  it("shows only while the frame carries the chasing side's spell on the ball, along the end it attacks, in its colour", () => {
+    const { rerender } = render(<Pitch frame={frame({ phase: "first_half" })} home={home} away={away} revealed />);
+    expect(pulse().getAttribute("display")).toBe("none");
+    rerender(<Pitch frame={frame({ phase: "first_half", urge: "home" })} home={home} away={away} revealed />);
+    expect(pulse().getAttribute("display")).toBeNull();
+    expect(pulse().getAttribute("data-side")).toBe("home");
+    expect(pulse().classList.contains("urge-pulse")).toBe(true); // the CSS pulse (held steady under reduced motion)
+    expect(Number(band().getAttribute("x"))).toBeGreaterThan(50); // home attacks the right-hand end in the first half
+    expect(band().getAttribute("fill")).toBe("#00f0ff");
+    // Second half: the ends are swapped on screen, so the away side chasing attacks the right-hand end again, in its colour.
+    rerender(<Pitch frame={frame({ phase: "second_half", urge: "away" })} home={home} away={away} revealed />);
+    expect(Number(band().getAttribute("x"))).toBeGreaterThan(50);
+    expect(band().getAttribute("fill")).toBe("#ff2d95");
+    rerender(<Pitch frame={frame({ phase: "second_half", urge: "home" })} home={home} away={away} revealed />);
+    expect(Number(band().getAttribute("x"))).toBe(0);
+    // A replay (#206) re-draws an old move: the pulse marks live play only.
+    rerender(<Pitch frame={frame({ phase: "second_half", urge: "home" })} home={home} away={away} revealed replay />);
+    expect(pulse().getAttribute("display")).toBe("none");
+    // Full time: the match_end frame never carries it (frameAt), so the band is gone with the FT banner up.
+    rerender(<Pitch frame={frame({ phase: "finished", type: "match_end", side: "home", p: 0.5, ms: 5000, score: [2, 1] })} home={home} away={away} revealed />);
+    expect(pulse().getAttribute("display")).toBe("none");
+    expect(screen.getByTestId("ft-banner")).toBeTruthy();
+  });
+});

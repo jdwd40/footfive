@@ -7,7 +7,7 @@ import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
 import { commentaryLine, feedRows } from "../domain/commentary";
-import { sampleN, sceneFor, type Pt, type Scene } from "../domain/scenes";
+import { sampleN, sceneFor, withCoaching, type Pt, type Scene, type Stances } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
 import { autoReplay, replayStarted, type ReplayMemo } from "../domain/replay";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
@@ -216,8 +216,10 @@ export default function MatchPage() {
     const m = new Map<number, Scene>();
     let prev: Pt = [50, 32];
     let lift = 0; // #190: a result carries on a lifted shot (header, long shot) from its height
+    let stances: Stances = {}; // #216: coaching stances published so far, for the late push of a side chasing the game
     for (const [i, e] of events.entries()) {
-      const s = sceneFor(e, prev, minuteMs, events[i + 1], lift) ?? idleScene(e, prev); // a cross reads its own already-fetched header
+      stances = withCoaching(stances, e);
+      const s = sceneFor(e, prev, minuteMs, events[i + 1], lift, stances) ?? idleScene(e, prev); // a cross reads its own already-fetched header
       prev = s.ball[s.ball.length - 1];
       lift = sampleN(s.ballHeight, 1);
       m.set(e.seq, { ...s, caption: commentaryLine(events, i, { home: homeLabel, away: awayLabel }) });
