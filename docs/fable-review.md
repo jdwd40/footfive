@@ -1,6 +1,6 @@
 # Fable review policy
 
-Fable 5.1 is an additional reviewer for PRs with the `fable-review` label. It does
+Fable (5.1 or 5.2) is an additional reviewer for PRs with the `fable-review` label. It does
 not replace the normal independent reviewer or CI. Unlabelled work receives no
 Fable review. The lead verifies the actual model and preserves its selected
 effort, session and pane; a tab name alone is not model evidence.
@@ -61,7 +61,8 @@ claimed by another commenter. It does not cryptographically attest model executi
 ```
 ````
 
-A completed record also requires `"verdict": "SHIP"` or `"DO NOT SHIP"`.
+`model` is `claude-fable-5-1` or `claude-fable-5-2` (the owner authorised 5.2 on
+2026-11-12) and must name the version that actually ran. A completed record also requires `"verdict": "SHIP"` or `"DO NOT SHIP"`.
 Each finding has `severity` (`blocker`, `major`, `minor` or `info`) and should
 include its location, failure and resolution condition. Include the observed
 model/session, tested commit and actual checks in the accompanying report.

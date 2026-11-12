@@ -6,7 +6,7 @@ agent models, effort settings, panes and sessions. Follow the current user scope
 ## Required review before merge
 
 Every PR needs the normal independent reviewer and green CI. A PR labelled
-`fable-review` additionally needs Fable 5.1. Read [the review policy](docs/fable-review.md)
+`fable-review` additionally needs Fable (5.1 or 5.2). Read [the review policy](docs/fable-review.md)
 before requesting that review or merging a labelled PR.
 
 - Never invoke Fable for an unlabelled PR, including UI polish, playtest tweaks and

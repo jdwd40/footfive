@@ -17,6 +17,13 @@ const comment = (r = record(), id = 1, login = "jdwd40") => ({ id, user: { login
 const gate = (comments, changes = {}) => evaluateGate({ pr: pr(), comments, repo, ...changes });
 const blocked = (result, code) => { assert.equal(result.ok, false); assert.equal(result.code, code); };
 
+test("record model must be an authorised Fable version", () => {
+  assert.equal(gate([comment(record(1, { model: "claude-fable-5-2" }))]).ok, true);
+  for (const model of ["claude-fable-5-3", "claude-opus-5-5", "Claude-Fable-5-2", undefined]) {
+    blocked(gate([comment(record(1, { model }))]), "malformed-record");
+  }
+});
+
 test("unlabelled PR passes without comment state", () => {
   assert.equal(evaluateGate({ pr: pr({ labels: [] }) }).code, "not-required");
 });
