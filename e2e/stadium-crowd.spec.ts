@@ -84,8 +84,10 @@ for (const viewport of [{ width: 320, height: 700 }, { width: 360, height: 800 }
     const baselineGoalStyle = await page.addStyleTag({ content: ".stadium { display: contents !important; } .stadium-stand { display: none !important; }" });
     const baselineAfter = (await pitch.boundingBox())!;
     for (const key of ["x", "y", "width", "height"] as const) expect(after[key]).toBeCloseTo(baselineAfter[key], 2);
-    // The pre-existing empty ticker can wrap on phones. The crowd must add no shift to that original layout.
+    // The crowd adds no shift to the original layout, and (#207) the layout itself no longer shifts through the goal: the empty
+    // ticker no longer wraps on phones, so the pitch stays exactly where it was.
     expect(after.y - before.y).toBeCloseTo(baselineAfter.y - baseline.y, 2);
+    expect(after.y).toBeCloseTo(before.y, 2);
     for (const key of ["x", "width", "height"] as const) expect(after[key]).toBeCloseTo(before[key], 2);
     await testInfo.attach("stadium-layout", { body: JSON.stringify({ before, baseline, after, baselineAfter }), contentType: "application/json" });
     await baselineGoalStyle.evaluate(el => el.remove());

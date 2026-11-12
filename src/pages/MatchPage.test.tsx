@@ -1,4 +1,4 @@
-import { render, screen, act, cleanup, fireEvent, within } from "@testing-library/react";
+import { render, screen, act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { minuteLabel } from "../lib/live";
@@ -81,19 +81,23 @@ async function mount(v?: MatchView) {
 
 describe("MatchPage timeline player", () => {
   afterEach(() => vi.useRealTimers()); // a failed fake-Date test must not leak into the next
-  it("pins a HUD on the pitch with the shown score and clock; in a shootout also the normal score, the pens score and who kicks next — shootout goals never touch the score", async () => {
+  it("shows the score once, on the scoreboard: in a shootout also the pens score and who kicks next — shootout goals never touch the score, and the pitch carries no score strip (#207)", async () => {
     const now = Date.now();
     const so = { h: 2, a: 1, th: 3, ta: 2, first: "home", next: "away", sd: false, k: [] } as unknown as NonNullable<MatchView["fixture"]["st"]>["so"];
     const pens = { ...st!, ph: "shootout", sc: [1, 1] as [number, number], so } as NonNullable<MatchView["fixture"]["st"]>;
     const kick: MatchEvent = { ...ev(1, now - 30000, "Steps up"), t: "shootout_setup", side: "away" as const, kick: { no: 3, sd: 0 }, st: pens };
     await mount(view([kick], { home: names("Home"), away: names("Away") }, now));
-    const hud = screen.getByTestId("pitch-hud");
-    expect(screen.getByTestId("pitch").contains(hud)).toBe(true);
-    expect(screen.getByTestId("hud-score").textContent).toBe("HOM 1–1 AWA");
-    expect(screen.getByTestId("hud-pens").textContent).toBe("PENS 2–1");
-    expect(screen.getByTestId("hud-kicker").textContent).toBe("AWA to kick");
+    // #207: the score appeared three times (scoreboard, a HUD strip on the pitch, the ticker); now only the scoreboard has it.
+    expect(screen.queryByTestId("pitch-hud")).toBeNull();
+    expect(screen.queryByTestId("hud-score")).toBeNull();
+    expect(screen.getAllByTestId("match-score")).toHaveLength(1);
     expect(screen.getByTestId("match-score").textContent).toBe("1–1");
-    expect(hud.textContent).toContain("PENS");
+    expect(screen.getByTestId("match-shootout-score").textContent).toBe("PENS 2–1");
+    expect(screen.getByTestId("match-kicker").textContent).toBe("AWA to kick");
+    const board = screen.getByTestId("match-scoreboard");
+    expect(board.contains(screen.getByTestId("match-shootout-score"))).toBe(true);
+    expect(board.contains(screen.getByTestId("match-kicker"))).toBe(true);
+    expect(screen.getByTestId("pitch").textContent).not.toContain("1–1");
   });
   it("renders 10 players and the commentary of the event under the playhead", async () => {
     const now = Date.now();
@@ -620,7 +624,7 @@ describe("MatchPage timeline player", () => {
     const pass = { ...ev(2, now - 30000, "Pass"), st: one! };
     const goal2 = { ...ev(3, now - 1500 - 0.9 * 3800, "GOAL TWO"), t: "goal", target: [100, 32] as [number, number], st: two!, major: 1 };
     await mount(view([goal1, pass, goal2], null, now));
-    const local = within(screen.getByRole("region", { name: "Match events" }));
+    const local = within(screen.getByRole("region", { name: "Live events" }));
     fireEvent.click(local.getByTestId("ticker-toggle"));
     expect(screen.getByTestId("match-score").textContent).toBe("2–0");
     await act(async () => {
@@ -710,49 +714,71 @@ describe("MatchPage timeline player", () => {
     expect(screen.queryAllByTestId("player")).toHaveLength(0);
   });
 
-  it("shows the other-match ticker without this match's events", async () => {
+  it("one ticker row carries the other matches' news, without this match's server items (#207)", async () => {
     const now = Date.now();
     const item = (id: string, fixtureId: string, text: string) => ({ id, fixtureId, seq: 1, at: now, t: "goal", side: "home", text, min: 3 });
     h.live = { fixtures: [], ticker: [item("t1", "fx1", "Our goal"), item("t2", "fx2", "Goal elsewhere")] };
     await mount(view([ev(1, now - 3000, "Pass")], null, now));
-    const other = within(screen.getByRole("region", { name: "Other matches" }));
-    expect(other.getByTestId("ticker-current").textContent).toContain("Goal elsewhere");
-    expect(other.queryByText("Our goal")).toBeNull();
+    expect(screen.getAllByTestId("ticker")).toHaveLength(1);
+    const row = within(screen.getByRole("region", { name: "Live events" }));
+    expect(row.getByTestId("ticker-current").textContent).toContain("Goal elsewhere");
+    expect(row.getByTestId("ticker-badge")).toHaveTextContent("Elsewhere");
+    expect(row.queryByText("Our goal")).toBeNull();
     h.live = null;
   });
 
-  it("holds the Around the grounds row from kick-off through a late fixture list, an item arriving and clearing, as a direct child of the page (#183)", async () => {
+  it("merges this match's revealed events and the other matches' news into one row, newest first, and flashes only a goal elsewhere (#207, #206)", async () => {
+    const now = Date.now();
+    const ours = { ...ev(1, now - 30000, "Our goal"), t: "goal", major: 1, tick: "GOAL! HOM 1–0 AWA" };
+    const elsewhere = { id: "fx2:4", fixtureId: "fx2", seq: 4, at: now - 20000, t: "goal", side: "home" as const, text: "GOAL! MET 1–0 ORL", min: 30 };
+    h.live = { fixtures: [], ticker: [elsewhere] };
+    await mount(view([ours, ev(2, now - 10000, "Pass")], null, now));
+    const row = within(screen.getByRole("region", { name: "Live events" }));
+    expect(screen.getAllByTestId("ticker")).toHaveLength(1);
+    // History (more than 8 s old on arrival) does not flash.
+    expect(row.getByTestId("ticker-current")).toBeTruthy();
+    expect(row.queryByTestId("ticker-flash")).toBeNull();
+    fireEvent.click(row.getByTestId("ticker-toggle"));
+    const items = [...row.getByTestId("ticker-feed").querySelectorAll("li")].map((li) => li.textContent);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toContain("Elsewhere");
+    expect(items[0]).toContain("GOAL! MET 1–0 ORL");
+    expect(items[1]).toContain("This match");
+    expect(items[1]).toContain("GOAL! HOM 1–0 AWA");
+    // A goal elsewhere that arrives while watching flashes the row; one of ours never does (the pitch has its own goal screen).
+    h.live = { fixtures: [], ticker: [{ ...elsewhere, id: "fx2:9", seq: 9, at: Date.now(), text: "GOAL! MET 2–0 ORL" }, elsewhere] };
+    await waitFor(() => expect(row.getByTestId("ticker-current")).toHaveTextContent("GOAL! MET 2–0 ORL"), { timeout: 12000 });
+    expect(row.getByTestId("ticker-flash")).toBeTruthy();
+    h.live = null;
+  }, 20000);
+
+  it("holds one ticker row from kick-off through a late fixture list, an item arriving and clearing, as a direct child of the top row (#183, #207)", async () => {
     const now = Date.now();
     const card = (id: string) => ({ id, home: team(id === "fx1" ? "Virgin" : "Metro"), away: team(id === "fx1" ? "Tripper" : "Orleans"), st: null });
     const goal = { id: "fx2:12", fixtureId: "fx2", seq: 12, at: now, t: "goal", side: "home", text: "GOAL! MET 1–0 ORL", min: 50 };
     const frame = () => act(() => new Promise((r) => setTimeout(r, 60))); // the animation loop re-renders with the new live state
     try {
-      // Kick-off with the round's fixture list not loaded yet: the row is already held (not drawn, not announced).
       h.live = { fixtures: [], ticker: [] };
       await mount(view([ev(1, now - 3000, "Pass")], null, now));
       const page = document.querySelector(".match-page")!;
-      const slot = () => screen.queryByTestId("ticker-slot");
-      const around = () => screen.queryByRole("region", { name: "Other matches" });
-      const order = () => [...page.children].slice(0, 4).map((c) => c.getAttribute("data-testid") || c.getAttribute("aria-label"));
-      expect(around()).toBeNull();
-      expect(slot()?.parentElement).toBe(page);
-      expect(slot()).toHaveAttribute("aria-hidden", "true");
-      expect(slot()).toHaveClass("panel", "invisible", "mb-1");
-      expect(order()).toEqual(["Other matches", "ticker", "ticker-slot", "match-scoreboard"]);
+      const top = screen.getByTestId("match-top");
+      const order = () => [...page.children].slice(0, 2).map((c) => c.getAttribute("data-testid"));
+      const row = () => [...top.children].map((c) => c.getAttribute("data-testid") || c.getAttribute("aria-label"));
+      expect(order()).toEqual(["match-top", "match-scoreboard"]);
+      expect(row()).toEqual(["Other matches", "ticker"]);
+      const shown = () => within(screen.getByRole("region", { name: "Live events" }));
+      expect(shown().queryByTestId("ticker-current")).toBeNull();
 
-      // The other fixture and its goal arrive: the real ticker takes the same place (still a direct child for the compact page styles).
       h.live = { fixtures: [card("fx1"), card("fx2")], ticker: [goal] };
       await frame();
-      expect(slot()).toBeNull();
-      expect(around()?.parentElement).toBe(page);
-      expect(within(around()!).getByTestId("ticker-current")).toHaveTextContent("GOAL! MET 1–0 ORL");
-      expect(order()).toEqual(["Other matches", "ticker", "ticker", "match-scoreboard"]);
+      expect(row()).toEqual(["Other matches", "ticker"]);
+      expect(shown().getByTestId("ticker-current")).toHaveTextContent("GOAL! MET 1–0 ORL");
+      expect(screen.getAllByTestId("ticker")).toHaveLength(1);
 
-      // The ticker clears (e.g. a new round's feed): the row is held again rather than collapsing.
       h.live = { fixtures: [card("fx1"), card("fx2")], ticker: [] };
       await frame();
-      expect(around()).toBeNull();
-      expect(order()).toEqual(["Other matches", "ticker", "ticker-slot", "match-scoreboard"]);
+      expect(row()).toEqual(["Other matches", "ticker"]);
+      expect(order()).toEqual(["match-top", "match-scoreboard"]);
     } finally {
       h.live = null;
     }
@@ -767,7 +793,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     vi.mocked(footfiveApi.match).mockReset();
   });
 
-  const ticker = () => within(screen.getByRole("region", { name: "Match events" }));
+  const ticker = () => within(screen.getByRole("region", { name: "Live events" }));
   const history = (count: number, now: number) => Array.from({ length: count }, (_, i) => ({
     ...ev(i + 1, now - 60000 + i, `History ${i + 1}`),
     t: i === 0 ? "kickoff" : i === 1 ? "goal" : i % 10 === 0 ? "save" : "pass",
@@ -960,7 +986,7 @@ describe("MatchPage retained history and fixture ticker", () => {
     fireEvent.click(ticker().getByTestId("ticker-toggle"));
     expect(ticker().getByTestId("ticker-feed")).toHaveTextContent("Nothing yet");
     expect(screen.queryByText("Server spoiler")).toBeNull();
-    expect(screen.queryByRole("region", { name: "Other matches" })).toBeNull();
+    expect(screen.getAllByTestId("ticker")).toHaveLength(1);
   });
 
   it("shows no local history before the first event reaches the lagged playhead", async () => {
@@ -1150,14 +1176,17 @@ describe("MatchPage labels and timing (#78)", () => {
   afterEach(() => {
     h.live = null;
   });
-  it("this match's ticker and the other matches' ticker carry distinct visible labels, neither 'Live feed'", async () => {
+  it("the one ticker labels each item as this match or elsewhere, never 'Live feed' (#207)", async () => {
     const now = Date.now();
-    h.live = { mode: "live", fixtures: [], ticker: [{ id: "t1", fixtureId: "fx2", t: "goal", text: "Elsewhere: GOAL" }] };
-    await mount(view([ev(1, now - 30000, "Pass")], null, now));
-    const badges = screen.getAllByTestId("ticker-badge").map((b) => b.textContent);
-    expect(badges).toEqual(["This match", "Around the grounds"]);
+    h.live = { mode: "live", fixtures: [], ticker: [{ id: "t1", fixtureId: "fx2", at: now - 60000, t: "goal", text: "Elsewhere: GOAL" }] };
+    await mount(view([{ ...ev(1, now - 30000, "Our card"), t: "yellow_card", major: 1 }], null, now));
+    const row = within(screen.getByRole("region", { name: "Live events" }));
+    expect(screen.getAllByTestId("ticker-badge")).toHaveLength(1);
+    expect(["This match", "Elsewhere"]).toContain(row.getByTestId("ticker-badge").textContent);
     expect(screen.queryByText("Live feed")).toBeNull();
-    expect(within(screen.getByRole("region", { name: "Other matches" })).getByTestId("ticker-badge")).toHaveTextContent("Around the grounds");
+    fireEvent.click(row.getByTestId("ticker-toggle"));
+    const rows = [...row.getByTestId("ticker-feed").querySelectorAll("li")];
+    expect(rows.map((li) => li.textContent)).toEqual([expect.stringMatching(/^.?This match/u), expect.stringMatching(/^.?Elsewhere/u)]);
   });
   it("event labels use the canonical minute and keep the elapsed clock on the time", async () => {
     const now = Date.now();
@@ -1844,5 +1873,88 @@ describe("MatchPage big moments (#206)", () => {
     const now = Date.now();
     await mount(view([{ ...ev(1, now - 30000, "Yellow card — Away P2 (AWA)"), t: "yellow_card", side: "away" }, { ...ev(2, now - 20000, "Red card! Home P1 is sent off"), t: "red_card", major: 1 }], null, now));
     expect(screen.getAllByTestId("feed-card").map((c) => c.getAttribute("data-card"))).toEqual(["red", "yellow"]);
+  });
+});
+
+describe("MatchPage scoreboard timeline (#207)", () => {
+  afterEach(() => {
+    h.live = null;
+  });
+  const at = (ph: string, sc: [number, number], s: number) => ({ ...st!, ph, sc, clk: { s, run: 1 as const } }) as NonNullable<MatchView["fixture"]["st"]>;
+  const marks = () => screen.queryAllByTestId("timeline-mark").map((m) => [m.dataset.kind, m.dataset.side, Number(m.dataset.min), m.style.left]);
+
+  it("marks each goal and card the pitch has shown at its minute, home above and away below, and none still ahead of the playhead", async () => {
+    const now = Date.now();
+    const events: MatchEvent[] = [
+      { ...ev(1, now - 60000, "Yellow"), t: "yellow_card", side: "home", min: 9, st: at("first_half", [0, 0], 540) },
+      { ...ev(2, now - 50000, "Goal"), t: "goal", side: "away", min: 18, st: at("first_half", [0, 1], 1080) },
+      { ...ev(3, now - 40000, "Pen"), t: "penalty_goal", side: "home", min: 45, st: at("first_half", [1, 1], 2700) },
+      { ...ev(4, now - 30000, "Red"), t: "red_card", side: "away", min: 72, st: at("second_half", [1, 1], 4320) },
+      { ...ev(5, now - 20000, "Pass"), st: at("second_half", [1, 1], 4380) },
+      { ...ev(6, now + 60000, "Future goal"), t: "goal", side: "home", min: 80, st: at("second_half", [2, 1], 4800) },
+    ];
+    await mount(view(events, null, now));
+    const tl = screen.getByTestId("timeline");
+    expect(screen.getByTestId("match-scoreboard").contains(tl)).toBe(true);
+    expect(tl.dataset.total).toBe("90");
+    expect(marks()).toEqual([
+      ["yellow", "home", 9, "10%"],
+      ["goal", "away", 18, "20%"],
+      ["goal", "home", 45, "50%"],
+      ["red", "away", 72, "80%"],
+    ]);
+    const [yellow, goal] = screen.getAllByTestId("timeline-mark");
+    expect(yellow.className).toContain("top-0");
+    expect(goal.className).toContain("bottom-0");
+    expect(screen.queryByTestId("timeline-et")).toBeNull();
+    // The current minute: the fill and its head follow the shown clock (73:00 → 73′), by transform only.
+    const progress = screen.getByTestId("timeline-progress");
+    expect(Number(progress.dataset.minute)).toBeGreaterThanOrEqual(73);
+    expect(progress.style.transform).toMatch(/^scaleX\(0\.8[12]/);
+    expect(tl.getAttribute("aria-label")).toContain("Red card AWA 72′");
+    expect(tl.getAttribute("aria-label")).not.toContain("80′");
+  });
+
+  it("runs to 120 minutes once extra time is reached, keeps every marker, and fills to the end in a shootout", async () => {
+    const now = Date.now();
+    const events: MatchEvent[] = [
+      { ...ev(1, now - 60000, "Goal"), t: "goal", side: "home", min: 30, st: at("first_half", [1, 0], 1800) },
+      { ...ev(2, now - 50000, "Goal"), t: "goal", side: "away", min: 88, st: at("second_half", [1, 1], 5280) },
+      { ...ev(3, now - 40000, "ET goal"), t: "goal", side: "home", min: 105, st: at("extra_time_1", [2, 1], 6300) },
+      { ...ev(4, now - 30000, "ET goal"), t: "goal", side: "away", min: 118, st: at("extra_time_2", [2, 2], 7080) },
+      { ...ev(5, now - 20000, "Shootout"), t: "shootout_start", side: undefined, min: 120, st: { ...at("shootout", [2, 2], 7200), so: null } },
+    ];
+    await mount(view(events, null, now));
+    const tl = screen.getByTestId("timeline");
+    expect(tl.dataset.total).toBe("120");
+    expect(screen.getByTestId("timeline-et")).toBeTruthy();
+    expect(marks()).toEqual([
+      ["goal", "home", 30, "25%"],
+      ["goal", "away", 88, `${(88 / 120) * 100}%`],
+      ["goal", "home", 105, "87.5%"],
+      ["goal", "away", 118, `${(118 / 120) * 100}%`],
+    ]);
+    expect(screen.getByTestId("timeline-progress").style.transform).toBe("scaleX(1.0000)");
+    expect(screen.getByTestId("match-shootout-score").textContent).toBe("PENS");
+    expect(screen.queryByLabelText("Match clock")).toBeNull();
+  });
+
+  it("the big clock is on the scoreboard, the only score display on the page, with no team colour beside score or clock", async () => {
+    const now = Date.now();
+    await mount(view([{ ...ev(1, now - 3000, "Pass"), st: at("second_half", [2, 1], 3000) }], { home: names("Home"), away: names("Away") }, now));
+    const board = screen.getByTestId("match-scoreboard");
+    expect(board.contains(screen.getByLabelText("Match clock"))).toBe(true);
+    expect(screen.getByLabelText("Match clock").className).toContain("text-[28px]");
+    expect(screen.getAllByTestId("match-score")).toHaveLength(1);
+    expect(screen.queryByTestId("hud-score")).toBeNull();
+    // Crests sit on the outer edges: the score's and the clock's neighbours are the divider and each other, never a badge.
+    const score = screen.getByTestId("match-score");
+    const clock = screen.getByTestId("match-clock");
+    expect(score.parentElement!.querySelector("abbr")).toBeNull();
+    expect(clock.querySelector("abbr")).toBeNull();
+    for (const side of ["home", "away"]) {
+      const team = screen.getByTestId(`score-team-${side}`);
+      expect(team.firstElementChild!.querySelector("abbr")).toBeTruthy(); // DOM-first = outer edge (away is row-reversed)
+    }
   });
 });

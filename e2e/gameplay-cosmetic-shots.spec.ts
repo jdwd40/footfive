@@ -201,7 +201,6 @@ for (const key of KEYS) {
       if (!nextCurrent && n % 6 === 0) {
         // Official numbers hold the last real snapshot through the whole cosmetic run.
         await expect(page.getByTestId("match-score")).toHaveText(sc);
-        await expect(page.getByTestId("hud-score")).toContainText(sc);
         await expect(shotsRow).toHaveText(row("Shots", 0));
         await expect(sotRow).toHaveText(row("On target", 1));
         await expect(page.getByTestId("goal-banner")).toHaveCount(0);

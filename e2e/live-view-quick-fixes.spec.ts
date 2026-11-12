@@ -130,16 +130,26 @@ test("Match events: one row per attack, and each penalty row says what caused it
 
 test("a price withdrawn on refresh becomes unavailable in place, without moving the page", async ({ page }) => {
   await mount(page, { pause: T(43) + LAG, marketCalls: { n: 0 } }); // every event is out: nothing else moves the layout meanwhile
+  await page.getByTestId("bet-tab-toggle").click(); // #207: betting is folded into one tab
   const met = page.getByTestId("odds-winner-away");
   await expect(met).toHaveText(/1\.06/);
   const markets = page.getByTestId("markets");
-  const before = { button: (await met.boundingBox())!, panel: (await markets.boundingBox())! };
+  const tab = page.getByTestId("bet-tab");
+  const pitch = page.getByTestId("pitch");
+  const before = { button: (await met.boundingBox())!, panel: (await markets.boundingBox())!, tab: (await tab.boundingBox())!, pitch: (await pitch.boundingBox())! };
   await expect.poll(async () => { await page.clock.runFor(1000); return met.textContent(); }).toContain("Not offered");
   await expect(met).toBeDisabled();
-  const after = { button: (await met.boundingBox())!, panel: (await markets.boundingBox())! };
+  const after = { button: (await met.boundingBox())!, panel: (await markets.boundingBox())!, tab: (await tab.boundingBox())!, pitch: (await pitch.boundingBox())! };
   for (const k of ["x", "y", "width", "height"] as const) {
     expect(after.button[k], `button ${k}`).toBeCloseTo(before.button[k], 1);
     expect(after.panel[k], `markets ${k}`).toBeCloseTo(before.panel[k], 1);
+    expect(after.tab[k], `bet tab ${k}`).toBeCloseTo(before.tab[k], 1);
+    expect(after.pitch[k], `pitch ${k}`).toBeCloseTo(before.pitch[k], 1);
   }
-  await expect(page.getByTestId("unoffered-hint")).toHaveClass(/sr-only/);
+  // #207 (deferred #203 finding): the reason is now visible to sighted users too, in the panel's reserved status line, so it
+  // still moves nothing (the geometry above).
+  const hint = page.getByTestId("unoffered-hint");
+  await expect(hint).toBeVisible();
+  await expect(hint).not.toHaveClass(/sr-only/);
+  await expect(met).toHaveAttribute("aria-describedby", (await hint.getAttribute("id"))!);
 });
