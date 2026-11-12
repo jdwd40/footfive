@@ -267,7 +267,20 @@ h3,
   animation: trophy-glow 2.4s ease-in-out infinite;
 }
 
+/* #216: late pressure from the side chasing the game, along the end it attacks (Pitch UrgePulse). */
+@keyframes urge-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+.urge-pulse {
+  animation: urge-pulse 1.8s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .urge-pulse {
+    animation: none !important;
+    opacity: 0.7;
+  }
   .chip-live::before,
   .score-pop,
   .goal-pop,

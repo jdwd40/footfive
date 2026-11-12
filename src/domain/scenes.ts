@@ -42,7 +42,31 @@ export type Scene = {
   won?: number; // challenge scenes: progress at which the winner (`side`) has the ball — a WON IT cue, not a result (no reveal gate, no hold)
   move?: Move; // #205: the kind of ball movement, for its on-pitch signature (pass line, cross arc, through ball, long strike)
   keeper?: KeeperMove; // #205: result scenes only — the keeper's dive or claim. Never on a shot: a shot cannot show its outcome
+  urge?: Urgency; // #216: a side behind and on Attack (from the coaching events already published), as of this event's snapshot
 };
+/** #216: the side chasing the game — behind on this event's score and either on Attack (its latest published coaching stance) or
+ * from 70' whatever its stance — and whether it is the last five minutes of normal time or of extra time (`late`: its keeper comes
+ * up). Presentation only. */
+export type Urgency = { side: Side; late: boolean };
+/** #216: each side's coaching stance as published so far: its latest `coaching` event. Unknown until one is published. */
+export type Stances = Readonly<Partial<Record<Side, string>>>;
+/** Fold one published event into the stances (a new object only when a coaching event changes them). */
+export function withCoaching(stances: Stances, e: MatchEvent): Stances {
+  return e.t === "coaching" && e.side && e.stance && stances[e.side] !== e.stance ? { ...stances, [e.side]: e.stance } : stances;
+}
+const LIVE_PHASES = new Set(["first_half", "second_half", "extra_time_1", "extra_time_2"]);
+/** #216: from this minute a side behind chases the game whatever its stance (a managed side left on Balanced, or one whose default
+ * stance is already Attack and so never publishes a coaching event). */
+export const URGE_FROM = 70;
+/** #216: urgency as of `e` (its own snapshot and minute), given the stances published up to and including it. Breaks, the shootout
+ * and full time (`finished`) have none, so it stops at the final whistle. */
+export function urgencyOf(e: MatchEvent, stances: Stances): Urgency | null {
+  const sc = e.st?.sc;
+  if (!sc || !LIVE_PHASES.has(e.st.ph)) return null;
+  const side: Side | null = sc[0] < sc[1] ? "home" : sc[1] < sc[0] ? "away" : null;
+  if (!side || (stances[side] !== "attack" && !(e.st.ph !== "first_half" && e.min >= URGE_FROM))) return null;
+  return { side, late: (e.st.ph === "second_half" && e.min >= 86) || (e.st.ph === "extra_time_2" && e.min >= 116) };
+}
 /** #205: what a scene's ball movement looks like on the pitch. A result scene after a long shot keeps "long" (the strike carries on). */
 export type Move = "pass" | "through" | "cross" | "long";
 /** #205: the keeper's pose in a result scene: he stretches to `to` (`dive`) or comes for it (`claim`), easing in over `at[0]`→`at[1]`,
@@ -151,13 +175,16 @@ function head(e: MatchEvent) {
  * Build the scene for one event. `prevBall` is where the previous scene ended, so movement
  * connects across scene boundaries. `next`: the following published event, if already fetched — only a cross reads it,
  * and only to put its own header's runner on his box point (see the cross scene); nothing of it reaches the scene's metadata.
+ * `stances` (#216): the coaching stances published up to and including `e` (`withCoaching`), for the late push (`urge`).
  */
-export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent, prevLift = 0): Scene | null {
+export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent, prevLift = 0, stances?: Stances): Scene | null {
   const s = build(e, prevBall, minuteMs, next);
   if (s) {
     s.tempo = tempoFor(e, s);
     const move = moveOf(e, prevBall, prevLift);
     if (move) s.move = move;
+    const urge = stances && urgencyOf(e, stances);
+    if (urge) s.urge = urge;
   }
   const result = !!s && RESULTS.has(e.t) && !e.pen;
   // Every scene starts where the last one left the ball; anything that would jump gets a lead-in keyframe.

@@ -66,6 +66,7 @@ export type MatchEvent = {
   pen?: PenPlan;
   kick?: { no: number; sd: number; must?: number; win?: number; outcome?: string; decisive?: number };
   major?: number;
+  stance?: string; // coaching events: the stance the side takes from this minute (defend / balanced / attack)
   cos?: 1; // cosmetic presentation only (an extra missed/blocked attempt): excluded from official stats, danger and markets
   text: string;
   tick?: string;

@@ -8,7 +8,7 @@ import { crossBend, keeperPose, moveFx, type Fx, type KeeperPose } from "./moves
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
 export type RefPose = "run" | "whistle" | "point" | "card-yellow" | "card-red";
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */; fx?: Fx /* #205: this move's signature (one at a time) */; keeper?: KeeperPose /* #205: a result scene's dive or claim */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */; fx?: Fx /* #205: this move's signature (one at a time) */; keeper?: KeeperPose /* #205: a result scene's dive or claim */; urge?: Side /* #216: the chasing side has the ball: the pressure pulse at the end it attacks */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 /** #189: where each player (side:no) was drawn on a scene's first tick, so its runners start from there. */
 export type PlayerStarts = Readonly<Record<string, Pt>>;
@@ -27,6 +27,23 @@ export const FWD_LEAD = 12;
 export const FWD_WIDTH = 14;
 /** #189: with the ball wide, the inner forward attacks the box this far past the goal's centre line. */
 export const FWD_BOX = 4;
+/** #216: how a side's shape leans late on: `push` chasing the game, `sit` protecting the lead against it. */
+export type Lean = "push" | "sit";
+/** #216: chasing the game, the block plays this much higher with the ball — its defenders right up with it, at most URGE_PAST beyond
+ * it (normally they stay 4 behind) — the forwards URGE_LEAD further ahead and URGE_WIDTH wider; the side protecting the lead sits
+ * URGE_SIT deeper. Sized with the harness (#216 AC: the chasing side's mean outfield x ≥ 8 above a level score before 70'), since
+ * the scene's own actors and the dwell's two lane players keep their choreography and only the rest of the shape moves. */
+export const URGE_PUSH = 20;
+export const URGE_PAST = 3;
+export const URGE_LEAD = 24;
+export const URGE_WIDTH = 6;
+export const URGE_SIT = 5;
+/** #216: the chasing forwards push on only as far as this, just short of the penalty-area line (x 85), unless the ball takes them further. */
+export const URGE_BOX = 84;
+/** #216: …and hold at least this high, up near the box, however deep the ball. */
+export const URGE_HOLD = 72;
+/** #216: in the last five minutes (Urgency.late), the chasing side's keeper comes this far off his line while his side has the ball. */
+export const URGE_KEEPER = 12;
 /** Open-play scenes in which `scene.side` has the ball: that side's shape moves up the pitch with it (#102). */
 const IN_PLAY = new Set(["build_up", "pass", "through_ball", "dribble", "cross", "tackle", "interception", "shot", "bounce"]);
 /** Possession side of a scene, or null when nobody is building an attack (set pieces, breaks, results). */
@@ -38,18 +55,26 @@ export function possession(scene: Scene): Side | null {
  * `bx`/`by` in that same frame. With the ball, the whole block advances with it: defenders step up behind the ball, forwards run
  * ahead of it, so the shape carries up the field as the ball progresses. Without it, the old gentle drift towards the ball.
  */
-export function shapeAt(i: number, bx: number, by: number, attacking: boolean, defending = false): Pt {
+export function shapeAt(i: number, bx: number, by: number, attacking: boolean, defending = false, urge?: Lean): Pt {
   const [ax, ay] = ANCHORS[i];
   const fwd = i >= 3;
+  const chase = urge === "push";
   if (attacking) {
     const push = (bx - 30) * (fwd ? 0.75 : 0.6); // the block moves up with the ball
-    const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4, 4, fwd ? 94 : Math.max(8, bx - 4));
+    // #216: chasing the game, the whole block plays URGE_PUSH higher — the defenders right up with the ball — and the forwards
+    // further ahead and wider; protecting a lead, it sits URGE_SIT deeper.
+    const lean = chase ? URGE_PUSH : urge === "sit" ? -URGE_SIT : 0;
+    const base = ax + Math.max(0, push) + Math.min(0, push) * 0.4;
+    const x = clamp(base + lean, 4, fwd ? 94 : Math.max(8, chase ? bx + URGE_PAST : bx - 4));
     // #184: the forwards make the runs — a pass ahead of the ball and wide of its lane, one either side — so the support is out
     // in space rather than round the ball; each moves smoothly with it. The defenders below keep their lanes behind the ball.
     // #189: with the ball wide, the outer one holds the touchline (the clamp) and the inner one attacks the box beyond the goal's centre.
     if (fwd) {
-      const w = Math.max(FWD_WIDTH, Math.abs(32 - by) + FWD_BOX);
-      return [clamp(Math.max(x, bx + FWD_LEAD), 4, 94), clamp(by + (i === 3 ? -w : w), 4, 60)];
+      const w = Math.max(FWD_WIDTH + (chase ? URGE_WIDTH : 0), Math.abs(32 - by) + FWD_BOX);
+      const fx = clamp(Math.max(base, bx + FWD_LEAD), 4, 94); // the ordinary run
+      // #216: chasing, further on and held up near the box (URGE_HOLD) — but short of its edge (URGE_BOX), and never behind his ordinary run.
+      const cx = chase ? Math.max(fx, Math.min(URGE_BOX, Math.max(x, URGE_HOLD, bx + FWD_LEAD + URGE_LEAD))) : clamp(Math.max(x, bx + FWD_LEAD), 4, 94);
+      return [cx, clamp(by + (i === 3 ? -w : w), 4, 60)];
     }
     // Off the ball (#103): the supporting defenders find space — nobody stands in the carrier's lane.
     let y = ay + (by - ay) * 0.25;
@@ -64,7 +89,8 @@ export function shapeAt(i: number, bx: number, by: number, attacking: boolean, d
     // block keeps its width); forwards drop in to screen.
     const x = fwd ? clamp(ax + (bx - ax) * 0.5, 6, Math.max(10, bx + 6)) : clamp(Math.min(ax + (bx - ax) * 0.45, bx - 5), 4, 80);
     const y = ay + (by - ay) * (fwd ? 0.35 : 0.3);
-    return [x, clamp(y, 2, 62)];
+    // #216: a side protecting a lead drops deeper off the ball too (never past its own keeper's spot).
+    return [urge === "sit" ? Math.max(Math.min(x, 6), x - URGE_SIT) : x, clamp(y, 2, 62)];
   }
   return [clamp(ax + (bx - ax) * 0.3, 1, 99), clamp(ay + (by - ay) * 0.3, 2, 62)];
 }
@@ -304,7 +330,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPose = "point";
     refAim = scene.impact; // the actual penalty spot, including the mirrored away end
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}) };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}), ...(scene.urge && possession(scene) === scene.urge.side ? { urge: scene.urge.side } : {}) };
 }
 
 /** #189: scenes whose receiver/runner (`r`, a cross's `h`) and marker (`m`) run from where they were drawn. Turnover contests (`lost`) and
@@ -365,6 +391,7 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
   const backOff = scene.flash === "goal" && (scene.type === "celebration" || t > 0.5) ? other(scene.side) : null;
   const players: Player[] = [];
   const poss = possession(scene);
+  const urge = scene.urge;
   for (const side of ["home", "away"] as Side[]) {
     const mirror = side === "away";
     const b: Pt = side === backOff ? [50, 32] : ball;
@@ -373,10 +400,12 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
       const gk = i === 0;
       const ax = own(ANCHORS[i][0]);
       const ay = ANCHORS[i][1];
-      let x = ax;
       let y = clamp(ay + (b[1] - ay) * 0.4, 2, 62);
+      // #216: in the last minutes the chasing side's keeper comes up while his side has the ball.
+      let x = gk && urge?.late && urge.side === side && poss === side ? own(ANCHORS[0][0] + URGE_KEEPER) : ax;
       if (!gk) {
-        const [sx, sy] = shapeAt(Math.min(i, 4), own(b[0]), b[1], poss === side && side !== backOff, !!poss && poss !== side && side !== backOff);
+        const lean: Lean | undefined = !urge || side === backOff ? undefined : urge.side === side ? "push" : "sit";
+        const [sx, sy] = shapeAt(Math.min(i, 4), own(b[0]), b[1], poss === side && side !== backOff, !!poss && poss !== side && side !== backOff, lean);
         x = own(sx);
         y = sy;
       }
