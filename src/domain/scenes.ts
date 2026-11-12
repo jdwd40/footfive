@@ -34,7 +34,7 @@ export type Scene = {
   kick?: MatchEvent["kick"];
   pens?: [number, number]; // shootout score after the event
   by?: MatchEvent["st"]["by"]; // how the match was won (match_end)
-  cam?: Cam; // broadcast camera (SVG viewBox); full pitch when absent
+  cam?: Cam; // set-piece window: the end a penalty or shootout is taken at, for the choreography (pen arc, no open-play spacing). Never a camera: the pitch is always drawn whole (#203)
   flashAt?: number; // progress at which the result badge may show (default 0.62)
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
   tempo?: Tempo; // #105: phase-of-play pace for the movement around this event (never its timing)
@@ -66,7 +66,7 @@ export function tempoFor(e: MatchEvent, s: Scene): Tempo {
   return "normal";
 }
 export type Cam = [number, number, number, number];
-export const FULL_CAM: Cam = [-4, -3, 108, 77]; // bottom margin reaches the tunnel at y=70
+export const FULL_CAM: Cam = [-4, -3, 108, 77]; // the one fixed view (SVG viewBox); bottom margin reaches the tunnel at y=70
 
 const GOAL_Y = 32;
 
@@ -103,13 +103,13 @@ function keeperSpot(defSide: Side): Pt {
 export function penRefSpot(g: Side): Pt {
   return [goalX(g) + toward(g, -14), GOAL_Y - 13];
 }
-/** Camera window `w` wide centred on (cx, cy) at the full-pitch aspect (so the SVG never reflows on a zoom), kept inside the full-pitch margins. */
+/** Window `w` wide centred on (cx, cy) at the full-pitch aspect, kept inside the full-pitch margins. */
 function camAt(cx: number, cy: number, w: number): Cam {
   const [fx, fy, fw, fh] = FULL_CAM;
   const h = (w * fh) / fw;
   return [Math.max(fx, Math.min(fx + fw - w, cx - w / 2)), Math.max(fy, Math.min(fy + fh - h, cy - h / 2)), w, h];
 }
-/** Broadcast camera for a penalty: 56 wide (the box and the goal fit) centred 12 in from the attacked goal line. */
+/** Set-piece window for a penalty: 56 wide (the box and the goal fit) centred 12 in from the attacked goal line. Marks the end only; nothing zooms to it. */
 function penCam(g: Side): Cam {
   return camAt(goalX(g) + toward(g, -12), GOAL_Y, 56);
 }
@@ -648,7 +648,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
     case "shootout_start": {
       // Ball held where it was; the banner lives the whole break — real ms, whatever the pace, like the setup scenes.
       const BREAK: Record<string, number> = { half_time: 30000, end_of_normal_time: 20000, et_half_time: 10000, shootout_start: 10000 }; // matches balance.js halfTimeMs / etBreakMs / etHalfTimeMs / shootoutIntroMs
-      return { ...base, ms: BREAK[e.t], ball: [prevBall], actors: [], cam: e.t === "shootout_start" ? penCam("home") : undefined }; // shootout intro: frameAt choreographs it and holds the full pitch for the first 70 %
+      return { ...base, ms: BREAK[e.t], ball: [prevBall], actors: [], cam: e.t === "shootout_start" ? penCam("home") : undefined }; // shootout intro: frameAt choreographs it
     }
     case "match_end":
       return { ...base, ms: 5000, ball: [prevBall], actors: [] }; // full-time banner; the last event, so it holds

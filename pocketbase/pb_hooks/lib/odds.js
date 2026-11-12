@@ -6,9 +6,14 @@
  * Poisson(rate × minutes left); a red card multiplies the side's rate by 0.75 and the
  * opponent's by 1.15. Level after 90' adds 30' of extra time; level after that is a
  * shootout (each kick scores with probability SHOOTOUT_P). Prices carry a 6 % margin.
+ * A near-certain selection is withdrawn (#203): no price when the margin price would be
+ * under MIN_OFFER, i.e. p > (1 - MARGIN) / MIN_OFFER ≈ 0.895. A withdrawn selection has
+ * null odds and cannot be bet (bettingService: "Selection unavailable"); bets already
+ * placed keep their confirmed odds and settle unchanged.
  */
 var MARGIN = 0.06;
 var MIN_ODDS = 1.01;
+var MIN_OFFER = 1.05; // #203: below this the outcome is all but decided: withdraw it rather than offer 1.01
 var MAX_ODDS = 500;
 var SHOOTOUT_P = 0.75;
 var K = 12; // max extra goals considered per side
@@ -29,6 +34,7 @@ function pmf(lambda) {
 function price(p) {
   if (!(p > 0)) return null;
   var o = (1 - MARGIN) / p;
+  if (o < MIN_OFFER) return null;
   return Math.round(Math.min(MAX_ODDS, Math.max(MIN_ODDS, o)) * 100) / 100;
 }
 
@@ -279,6 +285,7 @@ function clockMinute(clk, at, now, minuteMs) {
 if (typeof module !== "undefined") {
   module.exports = {
     MARGIN: MARGIN,
+    MIN_OFFER: MIN_OFFER,
     price: price,
     finalDist: finalDist,
     nextGoal: nextGoal,

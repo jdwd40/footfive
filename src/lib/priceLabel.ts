@@ -3,7 +3,7 @@
 export const NOT_OFFERED = "Not offered";
 export const NO_CURRENT_PRICE = "No current price";
 export const UNOFFERED_HINT =
-  "Very unlikely selections may not be offered. Other prices stay open.";
+  "Very unlikely or all-but-certain selections are not offered. Other prices stay open.";
 
 /** Finite price above zero, or null when the server sent no price. */
 export function formatOdds(odds: number | null | undefined): string | null {

@@ -6,13 +6,17 @@ import type { TeamPublic } from "../lib/pocketbase";
 
 const home = { id: "h", name: "Home Town", abbreviation: "HOM", primary_color: "#00f0ff" } as TeamPublic;
 const away = { id: "a", name: "Away City", abbreviation: "AWY", primary_color: "#ff2d95" } as TeamPublic;
-const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ms: 1500, cam: [-4, -3, 108, 77], ...f });
+const frame = (f: Partial<Frame>): Frame => ({ ball: [50, 32], lift: 0, players: [], ref: [40, 46], caption: "", flash: null, type: "pass", seq: 1, p: 0.1, ms: 1500, ...f });
 
 describe("Pitch penalty camera and shootout reveal", () => {
-  it("viewBox follows the frame camera; the element's aspect ratio is fixed to the full pitch so a zoom never reflows the page", () => {
-    const { container } = render(<Pitch frame={frame({ cam: [63, 16, 50, 32] })} home={home} away={away} revealed />);
+  it("never zooms: a penalty, a penalty goal and the shootout all draw the whole pitch; the box keeps the full-pitch aspect ratio (#203)", () => {
+    const { container, rerender } = render(<Pitch frame={frame({ type: "penalty_awarded", flash: "pen", side: "home", p: 0.5 })} home={home} away={away} revealed />);
     const svg = container.querySelector("svg")!;
-    expect(svg.getAttribute("viewBox")).toBe("63 16 50 32");
+    expect(svg.getAttribute("viewBox")).toBe("-4 -3 108 77");
+    rerender(<Pitch frame={frame({ type: "penalty_goal", flash: "goal", side: "away", phase: "second_half", p: 0.9, score: [0, 1] })} home={home} away={away} revealed />);
+    expect(svg.getAttribute("viewBox")).toBe("-4 -3 108 77");
+    rerender(<Pitch frame={frame({ type: "shootout_kick", flash: "save", side: "away", phase: "shootout", p: 0.8 })} home={home} away={away} revealed />);
+    expect(svg.getAttribute("viewBox")).toBe("-4 -3 108 77");
     const box = screen.getByTestId("pitch") as HTMLElement;
     expect(box.style.aspectRatio.replace(/\s/g, "")).toBe("108/77"); // the box carries the ratio (and a viewport height cap); the svg fills it
     expect(box.style.maxWidth).toContain("100vh - var(--pitch-chrome, 360px)");
@@ -297,7 +301,8 @@ describe("Pitch period banners", () => {
   it("is GOOOAL-sized, and dims to 85 % after 4 s so the pitch shows through the break", () => {
     period({ type: "half_time", ms: 30000, p: 3000 / 30000 });
     const b = screen.getByTestId("period-banner");
-    expect(b.querySelector(".font-black")!.className).toContain("text-6xl");
+    // #203: as large as GOOOAL (the same 60 px cap), but sized to the pitch width so it never runs off the edges.
+    expect(b.querySelector<HTMLElement>('[data-testid="banner-title"]')!.style.fontSize).toMatch(/^min\(3\.75rem, [\d.]+cqw\)$/);
     expect(b.style.opacity).toBe("");
     cleanup();
     period({ type: "half_time", ms: 30000, p: 5000 / 30000 });

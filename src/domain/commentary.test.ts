@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { MatchEvent, Side } from "../lib/pocketbase";
-import { commentaryLine } from "./commentary";
+import { commentaryLine, feedRows } from "./commentary";
 
 const require = createRequire(import.meta.url);
 const lib = (f: string) => require(path.resolve(__dirname, "../../pocketbase/pb_hooks/lib/" + f));
@@ -255,5 +255,74 @@ describe("seeded matches (issue #84)", () => {
     }
     expect(wood).toBeGreaterThan(50);
     expect(special).toBeGreaterThan(100);
+  });
+});
+
+// ---- Match events list (#203)
+
+const LISTED = new Set(["kickoff", "shot", "goal", "save", "miss", "block", "woodwork", "penalty_awarded", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "yellow_card", "half_time"]);
+const listed = (e: MatchEvent) => LISTED.has(e.t);
+const texts = (events: MatchEvent[]) => feedRows(events, listed).map((r) => r.text);
+
+describe("match events list: one row per attack (#203)", () => {
+  it("puts a shot and its result on one row, the result's, and keeps both lines", () => {
+    const ev = feed(R("kickoff", 0), S(300, { chain: 4, text: "Vale lets fly!" }), R("save", 300, { chain: 4, side: "away", text: "Great save by Moss" }));
+    const rows = feedRows(ev, listed);
+    expect(rows.map((r) => r.text)).toEqual(["engine 1", "Vale lets fly! — Great save by Moss"]);
+    expect(rows[1].e).toBe(ev[2]); // its time, styling and replay are the result's
+    expect(rows[1].lead).toBe(ev[1]); // its badge is the shooter's side, not the keeper's
+  });
+
+  it("shows the shot alone until its result is published, so the list never grows and shrinks", () => {
+    const ev = feed(S(300, { chain: 4, text: "Vale lets fly!" }), R("miss", 300, { chain: 4, text: "Vale drags it wide" }));
+    expect(texts(ev.slice(0, 1))).toEqual(["Vale lets fly!"]);
+    expect(texts(ev)).toHaveLength(1);
+  });
+
+  it("pairs a cosmetic shot with its result, but never a result with a shot from another attack", () => {
+    expect(texts(feed(S(300, { cos: 1, text: "From range!" }), R("miss", 300, { cos: 1, text: "Wide" })))).toEqual(["From range! — Wide"]);
+    expect(texts(feed(S(300, { chain: 4, text: "A" }), R("block", 300, { chain: 5, text: "B" })))).toEqual(["A", "B"]);
+    expect(texts(feed(S(300, { chain: 4, text: "A" }), R("pass", 300, { chain: 4 }), R("goal", 310, { chain: 4, text: "B" })))).toEqual(["A", "B"]);
+  });
+
+  it("gives a penalty kick its cause, and a second penalty is called a new foul, not a retake", () => {
+    const award = (chain: number, text: string) => R("penalty_awarded", 2300, { chain, side: "away", text });
+    const ev = feed(
+      award(7, "PENALTY to MET! P. Blue is brought down by W. Scott"),
+      R("penalty_setup", 2300, { chain: 7, side: "away" }),
+      R("penalty_woodwork", 2300, { chain: 7, side: "away", text: "R. Chrome hits the bar from the spot!" }),
+      R("restart", 2300, { side: "home" }),
+      award(9, "PENALTY to MET! M. Pulse is brought down by O. Henry"),
+    );
+    const rows = feedRows(ev, listed);
+    expect(rows.map((r) => r.text)).toEqual([
+      "PENALTY to MET! P. Blue is brought down by W. Scott — R. Chrome hits the bar from the spot!",
+      "PENALTY to MET! M. Pulse is brought down by O. Henry (2nd penalty of the match, a new foul in the box)",
+    ]);
+    expect(rows[0].e.t).toBe("penalty_woodwork");
+    const kicked = [...ev, R("penalty_goal", 2700, { chain: 9, side: "away", text: "PENALTY SCORED! R. Chrome scores for MET" })(6)];
+    expect(texts(kicked)[1]).toBe("PENALTY to MET! M. Pulse is brought down by O. Henry (2nd penalty of the match, a new foul in the box) — PENALTY SCORED! R. Chrome scores for MET");
+  });
+
+  it("on real matches: every listed event is on exactly one row, attacks are never split, and nothing is dropped", () => {
+    let pairs = 0;
+    let pens = 0;
+    for (const { events } of runs.slice(0, 60)) {
+      const shown = events.filter(listed);
+      const rows = feedRows(events, listed);
+      for (const e of shown) expect(rows.some((r) => r.text.includes(e.text)), `${e.t} #${e.seq}`).toBe(true);
+      const merged = rows.filter((r) => r.e.t !== "penalty_awarded" && r.text !== r.e.text);
+      expect(rows.length).toBe(shown.length - merged.length);
+      pairs += merged.length;
+      for (const r of rows) {
+        expect(r.e.t, r.text).not.toBe("shot"); // finished matches: every shot is on its result's row
+        if (r.e.t.startsWith("penalty_")) {
+          pens++;
+          expect(r.text, r.text).toContain("brought down by");
+        }
+      }
+    }
+    expect(pairs).toBeGreaterThan(300);
+    expect(pens).toBeGreaterThan(3);
   });
 });

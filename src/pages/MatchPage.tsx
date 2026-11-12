@@ -6,7 +6,7 @@ import MarketsPanel from "../components/MarketsPanel";
 import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr, TeamLabel } from "../components/Team";
-import { commentaryLine } from "../domain/commentary";
+import { commentaryLine, feedRows } from "../domain/commentary";
 import { sampleN, sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
@@ -686,18 +686,20 @@ const FEED_TYPES = new Set([
 const REPLAYABLE = new Set(["goal", "penalty_goal", "save", "woodwork", "miss", "block", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
 
 function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: MatchView; onReplay: (e: MatchEvent) => void }) {
-  const list = events.filter((e) => FEED_TYPES.has(e.t)).reverse();
+  const list = feedRows(events, (e) => FEED_TYPES.has(e.t)).reverse();
   if (!list.length) return <p className="text-sm text-muted">{view.fixture.status === "scheduled" ? "Not kicked off yet. Goals, cards, chances and every key moment will be listed here from kick-off." : "Waiting for the first action…"}</p>;
   return (
     <ol className="max-h-80 space-y-1 overflow-y-auto pr-1 text-sm" data-testid="event-feed">
-      {list.map((e) => {
-        const side = e.side === "home" ? view.fixture.home : e.side === "away" ? view.fixture.away : null;
+      {list.map(({ e, lead, text }) => {
+        // A merged row is the attacking side's: a save or block is the defenders' event, but the attack was the shooter's.
+        const sideKey = lead.side;
+        const side = sideKey === "home" ? view.fixture.home : sideKey === "away" ? view.fixture.away : null;
         const big = e.t === "goal" || e.t === "penalty_goal" || e.t === "red_card" || e.t === "match_end" || e.t === "shootout_end";
         return (
           <li key={e.seq} className={`flex items-start gap-2 rounded px-1 py-0.5 ${big ? "bg-lime/10" : ""}`}>
             <span className="w-11 shrink-0 tabular text-xs text-muted" data-testid="event-time" title={eventClockTime(e) || undefined}>{eventTime(e)}</span>
-            {side ? <Abbr team={side} away={e.side === "away"} /> : <span className="w-[2.6rem] shrink-0" />}
-            <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>{e.text}</span>
+            {side ? <Abbr team={side} away={sideKey === "away"} /> : <span className="w-[2.6rem] shrink-0" />}
+            <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>{text}</span>
             {REPLAYABLE.has(e.t) ? (
               <button type="button" className="shrink-0 text-xs text-cyan hover:underline" onClick={() => onReplay(e)} aria-label={`Replay: ${e.text}`}>
                 ▶ Replay
