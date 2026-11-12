@@ -53,17 +53,19 @@ var BALANCE = {
 
   // Match engine v2 (per-minute model; see matchEngine.js). Tuned by
   // scripts/engine-calibrate.mjs to ~3 goals per 90' (#195 recommended tuning).
+  // #217: more attacks (seqBase 0.28 -> 0.36) with lower conversion (onTargetBase 0.50 -> 0.44,
+  // saveBase 0.48 -> 0.54): ~21 real shots a match, same goals (docs/balance-217.md).
   match: {
     edgeOffset: 18, // attack − defence is ≈ −18 for evenly matched sides
-    seqBase: 0.28,
+    seqBase: 0.36,
     seqK: 0.006,
     shotBase: 0.54,
     shotK: 0.004,
-    onTargetBase: 0.50,
+    onTargetBase: 0.44,
     onTargetK: 0.003,
     blockRate: 0.22,
     woodworkRate: 0.12,
-    saveBase: 0.48,
+    saveBase: 0.54,
     saveK: 0.004,
     // Occasional long-range effort: fraction of shots taken from deep (x 58–70)
     // without final-third progression; the keeper's save chance gets this bonus.
