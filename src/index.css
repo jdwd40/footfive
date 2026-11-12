@@ -327,29 +327,52 @@ main {
   overflow-x: clip;
 }
 
-/* Decorative stands occupy the existing panel insets, outside the unchanged pitch box and camera. */
+/* #204: players, ball and the carrier's name are drawn about their own origin, so phones can enlarge them without moving
+   anyone (the camera and pitch box are unchanged). Desktop keeps the drawn size. */
+.pitch-figure { transform: scale(var(--figure-scale, 1)); }
+.pitch-figure-c { transform: scale(var(--figure-scale, 1)); transform-box: fill-box; transform-origin: center; }
+@media (max-width: 639px) {
+  .match-pitch { --figure-scale: 1.3; }
+}
+
+/* Decorative stands occupy the existing panel insets, outside the unchanged pitch box and camera. #204: deeper stands (sides
+   and top; the bottom keeps 8px so it never reaches the commentary row), tiered rows and floodlight towers, all one box per side. */
 .stadium {
-  --stadium-band: 8px;
+  --stadium-band: 11px;
+  --stadium-top: 11px;
+  --stadium-bottom: 8px;
   isolation: isolate;
 }
 .stadium > .match-pitch { z-index: 1; }
 .stadium-stand {
   position: absolute;
-  top: calc(-1 * var(--stadium-band));
-  bottom: calc(-1 * var(--stadium-band));
+  top: calc(-1 * var(--stadium-top));
+  bottom: calc(-1 * var(--stadium-bottom));
   width: calc(50% + var(--stadium-band));
   overflow: hidden;
   pointer-events: none;
   border: 1px solid #354052;
-  background: #111b2a;
+  background-color: #111b2a;
+  background-image:
+    radial-gradient(circle at var(--lamp-x) 5px, #fffbe8 0 1.6px, rgba(255, 240, 190, 0.5) 2.4px, rgba(255, 240, 190, 0.12) 9px, transparent 22px),
+    radial-gradient(circle at var(--lamp-x) calc(100% - 5px), #fffbe8 0 1.6px, rgba(255, 240, 190, 0.5) 2.4px, rgba(255, 240, 190, 0.12) 9px, transparent 22px),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 6px);
+  /* Team-tinted tiers where color-mix is supported; the declaration above is the fallback. */
+  background-image:
+    radial-gradient(circle at var(--lamp-x) 5px, #fffbe8 0 1.6px, rgba(255, 240, 190, 0.5) 2.4px, rgba(255, 240, 190, 0.12) 9px, transparent 22px),
+    radial-gradient(circle at var(--lamp-x) calc(100% - 5px), #fffbe8 0 1.6px, rgba(255, 240, 190, 0.5) 2.4px, rgba(255, 240, 190, 0.12) 9px, transparent 22px),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 6px),
+    linear-gradient(180deg, color-mix(in srgb, var(--fan-colour) 18%, transparent), transparent 75%);
 }
 .stadium-home {
   --fan-colour: var(--home);
+  --lamp-x: 5px;
   left: calc(-1 * var(--stadium-band));
   border-radius: calc(12px + var(--stadium-band)) 0 0 calc(12px + var(--stadium-band));
 }
 .stadium-away {
   --fan-colour: var(--away);
+  --lamp-x: calc(100% - 5px);
   right: calc(-1 * var(--stadium-band));
   border-radius: 0 calc(12px + var(--stadium-band)) calc(12px + var(--stadium-band)) 0;
 }
@@ -361,7 +384,7 @@ main {
     radial-gradient(circle at 2px 2px, var(--fan-colour) 1.3px, transparent 1.6px),
     radial-gradient(circle at 5px 5px, #e0e6ee 0.65px, transparent 1px);
   background-size: 6px 6px;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 .stadium-stand::after {
   content: "";
@@ -393,11 +416,15 @@ main {
   0%, 100% { transform: scaleX(0.75); opacity: 0; }
   20%, 70% { transform: translateY(-1px) scaleX(1); opacity: 0.95; }
 }
+@media (min-width: 640px) {
+  .stadium { --stadium-band: 14px; --stadium-top: 14px; }
+}
 @media (max-width: 359px) {
-  .stadium { --stadium-band: 3px; }
+  .stadium { --stadium-band: 6px; --stadium-top: 6px; --stadium-bottom: 3px; }
   .stadium-stand::after { top: 0; height: 2px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .ball-trail { display: none; }
   .stadium-stand.cheer::before,
   .stadium-stand.cheer::after {
     animation: none !important;

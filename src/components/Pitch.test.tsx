@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Pitch from "./Pitch";
 import type { Frame } from "../domain/sim";
 import type { TeamPublic } from "../lib/pocketbase";
@@ -42,38 +42,71 @@ describe("Pitch kits and numbers", () => {
     { side: "home", name: "Gus Glove", no: 1, gk: true, x: 4, y: 32, hot: false },
     { side: "away", name: "Bo Bell", no: 9, gk: false, x: 70, y: 30, hot: false },
   ];
-  it("shows shirt numbers, never names; only the actual carrier gets the ring", () => {
-    const { container } = render(<Pitch frame={frame({ players, ball: [30, 30], carrier: "home:7" })} home={home} away={away} revealed />);
+  it("shows a number on every shirt; only the actual carrier gets the ring and his surname (#204)", () => {
+    const { container, rerender } = render(<Pitch frame={frame({ players, ball: [30, 30], carrier: "home:7" })} home={home} away={away} revealed />);
     const nodes = screen.getAllByTestId("player");
     expect(nodes.map((n) => n.textContent)).toEqual(["7", "1", "9"]);
-    expect(container.textContent).not.toContain("Ann");
     expect(nodes[0].querySelector("[data-ring]")).toBeTruthy();
     expect(nodes[2].querySelector("[data-ring]")).toBeNull();
+    expect(screen.getByTestId("carrier-name").textContent).toBe("ABLE"); // surname only, drawn outside the player node
+    expect(container.textContent).not.toMatch(/Ann|Gus|Glove|Bo|Bell/);
+    // A candidate who is not in drawn contact (ball away / airborne) has neither the ring nor the name.
+    rerender(<Pitch frame={frame({ players, ball: [40, 30], carrier: "home:7" })} home={home} away={away} revealed />);
+    expect(screen.queryByTestId("carrier-name")).toBeNull();
+    rerender(<Pitch frame={frame({ players, ball: [30, 30], lift: 0.4, carrier: "home:7" })} home={home} away={away} revealed />);
+    expect(screen.queryByTestId("carrier-name")).toBeNull();
+    expect(container.querySelector("[data-ring]")).toBeNull();
   });
-  it("every actor has the same radius and stroke — carrier, both keepers, away players and referee included", () => {
-    render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
-    const actors = [...screen.getAllByTestId("player").map(n => n.querySelector("[data-kit]")!), screen.getByTestId("ref").querySelector("[data-ref-body]")!];
-    expect(actors.map(n => n.getAttribute("r"))).toEqual(actors.map(() => "1.45"));
-    expect(actors.map(n => n.getAttribute("stroke-width"))).toEqual(actors.map(() => "0.3"));
+  it("keeps the carrier's name inside the pitch at the touchline and on the drawn (projected) side", () => {
+    const wide = [{ side: "away" as const, name: "Cy de la Touchline", no: 11, gk: false, x: 99, y: 60, hot: true }];
+    render(<Pitch frame={frame({ players: wide, ball: [99, 60], carrier: "away:11", phase: "second_half" })} home={home} away={away} revealed />);
+    const label = screen.getByTestId("carrier-name");
+    expect(label.textContent).toBe("TOUCHLINE");
+    // second half projects x → 100 − x = 1, and the label is clamped in from the touchline
+    expect(label.parentElement!.getAttribute("transform")).toBe("translate(7 60)");
   });
-  it("home is filled in the team colour, away is white with a team-colour ring, keeper keeps lime plus the ring", () => {
+  it("draws every player as the same shirt shape, larger than the old 1.45 disc; the referee keeps his own figure", () => {
     render(<Pitch frame={frame({ players })} home={home} away={away} revealed />);
-    const kit = (i: number) => screen.getAllByTestId("player")[i].querySelector("[data-kit]")!;
-    expect(kit(0).getAttribute("fill")).toBe("#00f0ff");
-    expect(kit(2).getAttribute("fill")).toBe("#f4f7ff");
-    expect(kit(2).getAttribute("stroke")).toBe("#ff2d95");
-    expect(kit(1).getAttribute("fill")).toBe("#c6ff00");
-    expect(kit(1).getAttribute("stroke")).toBe("#00f0ff");
+    const bodies = screen.getAllByTestId("player").map((n) => n.querySelector("[data-kit]")!);
+    expect(new Set(bodies.map((b) => b.tagName.toLowerCase()))).toEqual(new Set(["path"]));
+    expect(new Set(bodies.map((b) => b.getAttribute("d"))).size).toBe(1);
+    expect(screen.getByTestId("ref").querySelector("[data-ref-body]")!.getAttribute("r")).toBe("1.45");
+    expect(Number(screen.getByTestId("ball").getAttribute("r"))).toBeGreaterThan(0.85);
+  });
+  it("home wears the team colour; away wears the house white with team-colour sleeves and collar; keepers are distinct (#204)", () => {
+    render(<Pitch frame={frame({ players: [...players, { side: "away", name: "Al Keeper", no: 1, gk: true, x: 96, y: 32, hot: false }] })} home={home} away={away} revealed />);
+    const node = (i: number) => screen.getAllByTestId("player")[i];
+    const part = (i: number, sel: string) => node(i).querySelector(sel)!;
+    expect(part(0, "[data-kit]").getAttribute("fill")).toBe("#00f0ff");
+    expect(part(2, "[data-kit]").getAttribute("fill")).toBe("#f4f7ff");
+    expect(part(2, "[data-sleeves]").getAttribute("fill")).toBe("#ff2d95");
+    expect(part(2, "[data-trim]").getAttribute("stroke")).toBe("#ff2d95");
+    expect(node(0).getAttribute("data-side")).toBe("home");
+    expect(node(2).getAttribute("data-side")).toBe("away");
+    // keepers: own shirt colours (lime, then the next clear colour for the other keeper), long sleeves and gloves
+    const outfield = [part(0, "[data-kit]").getAttribute("fill"), part(2, "[data-kit]").getAttribute("fill")];
+    const keepers = [1, 3].map((i) => part(i, "[data-kit]").getAttribute("fill"));
+    expect(keepers[0]).toBe("#c6ff00");
+    expect(new Set([...outfield, ...keepers]).size).toBe(4);
+    for (const i of [1, 3]) {
+      expect(node(i).hasAttribute("data-gk")).toBe(true);
+      expect(node(i).querySelector("[data-gloves]")).toBeTruthy();
+      expect(part(i, "[data-sleeves]").getAttribute("d")).not.toBe(part(0, "[data-sleeves]").getAttribute("d"));
+    }
+    expect(node(0).hasAttribute("data-gk")).toBe(false);
+    expect(node(0).querySelector("[data-gloves]")).toBeNull();
+    expect(part(3, "[data-trim]").getAttribute("stroke")).toBe("#ff2d95"); // the keeper's collar names his team
   });
   it("number text is dark on light kits and white on dark ones", () => {
     const numFill = (i: number) => screen.getAllByTestId("player")[i].querySelector("text")!.getAttribute("fill");
     const { unmount } = render(<Pitch frame={frame({ players })} home={{ ...home, primary_color: "#ffffff" }} away={away} revealed />);
     expect(numFill(0)).toBe("#0b1404"); // Virgin white home kit → dark number
     expect(numFill(1)).toBe("#0b1404"); // keeper lime stays dark
-    expect(numFill(2)).toBe("#0b1404"); // away white stays dark
+    expect(numFill(2)).toBe("#fff"); // #204 clash rule: white would clash with the white home kit, so the away side wears its pink
     unmount();
     render(<Pitch frame={frame({ players })} home={{ ...home, primary_color: "#0a84ff" }} away={away} revealed />);
     expect(numFill(0)).toBe("#fff"); // dark blue home kit → white number
+    expect(numFill(2)).toBe("#0b1404"); // away white stays dark
   });
   it("draws the referee as a figure with a head, boots and an equal-sized yellow shirt", () => {
     render(<Pitch frame={frame({ players, ref: [40, 20] })} home={home} away={away} revealed />);
@@ -331,4 +364,86 @@ describe("Pitch full-time banner", () => {
   it("after extra time", () => expect(ft({ side: "away", by: "aet" })).toBe("FULL-TIMEAway City go through!after extra time"));
   it("on penalties with the shootout score", () => expect(ft({ by: "pens", pens: [3, 4], side: "away" })).toBe("FULL-TIMEAway City go through!on penalties 4–3"));
   it("nothing without a winner", () => expect(ft({ side: null })).toBeUndefined());
+});
+
+describe("Pitch ball trail (#204)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const trail = () => screen.getByTestId("ball-trail");
+  const shown = () => trail().getAttribute("display") !== "none";
+  /** Tail of the wedge: the trail's far end. */
+  const tail = () => {
+    const m = trail().querySelector("path")!.getAttribute("d")!.match(/L ([-\d.e]+) ([-\d.e]+)/)!;
+    return [Number(m[1]), Number(m[2])];
+  };
+  const clockAt = (t: { now: number }) => vi.spyOn(performance, "now").mockImplementation(() => t.now);
+
+  it("follows a moving ball with a fixed handful of nodes, never longer than 7 units, and hides at rest", () => {
+    const t = { now: 1000 };
+    clockAt(t);
+    const { rerender } = render(<Pitch frame={frame({ ball: [20, 32] })} home={home} away={away} revealed />);
+    expect(shown()).toBe(false); // nothing to trail on the first tick
+    const counts = new Set<number>();
+    for (let i = 1; i <= 120; i++) {
+      t.now += 16;
+      const bx = 20 + i * 0.6; // ~37 units/s, a driven pass
+      rerender(<Pitch frame={frame({ ball: [bx, 32] })} home={home} away={away} revealed />);
+      counts.add(trail().querySelectorAll("*").length);
+      expect(shown()).toBe(true);
+      const [tx, ty] = tail();
+      expect(tx).toBeLessThan(bx);
+      expect(Math.hypot(bx - tx, 32 - ty)).toBeLessThanOrEqual(7 + 1e-9);
+    }
+    expect([...counts]).toEqual([3]); // the same three nodes every tick: no per-sample DOM
+    for (let i = 0; i < 12; i++) {
+      t.now += 16;
+      rerender(<Pitch frame={frame({ ball: [92, 32] })} home={home} away={away} revealed />);
+    }
+    expect(shown()).toBe(false);
+  });
+
+  it("is a cut, not motion, when the drawn ball jumps (change of ends or a scene snap)", () => {
+    const t = { now: 1000 };
+    clockAt(t);
+    const { rerender } = render(<Pitch frame={frame({ ball: [30, 32] })} home={home} away={away} revealed />);
+    t.now += 16;
+    rerender(<Pitch frame={frame({ ball: [31, 32] })} home={home} away={away} revealed />);
+    expect(shown()).toBe(true);
+    t.now += 16;
+    rerender(<Pitch frame={frame({ ball: [31, 32], phase: "second_half" })} home={home} away={away} revealed />); // drawn at 69
+    expect(shown()).toBe(false);
+  });
+
+  it("follows the ball's drawn height, and is withdrawn under reduced motion by CSS", () => {
+    const t = { now: 1000 };
+    clockAt(t);
+    const { rerender } = render(<Pitch frame={frame({ ball: [50, 32], lift: 0 })} home={home} away={away} revealed />);
+    t.now += 16;
+    rerender(<Pitch frame={frame({ ball: [50, 32], lift: 1 })} home={home} away={away} revealed />);
+    expect(shown()).toBe(true);
+    expect(tail()[1]).toBeCloseTo(32);
+    expect(trail().classList.contains("ball-trail")).toBe(true);
+  });
+});
+
+describe("Pitch stadium frame (#204)", () => {
+  it("draws grass, full markings and floodlights inside the fixed viewBox, and the two crowd stands outside the pitch box", () => {
+    const { container } = render(<Pitch frame={frame({})} home={home} away={away} revealed />);
+    expect(container.querySelectorAll("svg")).toHaveLength(1);
+    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("-4 -3 108 77");
+    expect(screen.getByTestId("floodlights").querySelectorAll("circle")).toHaveLength(4);
+    expect(screen.getByTestId("markings").querySelectorAll("path")).toHaveLength(2); // penalty arcs, corner arcs
+    const stadium = screen.getByTestId("stadium");
+    expect([...stadium.children].map((c) => c.getAttribute("data-testid"))).toEqual(["home-crowd", "away-crowd", "pitch"]);
+  });
+
+  it("does not re-render the static field on ordinary ticks", () => {
+    const { container, rerender } = render(<Pitch frame={frame({ ball: [40, 32] })} home={home} away={away} revealed />);
+    const lights = screen.getByTestId("floodlights");
+    for (let i = 0; i < 5; i++) rerender(<Pitch frame={frame({ ball: [40 + i, 32], seq: i })} home={home} away={away} revealed />);
+    expect(screen.getByTestId("floodlights")).toBe(lights);
+    // bounded drawing: 10 players at ≤ 6 nodes each, plus the field, referee, trail, ball and label stay well under 200 nodes
+    const ten = Array.from({ length: 10 }, (_, i) => ({ side: (i < 5 ? "home" : "away") as "home" | "away", name: `P ${i}`, no: (i % 5) + 1, gk: i % 5 === 0, x: 10 + i * 8, y: 32, hot: false }));
+    rerender(<Pitch frame={frame({ players: ten, ball: [18, 32], carrier: "home:2" })} home={home} away={away} revealed />);
+    expect(container.querySelectorAll("svg *").length).toBeLessThan(200);
+  });
 });
