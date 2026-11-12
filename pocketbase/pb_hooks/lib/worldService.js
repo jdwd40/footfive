@@ -1298,7 +1298,30 @@ function fixtureTeams(fx, teams) {
   return { home: h ? teamPublic(h) : null, away: a ? teamPublic(a) : null };
 }
 
+// Model consumers only read semantic fields (odds adds nonenumerable memoization). Cache immutable-by-source snapshots,
+// never fixture ids: kickoff or repair can replace model_json on the same fixture between requests. Each call reads the
+// current raw field first. Bound memory per goja VM; clearing this optimization never changes prices or persisted data.
+var MODEL_READ_CACHE_MAX = 64;
+var modelReadCache = Object.create(null);
+var modelReadCacheSize = 0;
+
 function modelOf(fx) {
+  var raw;
+  try { raw = fx.getString("model_json"); } catch (_) {}
+  if (typeof raw === "string" && raw && raw !== "null") {
+    if (Object.prototype.hasOwnProperty.call(modelReadCache, raw)) return modelReadCache[raw];
+    try {
+      var parsed = JSON.parse(raw);
+      if (!parsed || parsed.lh == null) return null;
+      if (modelReadCacheSize >= MODEL_READ_CACHE_MAX) {
+        modelReadCache = Object.create(null);
+        modelReadCacheSize = 0;
+      }
+      modelReadCache[raw] = parsed;
+      modelReadCacheSize++;
+      return parsed;
+    } catch (_) {} // preserve the legacy reader's native-object/byte-array fallback for unusual field representations
+  }
   var m = readJson(fx, "model_json", null);
   return m && m.lh != null ? m : null;
 }

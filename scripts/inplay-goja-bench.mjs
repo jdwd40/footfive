@@ -35,7 +35,7 @@ try {
   fs.mkdirSync(migrations);
   fs.cpSync(path.join(root, "pocketbase/pb_hooks/lib"), path.join(hooks, "lib"), { recursive: true });
   fs.writeFileSync(path.join(hooks, "bench.pb.js"), `routerAdd('POST','/bench',function(e){
-    var o=require(__hooks+'/lib/odds.js');var ms=e.requestInfo().body.models;
+    var o=require(__hooks+'/lib/odds.js'),w=require(__hooks+'/lib/worldService.js');var ms=e.requestInfo().body.models;
     var st={ph:'second_half',sc:[1,0],x:[[0,0,0,0,0,0],[0,0,0,0,0,0]],cs:['attack','balanced']};
     var cold=0,warm=0;var trials=20;var encoded=JSON.stringify(ms[0]);
     for(var i=0;i<trials;i++){
@@ -45,8 +45,20 @@ try {
     o.marketProbs(ms[0],st,75);var t3=Date.now();
     for(var z=0;z<200;z++)o.marketProbs(JSON.parse(encoded),st,75);
     var parsedWarm=(Date.now()-t3)/200;
-    o._clearCache();var t2=Date.now();for(var k=0;k<ms.length;k++)o.pairQualify(ms[k]);
-    return e.json(200,{coldMs:cold/trials,warmMs:warm/(trials*100),pairs120Ms:Date.now()-t2,trials:trials,parsedWarmMs:parsedWarm,modelBytes:encoded.length});
+    o._clearCache();var t2=Date.now();for(var k=0;k<ms.length;k++)o.pairQualify(ms[k]);var pairsMs=Date.now()-t2;
+    // Native PocketBase JSON getters plus the real production model reader, not a JavaScript fixture stand-in.
+    var fixture=new Record(new Collection({type:'base',name:'bench_models',fields:[{type:'json',name:'model_json'}]}));
+    var readCold=0,readWarm=0;
+    for(var n=0;n<trials;n++){
+      var version=JSON.parse(encoded);version.benchmarkVersion=n;fixture.set('model_json',version);
+      o._clearCache();var tc=Date.now();o.marketProbs(w.modelOf(fixture),st,75);readCold+=Date.now()-tc;
+      var tw=Date.now();for(var z2=0;z2<100;z2++)o.marketProbs(w.modelOf(fixture),st,75);readWarm+=Date.now()-tw;
+    }
+    var previous=w.modelOf(fixture);fixture.set('model_json',{lh:0.123,la:0.004});var replaced=w.modelOf(fixture);
+    if(replaced===previous||replaced.lh!==0.123||replaced.la!==0.004)throw new Error('same-fixture model replacement was stale');
+    if(JSON.stringify(o.marketProbs(replaced,st,75))!==JSON.stringify(o.marketProbs({lh:0.123,la:0.004},st,75)))throw new Error('updated model prices were stale');
+    return e.json(200,{coldMs:cold/trials,warmMs:warm/(trials*100),pairs120Ms:pairsMs,trials:trials,parsedWarmMs:parsedWarm,
+      modelReadColdMs:readCold/trials,modelReadWarmMs:readWarm/(trials*100),nativeReplacementVerified:true,modelBytes:encoded.length});
   });`);
   const probe = createServer();
   probe.listen(0, "127.0.0.1");

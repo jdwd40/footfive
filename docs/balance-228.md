@@ -2,11 +2,13 @@
 
 ## Status and scope
 
-The current-stance implementation is complete, but **the issue's universal ROI acceptance criterion is not met**. The
-19,200-match AI-mirror scenario still has significant positive bettor returns when future manager choices differ from
-holding the currently published stance. The two fixed-Attack scenarios also expose existing extreme-score numerical
-truncation above the calibration's reference target. This is draft work pending those decisions, not a claim that every
-in-play market is calibrated for every manager policy.
+The current-stance implementation and model-read performance fix are complete, but **the issue's universal ROI acceptance
+criterion is not met**. An independently checked 19,200-match manager policy obeying the four-command cap and wall-clock
+cooldown still yields significant positive bettor returns when future manager choices differ from holding the currently
+published stance. The three broader calibration cohorts below use idealized direct-engine policies that bypass coaching
+budget/cooldown guards; their numbers are retained as calibration evidence, not presented as API-legal strategy proof.
+The two fixed-Attack cohorts also expose existing extreme-score numerical truncation above the calibration's reference
+target. This remains draft work pending the policy decision, not a claim that every in-play market is calibrated.
 
 No settlement, match outcome, RNG, command limit, polling or presentation rule changes.
 
@@ -25,6 +27,11 @@ No settlement, match outcome, RNG, command limit, polling or presentation rule c
 - The chosen stance combination is explicitly included in the cache fingerprint, even when two combinations currently
   have equal rates. Selected wrappers and fingerprints are nonenumerable runtime memoization only; serialized models do
   not grow or change as quotes are read.
+- `worldService.modelOf` caches at most 64 parsed models per goja VM by the **exact raw `model_json` string**, observing the
+  current string on every read. Kickoff/repair on the same fixture cannot reuse an older source value, and fixture ids are
+  not cache keys. All consumers read semantic fields; only odds' nonenumerable memoization changes. Unusual native-object,
+  byte-array, missing and malformed field representations retain the existing `readJson` fallback. Cache eviction changes
+  performance only, never prices or stored data.
 - Both reference paths (`finalDist`, `_ref.dist`, `_ref.next`, `fixturePrices`, `exactPrice`) and polled paths
   (`marketProbs`, fixture cards, catalogues and bet quotes) receive the same selection. Fixture and betting services already
   pass the latest published snapshot, so no extra service/database reads are required.
@@ -45,7 +52,8 @@ These are **19,200 matches per policy**, all 240 ordered pairings equally weight
 are manager-run in the full runs. Each policy also has a final 240-match home-only and away-only smoke run. Default script
 behavior remains the previous all-AI calibration; `--manager-side home|away|both` controls the managed sides.
 
-Policies use the engine's actual queued-command boundary:
+These idealized policies use the engine's queued-command boundary directly. **They do not enforce the API's coaching
+budget or cooldown**, so AI mirror in this full calibration is not an API-legal strategy simulation:
 
 - AI mirror follows the existing 70′ chase, 78′ protect and 100′ level policy.
 - Always Attack starts Balanced and commands Attack for minute 1, then holds it.
@@ -114,6 +122,34 @@ Defend-then-Attack in-play cell outside ±3 pp has only 242 matches (75′, unde
 favourite; 4.1 pp discrepancy, ROI −12.9%). Positive pre-match future-switch returns are kept in the full reports but are
 separate from the issue's in-play acceptance criterion.
 
+### Guarded manager-policy exposure check
+
+```bash
+node scripts/manager-stance-exposure.mjs
+# Defaults: --matches 19200 --prefix cal,alt,zz,qq; --root selects another checkout.
+```
+
+This separate check follows the AI stance policy only when a command is permitted by the four-command budget,
+`BALANCE.liveCoachingCooldownMinutes × 6000 = 30000 ms` wall-clock cooldown and pending-command deduplication. It submits
+commands at `nextAt - 1 ms` after already published play and asserts manual/live-phase eligibility. The issued timestamp
+history is audited independently for cooldown violations. Pricing uses the shared latest-published/open-snapshot helper.
+This is **guarded engine-only validation**, not HTTP/API integration: authentication, database transactions and catch-up
+races are not exercised.
+
+The durable script's 19,200 fixed-cohort results match the independent reviewer's check to `1e-12` in every reported mode
+field. Both sides are manager-run, all 240 pairings equally weighted, with the same four fixed seed prefixes:
+
+| Guarded policy, level score | Offered bets | Favourite next-goal ROI | SE |
+| --- | ---: | ---: | ---: |
+| 75′ | 4,835 | **+4.42689%** | 1.38009 pp |
+| 85′ | 4,560 | **+12.8452%** | 1.62975 pp |
+
+There are 44,469 issued and applied stance changes, at most four per team, **zero budget violations and zero cooldown
+violations**; 4,599 desired targets are rejected by the budget and 5,098 by the cooldown. Each bucket places at most one
+wager per match, so its payout sample standard error does not rely on treating repeated rows as independent. This
+well-populated positive edge establishes that the future-policy limitation survives the live coaching constraints; it
+is not inferred solely from the idealized three-policy calibration.
+
 ### Existing extreme-score approximation
 
 The #219 fast path walks score differences only to ±8; the independent reference walks the larger score grid. Manager
@@ -135,20 +171,35 @@ POCKETBASE_BIN=/path/to/pocketbase node scripts/inplay-goja-bench.mjs /path/to/2
 
 The harness uses a disposable database and copies the tested libraries. It creates a temporary superuser **before serve**,
 which prevents PocketBase opening the fresh-install browser page; it opens no browser tab. It cleans up its own process
-and directory. Cold means empty odds caches, warm reuses the same model/state. The additional parse+warm measure reparses
-the serialized model each time, as a polled database read can do. Timings use goja `Date.now` batches, not Node timings.
+and directory. Timings use goja `Date.now` batches, not Node timings.
 
-| Cost | Controlled #219, both managers | Final #228, both managers |
+The first benchmark exposed a model-parsing regression: two-manager `JSON.parse` plus warm pricing rose from 0.080 ms on
+#219 to 0.225 ms before the model-read cache. Core pricing was still about 6 ms cold and 0.011 ms warm, but that did not
+account for real model reads. The cache fixes this separate measured regression without changing the model or prices.
+
+The extended benchmark now constructs a **native PocketBase Record with a JSON field** and calls the real
+`worldService.modelOf` plus `odds.marketProbs`. Cold read samples use a unique inert benchmark-version property and empty
+odds caches; warm reads reuse the same raw model. No production cache-reset hook was added. It also replaces the model JSON
+on the same native Record and verifies the replacement model's exact prices, guarding against stale-read optimization.
+Database-query time is excluded; native JSON getters, parsing/memoization and odds work are included.
+
+| Controlled both-manager cost, final cache source | #219 baseline | #228 with model-read cache |
 | --- | ---: | ---: |
-| Cold market probabilities | 5.9 ms | 6.15 ms |
-| Warm market probabilities | 0.009 ms | 0.011 ms |
-| JSON parse + warm probabilities | 0.080 ms | **0.225 ms** |
-| 120 pair qualifications | 365 ms | 366 ms |
+| Core cold market probabilities | 11.60 ms | 11.55 ms |
+| Core warm market probabilities | 0.016 ms | 0.022 ms |
+| Forced JSON parse + warm probabilities, bypassing model reader | 0.155 ms | 0.400 ms |
+| **Native model read + cold probabilities** | **11.45 ms** | **11.40 ms** |
+| **Native model read + warm probabilities** | **0.109 ms** | **0.0245 ms** |
+| 120 pair qualifications | 697 ms | 705 ms |
 
-The final both-manager serialized benchmark model is 2,513 bytes. Core arithmetic remains within the historical #219
-review figures (7.0 ms cold, 0.2 ms warm, 541 ms for 120 pairs), with ordinary wall-clock variation between batches.
-The extra variant data adds about **0.145 ms** per fresh JSON parse in this controlled comparison. Therefore an absolute
-end-to-end “no cost increase” claim, including parsing, is not established; the benchmark exposes that overhead separately.
+These batches ran more slowly in absolute core timings than the earlier measurements; the controlled baseline and
+candidate are reported together rather than attributing that change to this optimization. The production warm read path
+is about **4.4 times faster** than #219 in this comparison. The all-AI read-plus-warm path similarly falls from 0.104 ms to
+0.0205 ms. Cold core and full-read costs differ by one batch timer quantum (0.05 ms); warm core arithmetic alone is
+0.006 ms higher while the complete warm model-read path is faster. The two-manager model remains 2,513 bytes versus 452 bytes in the benchmark's #219 baseline: forcing a fresh parse still
+costs more, but ordinary unchanged model reads no longer do that work. Both baselines and candidates passed the native
+same-fixture replacement check. The earlier absolute #219 review figures (7.0 ms cold, 0.2 ms warm, 541 ms per 120 pairs)
+are historical measurements, not substituted for these controlled results.
 
 ## Regression and outcome evidence
 
@@ -156,6 +207,9 @@ end-to-end “no cost increase” claim, including parsing, is not established; 
 kickoff fallback, old models, alternating caches (including equal-rate stance combinations), JSON round trips, catalogue/
 reference parity over all nine manager stance combinations, and the known high-score cent boundary.
 `publishedSnapshot.test.ts` separately covers the four simultaneous-publication boundary regressions described above.
+`modelReadCache.test.ts` checks fresh raw reads, exact-source keys across fixtures and encodings, same-fixture replacement,
+bounded eviction, native/byte-array/malformed fallback, legacy models, and cached/fresh price parity for AI, either single
+manager and both managers. Nonenumerable odds memoization leaves serialized model semantics unchanged.
 
 A separate baseline comparison ran 2,880 matches: AI/home-only/away-only/both-manager configurations × three policies ×
 240 ordered pairings. Complete final states and **all event payloads including cosmetics** are identical to #229 after
@@ -177,3 +231,9 @@ balance replay (200 seeds, 400 configurations, 1,200 executions) passed. Final c
 script syntax checks passed. After the sampling review fix, all four boundary tests, lint for the three changed calibration
 files, typecheck, and diff checks passed; all fixed cohorts were regenerated. No local browser E2E or deployment was run;
 remote CI remains required.
+
+After the model-read optimization, all 14 focused cache/stance/publication tests, typecheck, build and lint passed (zero
+errors, six existing warnings). The actual PocketBase/goja benchmark passed native record replacement checks on both
+baseline and candidate, and the guarded policy checker passed syntax/lint plus its full 19,200-match reproduction. The
+57,600 idealized calibration matches were not rerun for this cache-only optimization: the model data and pricing functions
+are unchanged, and cached/fresh parity is directly tested. The future-policy acceptance blocker remains unresolved.
