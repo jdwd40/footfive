@@ -46,12 +46,14 @@ const { defaultStarters } = lib("tournament.js");
  * Issue #219 re-pins for game state (late urgency, counter-attacks, rebounds, saveBase 0.59): pin 8bd5c427… → daf66a03…, full
  * 4143b324… → 9af045ea…, steps b874c167… → ec15ee3c…. Same inputs, pace, projection and assertions; cosmetic generation/RNG
  * unchanged. See docs/balance-219.md.
+ * Issue #229 changes published danger only: full 9af045ea… → 9c4f9440…; outcome pin and step-state pin unchanged.
+ * See docs/balance-229.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
   pin: "daf66a03be69ba61ef446c362bb09a04681015b6681ccf064f401765de6fb9a8",
   /** Every field of every event plus the whole final state. */
-  full: "9af045ea9b5dd535845a27f431cd5d80e3295c3a845db04d66c2aaa877198a01",
+  full: "9c4f9440b1bb27a474179a0a81f9ec1616f945238c72a77d1e130f2763872b72",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
   steps: "ec15ee3cdb841300b010e19d4f0cab9f108107e3fa644f2ae5f560b36bd7845f",
 };

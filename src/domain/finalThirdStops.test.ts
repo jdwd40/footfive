@@ -1,6 +1,6 @@
 /**
  * #218: about half of the attacks that end in a tackle or interception first reach the final third (a cross, through ball or
- * dribble into x 74–82) and die there: a last-ditch tackle, a clearance or a keeper claim. Markets suspend with the progression
+ * dribble into x 74–82) and die there: a last-ditch tackle, a clearance or a keeper claim. Markets are already suspended from the build-up (#229), remain closed on the progression,
  * and reopen with the turnover; the live view draws the sequence without a jump and leaves the ball with the defending side.
  */
 import { createRequire } from "node:module";
@@ -67,7 +67,7 @@ describe("failed attacks that reach the final third (issue #218)", () => {
     for (const e of challenges.filter((c) => !c.stop)) expect(along(other(e.side as Side), e.ball![0])).toBeLessThanOrEqual(74);
   });
 
-  it("suspends markets with the progression and reopens them with the turnover, so no market stays suspended", () => {
+  it("keeps markets suspended on the progression and reopens them with the turnover, so no market stays suspended", () => {
     const fx = { status: "live", kickoffAt: 0 };
     for (const { e, prog } of stops) {
       expect(prog.st.d, `progression #${prog.seq}`).toBe(1);
@@ -82,7 +82,8 @@ describe("failed attacks that reach the final third (issue #218)", () => {
         if (!events[i].st.d) continue;
         const reopen = events.slice(i + 1).find((x) => !x.st.d);
         if (!reopen) expect(events.at(-1)!.t, `#${events[i].seq}`).toBe("match_end");
-        else expect(reopen.seq - events[i].seq, `#${events[i].seq} ${events[i].t}`).toBeLessThanOrEqual(8);
+        // #229 starts the suspension earlier, so count elapsed match minutes rather than the old eight-row tail.
+        else expect(reopen.min - events[i].min, `#${events[i].seq} ${events[i].t}`).toBeLessThanOrEqual(1);
       }
     }
   });
