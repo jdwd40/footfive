@@ -73,7 +73,6 @@ for (const scenario of cases) {
     const badge = page.getByTestId("won-badge");
     const hidden = async () => {
       await expect(page.getByTestId("match-score")).toHaveText("0–0");
-      await expect(page.getByTestId("hud-score")).toContainText("0–0");
       await expect(page.getByTestId("commentary")).not.toContainText(events[2].text);
       await expect(page.getByTestId("event-feed").filter({ hasText: events[2].text })).toHaveCount(0);
       await expect(page.getByTestId("goal-banner")).toHaveCount(0);

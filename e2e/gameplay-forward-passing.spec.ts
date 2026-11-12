@@ -108,7 +108,6 @@ for (const scenario of cases) {
       if (receiver && Math.hypot(drawing.ball[0] - events[0].ball![0], drawing.ball[1] - events[0].ball![1]) <= 1.6) finalContact ??= { elapsed, ball: drawing.ball };
       if (elapsed % 80 === 0) {
         await expect(page.getByTestId("match-score")).toHaveText("0–0");
-        await expect(page.getByTestId("hud-score")).toContainText("0–0");
         await expect(page.getByTestId("commentary")).toHaveText(events[0].text);
         await expect(page.getByTestId("event-feed").filter({ hasText: events[1].text })).toHaveCount(0);
         await expect(page.getByTestId("goal-banner")).toHaveCount(0);

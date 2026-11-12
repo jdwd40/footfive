@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import Pitch from "../components/Pitch";
 import MarketsPanel from "../components/MarketsPanel";
 import Ticker from "../components/Ticker";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
-import { Abbr, TeamLabel } from "../components/Team";
+import { Abbr } from "../components/Team";
 import { commentaryLine, feedRows } from "../domain/commentary";
 import { sampleN, sceneFor, withCoaching, type Pt, type Scene, type Stances } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
@@ -80,7 +80,9 @@ function CommentaryLine({ fixtureId, replayCaption, seq, text, idle }: {
   const age = started == null ? 0 : performance.now() - started;
   const body = replayCaption != null ? replayCaption : text && started != null && age < CAPTION_MS ? text : seq != null ? "…" : idle;
   return (
-    <p className="min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
+    // #207: two lines are always held (a longer caption is clamped visually, still read in full), so a caption that wraps never
+    // moves what is under the pitch.
+    <p className="line-clamp-2 min-h-12 min-w-0 flex-1 text-base font-semibold" aria-live="polite" data-testid="commentary">
       {body}
     </p>
   );
@@ -89,11 +91,21 @@ function CommentaryLine({ fixtureId, replayCaption, seq, text, idle }: {
 /** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
   const sysReduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) === "off" ? "off" : "full"));
+  const [p, setP] = useState<Pref>(() => {
+    try {
+      return localStorage.getItem(PREF_KEY) === "off" ? "off" : "full";
+    } catch {
+      return "full"; // a blocked store (private mode, previews) only forgets the choice
+    }
+  });
   return [
     p,
     (v) => {
-      localStorage.setItem(PREF_KEY, v);
+      try {
+        localStorage.setItem(PREF_KEY, v);
+      } catch {
+        /* as above */
+      }
       setP(v);
     },
     !!sysReduced,
@@ -350,7 +362,10 @@ export default function MatchPage() {
             </Link>
           </div>
         ) : (
-          <div className="panel mt-4 h-72 animate-pulse" data-testid="match-loading" />
+          // #207: the skeleton sits where the page will (same wrapper, same top), so the loaded page does not jump up from it.
+          <div className="match-page">
+            <div className="panel h-72 animate-pulse" data-testid="match-loading" />
+          </div>
         )}
       </Layout>
     );
@@ -381,49 +396,44 @@ export default function MatchPage() {
     id: `${fx.id}:${e.seq}`, fixtureId: fx.id, seq: e.seq, at: e.at, t: e.t, side: e.side ?? null, text: e.tick || e.text, min: e.min,
   }));
   const otherTicker = live?.ticker?.filter((i) => i.fixtureId !== fx.id) ?? [];
+  // #207: one ticker row for this match (as the lagged pitch has shown it) and the other matches, newest first.
+  const tickerItems = [...recent, ...otherTicker].sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
   return (
     <Layout wide>
       <div className="match-page">
-      <div className="mb-2 flex items-center gap-2 overflow-x-auto no-scrollbar" aria-label="Other matches">
-        <Link to="/live" className="btn-ghost !min-h-9 shrink-0 !px-3 !py-1 text-xs">
-          ← Round
-        </Link>
-        {others.map((o) => (
-          <OtherMatch key={o.id} fx={o} />
-        ))}
+      {/* #207: the other matches' scores and the one merged ticker share a row on desktop; on phones they are two slim rows. */}
+      <div className="match-top" data-testid="match-top">
+        <OtherMatches count={others.length}>
+          <Link to="/live" className="btn-ghost !min-h-8 shrink-0 !px-2.5 !py-0.5 text-xs">
+            ← Round
+          </Link>
+          {others.map((o) => (
+            <OtherMatch key={o.id} fx={o} />
+          ))}
+        </OtherMatches>
+        <Ticker
+          key={fx.id}
+          items={tickerItems}
+          label="Live events"
+          badge="Live"
+          badgeFor={(i) => (i.fixtureId === fx.id ? "This match" : "Elsewhere")}
+          badgeShortFor={(i) => (i.fixtureId === fx.id ? "This" : "Other")}
+          flashGoals={(i) => i.fixtureId !== fx.id}
+          empty="Goals, cards and penalties from this match and the round appear here."
+        />
       </div>
-      <Ticker key={fx.id} items={recent} label="Match events" badge="This match" empty="Goals, cards and penalties from this match appear here." />
-      {otherTicker.length ? (
-        <Ticker items={otherTicker} flashGoals label="Other matches" badge="Around the grounds" empty="Goals, penalties, red cards and results from the other matches appear here." />
-      ) : (
-        // Other matches can post an item at any time (and the round's fixture list may load late): hold the filled ticker's row
-        // (one line, its 2px compact padding, the 4px gap its "Other matches" label gets) from kick-off so its arrival or clearing
-        // never moves the scoreboard and pitch (#183). Not drawn.
-        <div className="panel invisible mb-1" aria-hidden data-testid="ticker-slot">
-          <div className="flex items-center gap-2 px-3 py-0.5 font-semibold">
-            <span>⚽</span>
-            <span>&nbsp;</span>
-          </div>
-        </div>
-      )}
 
-      <Scoreboard view={shown} now={now} stale={stale} />
-      {finished && !stay ? (
-        <div className="mt-2 text-center">
-          <span className="chip chip-amber tabular" data-testid="auto-return">
-            Back to the round in {countdown(finishedAt + RETURN_MS - Date.now())} · tap to stay
-          </span>
-        </div>
-      ) : null}
+      <Scoreboard view={shown} events={seen} now={now} clockNow={clockNow} minSec={clockHold.current.sec} stale={stale} autoReturn={finished && !stay ? countdown(finishedAt + RETURN_MS - Date.now()) : null} />
 
-      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-3">
+      <div className="match-grid mt-2 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-3">
           <section className="match-pitch-panel panel p-2 sm:p-3">
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch frame={frame} home={fx.home} away={fx.away} replay={replayCaption != null} replayed={!!anim.replayed} revealed={revealed} minute={frame ? minutes.get(frame.seq) : undefined} hud={st ? <Hud fx={shown.fixture} now={clockNow} minSec={clockHold.current.sec} /> : null} />
+              // #207: the score and clock live on the one scoreboard above the pitch; the pitch carries no score strip.
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={replayCaption != null} replayed={!!anim.replayed} revealed={revealed} minute={frame ? minutes.get(frame.seq) : undefined} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <CommentaryLine
@@ -444,44 +454,155 @@ export default function MatchPage() {
           </section>
 
           {st?.so || st?.ph === "shootout" ? <ShootoutBoard view={shown} events={seen} /> : null}
+        </div>
 
+        {/* #207: beside the pitch on desktop, stacked under it on phones: betting (folded), the events, line-ups and statistics. */}
+        <aside className="match-side min-w-0 space-y-3">
+          {view.coach ? <Coaching key={fx.id} view={view} onDone={() => void refreshMatch.current?.()} /> : null}
+          <BetTab key={fx.id} fx={fx} finished={finished} />
           <section className="panel p-3">
-            <div className="mb-2 flex items-baseline justify-between gap-2">
+            <div className="mb-1 flex items-baseline justify-between gap-2">
               <h2 className="panel-title">Match events</h2>
               <span className="text-xs text-muted">Match minutes</span>
             </div>
             {/* The feed lists FEED_TYPES only; routine play is on the pitch and in the stats (#181). */}
-            <p className="mb-2 text-xs text-muted" data-testid="feed-note">
+            <p className="mb-2 text-[11px] leading-snug text-muted" data-testid="feed-note">
               Key moments: every shot and its result, plus goals, cards and penalties. Passes, tackles and fouls are left out, so quiet spells are normal. Statistics are match totals.
             </p>
-            <EventFeed
-              events={seen}
-              view={view}
-              onReplay={(e) => {
-                const s = scenes.get(e.seq);
-                if (s && s.ms > 0 && pref !== "off") setReplay({ scene: s, startedAt: performance.now() });
-              }}
-            />
+            {/* #207: a fixed-height list, so a new row never pushes the line-ups and statistics below it. */}
+            <div className="match-feed h-64 overflow-y-auto pr-1 lg:overscroll-contain">
+              <EventFeed
+                events={seen}
+                view={view}
+                onReplay={(e) => {
+                  const s = scenes.get(e.seq);
+                  if (s && s.ms > 0 && pref !== "off") setReplay({ scene: s, startedAt: performance.now() });
+                }}
+              />
+            </div>
           </section>
-        </div>
-
-        <aside className="space-y-3">
-          {view.coach ? <Coaching key={fx.id} view={view} onDone={() => void refreshMatch.current?.()} /> : null}
+          {view.lineups ? <Lineups view={view} sentOff={liveSentOff} /> : null}
           <section className="panel p-3">
             <h2 className="panel-title mb-2">Statistics</h2>
             <Stats st={st} view={view} />
           </section>
-          {!finished ? (
-            <section className="panel p-3">
-              <h2 className="panel-title mb-2">Bet on this match</h2>
-              <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} />
-            </section>
-          ) : null}
-          {view.lineups ? <Lineups view={view} sentOff={liveSentOff} /> : null}
         </aside>
       </div>
       </div>
     </Layout>
+  );
+}
+
+const BET_TAB_KEY = "ff_bet_tab";
+
+/**
+ * #207: betting for this match folded into one tab. Open, its body is a fixed-height scroll area, so markets that are withdrawn,
+ * suspended or collapse (a shootout leaves only "To qualify") change nothing outside it. The markets stay mounted while it is
+ * folded, so their requests and polling are exactly as before; a finished match drops them, as before.
+ */
+function BetTab({ fx, finished }: { fx: MatchView["fixture"]; finished: boolean }) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(BET_TAB_KEY) === "open";
+    } catch {
+      return false;
+    }
+  });
+  const [closed, setClosed] = useState<string | null>(null);
+  const onClosed = useCallback((c: string | null) => setClosed(c), []);
+  const toggle = () =>
+    setOpen((o) => {
+      try {
+        localStorage.setItem(BET_TAB_KEY, o ? "closed" : "open");
+      } catch {
+        /* a blocked store only forgets the choice */
+      }
+      return !o;
+    });
+  const bodyId = `bet-tab-${fx.id}`;
+  // #207 review: a cue while more markets are below the fold of the fixed-height body. Opacity only: it never moves anything.
+  const body = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const measure = useCallback(() => {
+    const el = body.current;
+    setMore(!!el && el.scrollHeight - el.scrollTop - el.clientHeight > 24);
+  }, []);
+  useEffect(() => {
+    const el = body.current;
+    if (!el || !open) return;
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [open, measure, finished]);
+  const scoreNow = fx.st?.sc;
+  return (
+    <section className="panel overflow-hidden" data-testid="bet-tab">
+      <h2 className="m-0">
+        <button type="button" className="flex h-11 w-full items-center gap-2 px-3 text-left" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-testid="bet-tab-toggle">
+          <span className="panel-title min-w-0 flex-1 truncate" title="Bet on this match">
+            Bet on this match
+          </span>
+          {!finished && closed ? (
+            <span className="chip chip-amber max-w-[11rem] truncate" title={closed} data-testid="bet-tab-suspended">
+              <span className="truncate">{closed}</span>
+            </span>
+          ) : null}
+          <span aria-hidden className={`text-muted transition-transform ${open ? "rotate-180" : ""}`}>
+            ▾
+          </span>
+        </button>
+      </h2>
+      <div className="relative" hidden={!open}>
+        <div id={bodyId} ref={body} onScroll={measure} className="match-bet-body h-80 overflow-y-auto border-t border-line px-3 py-2 lg:overscroll-contain" data-testid="bet-tab-body">
+          {finished ? (
+            <p className="text-sm text-muted">Betting has closed — this match is over.</p>
+          ) : (
+            <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} onClosed={onClosed} score={scoreNow ? [scoreNow[0], scoreNow[1]] : undefined} />
+          )}
+        </div>
+        <div
+          className={`pointer-events-none absolute inset-x-0 bottom-0 flex h-12 items-end justify-center bg-gradient-to-t from-panel via-panel/80 to-transparent pb-1.5 transition-opacity ${more ? "opacity-100" : "opacity-0"}`}
+          data-testid="bet-more"
+          data-visible={more || undefined}
+        >
+          <button
+            type="button"
+            tabIndex={more ? 0 : -1}
+            aria-hidden={!more}
+            className={`chip chip-muted ${more ? "pointer-events-auto" : ""}`}
+            onClick={() => body.current?.scrollBy({ top: 240, behavior: "smooth" })}
+          >
+            More markets ↓
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** #207 review: the other matches. Every chip keeps its width (the score has a fixed slot), so a goal there never moves the
+ * ticker; when the strip cannot show them all it says so with a fade at the clipped edge. */
+function OtherMatches({ count, children }: { count: number; children: ReactNode }) {
+  const el = useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = useState(false);
+  useEffect(() => {
+    const node = el.current;
+    if (!node) return;
+    const check = () => setClipped(node.scrollWidth - node.scrollLeft - node.clientWidth > 2);
+    check();
+    node.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      node.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, [count]);
+  return (
+    <div ref={el} className="match-others flex items-center gap-1.5 overflow-x-auto no-scrollbar" aria-label="Other matches" data-clipped={clipped || undefined}>
+      {children}
+    </div>
   );
 }
 
@@ -490,9 +611,9 @@ function OtherMatch({ fx }: { fx: FixtureCardData }) {
   const score = fx.st ? `${fx.st.sc[0]}–${fx.st.sc[1]}` : "";
   const flash = useChanged(fx.st ? fx.st.sc.join("-") : "0-0"); // kick-off (no state yet → 0–0) is not a goal
   return (
-    <Link to={`/match/${fx.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs hover:border-cyan/50" data-testid="other-match">
+    <Link to={`/match/${fx.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-1.5 py-1 text-xs hover:border-cyan/50" data-testid="other-match">
       <Abbr team={fx.home} />
-      <span key={flash} className={`tabular rounded px-0.5 font-bold ${flash ? "goal-flash inline-block" : ""}`} data-testid="other-score" data-flash={flash || undefined}>
+      <span key={flash} className={`tabular inline-block min-w-[2.25rem] rounded px-0.5 text-center font-bold ${flash ? "goal-flash" : ""}`} data-testid="other-score" data-flash={flash || undefined}>
         {score || "v"}
       </span>
       <Abbr team={fx.away} away />
@@ -500,74 +621,158 @@ function OtherMatch({ fx }: { fx: FixtureCardData }) {
   );
 }
 
-/** Broadcast-style strip on the pitch: score and clock as the lagged pitch shows them, plus the shootout score and who is kicking, so none of it is ever out of view with the play. Reads `shown` state only. */
-function Hud({ fx, now, minSec }: { fx: MatchView["fixture"]; now: number; minSec: number }) {
-  const st = fx.st!;
-  const so = st.so;
-  const kicker = st.ph === "shootout" && so?.next ? (so.next === "home" ? fx.home : fx.away) : null;
+/** #207: one side of the scoreboard. The badge (crest) sits on the outer edge, the name between it and the score, so no team
+ * colour ever sits beside the score or the clock. Phones show the badge alone, still at the outer edge. */
+function ScoreTeam({ team, side, dim }: { team: MatchView["fixture"]["home"]; side: Side; dim: boolean }) {
+  const home = side === "home";
   return (
-    <>
-      <span className="tabular" data-testid="hud-score">
-        {fx.home.abbreviation} {st.sc[0]}–{st.sc[1]} {fx.away.abbreviation}
+    <div className={`score-team flex min-w-0 items-center gap-2 ${home ? "justify-start sm:justify-end" : "flex-row-reverse justify-start sm:justify-end"} ${dim ? "opacity-50" : ""}`} data-testid={`score-team-${side}`}>
+      <span className="score-crest shrink-0">
+        <Abbr team={team} away={!home} />
       </span>
-      {st.ph === "shootout" ? null : <MatchClock fx={fx} now={now} minSec={minSec} />}
-      {so ? (
-        <span className="text-magenta" data-testid="hud-pens">
-          PENS {so.h}–{so.a}
-        </span>
-      ) : null}
-      {kicker ? (
-        <span className="rounded-sm bg-white/15 px-1" data-testid="hud-kicker">
-          {kicker.abbreviation} to kick
-        </span>
-      ) : null}
-    </>
+      <span className={`hidden min-w-0 truncate font-semibold sm:inline sm:text-lg lg:text-xl ${home ? "text-right" : ""}`} title={team.name}>
+        {team.name}
+      </span>
+    </div>
   );
 }
 
-function Scoreboard({ view, now, stale }: { view: MatchView; now: number; stale: boolean }) {
+/**
+ * #207: the one score on the page, as the lagged pitch shows it, with the big clock (or the shootout score), the match timeline
+ * and the phase. Every row has a fixed height whatever it shows, so nothing here moves the pitch during a match.
+ */
+function Scoreboard({ view, events, now, clockNow, minSec, stale, autoReturn }: { view: MatchView; events: MatchEvent[]; now: number; clockNow: number; minSec: number; stale: boolean; autoReturn: string | null }) {
   const fx = view.fixture;
   const st = fx.st;
   const flash = useChanged(st ? st.sc.join("-") : "");
   const finished = st?.ph === "finished";
   const winner: Side | null = finished ? st!.win : null;
+  const so = st?.so;
+  const shootout = !finished && (st?.ph === "shootout" || !!so);
+  const kicker = st?.ph === "shootout" && so?.next ? (so.next === "home" ? fx.home : fx.away) : null;
+  const sec = st && !shootout && !finished ? clockSeconds(st, fx.at, clockNow, fx.minuteMs) : null;
   return (
     <section className="panel overflow-hidden" data-testid="match-scoreboard">
-      <div className="flex items-center justify-between border-b border-line px-3 py-1.5 text-xs">
-        <span className="uppercase tracking-widest text-muted">{view.round.label}</span>
-        <div className="flex items-center gap-2">
-          {stale ? <span className="chip chip-amber">Reconnecting</span> : null}
-          <PhaseChip fx={fx} now={now} />
+      <div className="match-score-row grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-3 pt-1.5 sm:gap-4 sm:px-4">
+        <ScoreTeam team={fx.home} side="home" dim={winner === "away"} />
+        <div className="score-center flex items-center gap-2.5 sm:gap-4">
+          <div className="score-slot flex h-10 w-[5.5rem] items-center justify-center">
+            {st ? (
+              <div key={flash} className={`w-full text-center text-4xl font-bold leading-none tabular ${flash ? "score-pop" : ""}`} data-testid="match-score">
+                {st.sc[0]}
+                <span className="mx-1 text-muted">–</span>
+                {st.sc[1]}
+              </div>
+            ) : (
+              <div className="text-center font-display text-2xl leading-none text-muted">vs</div>
+            )}
+          </div>
+          <span aria-hidden className="h-8 w-px bg-line" />
+          <div className="match-clock flex h-9 w-[5.75rem] items-center text-[28px] font-bold leading-none sm:text-[32px]" data-testid="match-clock">
+            {!st ? (
+              <span className="text-xs font-semibold leading-tight text-muted">
+                Kick-off in
+                <br />
+                <b className="tabular text-sm text-white">{countdown(fx.kickoffAt - now)}</b>
+              </span>
+            ) : shootout ? (
+              <span className="font-display text-lg font-bold leading-none text-magenta tabular" data-testid="match-shootout-score">
+                PENS{so ? ` ${so.h}–${so.a}` : ""}
+              </span>
+            ) : (
+              <MatchClock fx={fx} now={clockNow} minSec={minSec} sizeClass="text-[28px] leading-none sm:text-[32px]" />
+            )}
+          </div>
         </div>
+        <ScoreTeam team={fx.away} side="away" dim={winner === "home"} />
       </div>
-      <div className="match-score-row grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 sm:gap-4 sm:px-5">
-        <TeamLabel team={fx.home} compact className={`text-base sm:text-xl ${winner === "away" ? "opacity-50" : ""}`} align="right" />
-        <div className="text-center">
-          {st ? (
-            <div key={flash} className={`text-4xl font-bold leading-none tabular sm:text-5xl ${flash ? "score-pop" : ""}`} data-testid="match-score">
-              {st.sc[0]}
-              <span className="mx-1 text-muted">–</span>
-              {st.sc[1]}
-            </div>
+      <div className="flex h-7 items-center gap-2 px-3 sm:px-4">
+        <span className="hidden w-24 shrink-0 truncate text-[10px] font-bold uppercase tracking-widest text-muted sm:block" title={view.round.label}>
+          {view.round.label}
+        </span>
+        <Timeline fx={fx} events={events} sec={sec} />
+        <span className="flex w-[5.75rem] shrink-0 justify-end">
+          {stale ? (
+            <span className="chip chip-amber">Reconnecting</span>
+          ) : kicker ? (
+            <span className="chip chip-magenta" data-testid="match-kicker">
+              {kicker.abbreviation} to kick
+            </span>
           ) : (
-            <div className="font-display text-2xl text-muted">vs</div>
+            <PhaseChip fx={fx} now={now} />
           )}
-          {st ? null : <div className="mt-0.5 text-sm text-muted">Kick-off in {countdown(fx.kickoffAt - now)}</div>}
-          {st?.so ? (
-            <div className="mt-1 text-sm font-bold text-magenta" data-testid="match-shootout-score">
-              Pens {st.so.h}–{st.so.a}
-            </div>
-          ) : null}
-        </div>
-        <TeamLabel team={fx.away} away compact className={`text-base sm:text-xl ${winner === "home" ? "opacity-50" : ""}`} />
+        </span>
       </div>
-      {finished && winner ? (
-        <div className="border-t border-lime/30 bg-lime/10 px-3 py-2 text-center text-sm font-bold text-lime" data-testid="final-result">
-          {(winner === "home" ? fx.home : fx.away).name} go through
-          {st!.by === "pens" && st!.so ? ` — won the shootout ${Math.max(st!.so.h, st!.so.a)}–${Math.min(st!.so.h, st!.so.a)}` : st!.by === "aet" ? " after extra time" : ""}
+      {(finished && winner) || autoReturn ? (
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-lime/30 bg-lime/10 px-3 py-1 text-center text-sm font-bold text-lime">
+          {finished && winner ? (
+            <span data-testid="final-result">
+              {(winner === "home" ? fx.home : fx.away).name} go through
+              {st!.by === "pens" && st!.so ? ` — won the shootout ${Math.max(st!.so.h, st!.so.a)}–${Math.min(st!.so.h, st!.so.a)}` : st!.by === "aet" ? " after extra time" : ""}
+            </span>
+          ) : null}
+          {autoReturn ? (
+            <span className="chip chip-amber tabular" data-testid="auto-return">
+              Back to the round in {autoReturn} · tap to stay
+            </span>
+          ) : null}
         </div>
       ) : null}
     </section>
+  );
+}
+
+const ET_PHASES = new Set(["et_break", "extra_time_1", "et_half_time", "extra_time_2", "shootout"]);
+const MARKS: Record<string, "goal" | "yellow" | "red"> = { goal: "goal", penalty_goal: "goal", yellow_card: "yellow", red_card: "red" };
+const MARK_NAME = { goal: "Goal", yellow: "Yellow card", red: "Red card" } as const;
+
+/**
+ * #207: the match on one bar under the score: 90 minutes, or 120 once extra time is reached, with each goal and card the pitch has
+ * shown at its minute (home above the line, away below) and the current minute as the filled part and its head. The fill and head
+ * move by transform only, so the running clock never counts as a layout shift.
+ */
+function Timeline({ fx, events, sec }: { fx: MatchView["fixture"]; events: MatchEvent[]; sec: number | null }) {
+  const st = fx.st;
+  const et = (!!st && (ET_PHASES.has(st.ph) || (st.ph === "finished" && (st.by === "aet" || st.by === "pens")))) || events.some((e) => e.min > 90 && !!MARKS[e.t]);
+  const total = et ? 120 : 90;
+  const minute = !st ? 0 : st.ph === "finished" || st.ph === "shootout" || st.ph === "et_break" ? (st.ph === "et_break" ? 90 : total) : sec == null ? 0 : Math.min(total, sec / 60);
+  const marks = events.filter((e) => MARKS[e.t]).map((e) => ({ e, kind: MARKS[e.t], pct: (Math.min(Math.max(e.min, 0), total) / total) * 100 }));
+  const team = (s: Side | null | undefined) => (s === "home" ? fx.home.abbreviation : s === "away" ? fx.away.abbreviation : "");
+  const describe = marks.map(({ e, kind }) => `${MARK_NAME[kind]} ${team(e.side)} ${minuteLabel(e.min)}`.replace("  ", " "));
+  const ticks = et ? [45, 90, 105] : [45];
+  return (
+    <div
+      className="match-timeline relative h-5 min-w-0 flex-1"
+      role="img"
+      aria-label={`Match timeline, ${total} minutes${st ? `, now ${Math.floor(minute)}′` : ""}: ${describe.join(", ") || "no goals or cards yet"}`}
+      data-testid="timeline"
+      data-total={total}
+    >
+      <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-panel-2 ring-1 ring-line">
+        {et ? <div className="absolute inset-y-0 right-0 bg-magenta/20" style={{ left: "75%" }} data-testid="timeline-et" /> : null}
+        <div className="absolute inset-0 origin-left bg-cyan/55" style={{ transform: `scaleX(${(minute / total).toFixed(4)})` }} data-testid="timeline-progress" data-minute={Math.floor(minute)} />
+      </div>
+      {ticks.map((m) => (
+        <span key={m} aria-hidden className="absolute top-1/2 h-3 w-px -translate-y-1/2 bg-muted/50" style={{ left: `${(m / total) * 100}%` }} />
+      ))}
+      {st ? (
+        <span aria-hidden className="pointer-events-none absolute inset-0" style={{ transform: `translateX(${((minute / total) * 100).toFixed(3)}%)` }}>
+          <span className="absolute left-0 top-1/2 h-3.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow" data-testid="timeline-now" />
+        </span>
+      ) : null}
+      {marks.map(({ e, kind, pct }) => (
+        <span
+          key={e.seq}
+          className={`absolute -translate-x-1/2 ${e.side === "away" ? "bottom-0" : "top-0"} ${kind === "goal" ? "h-2 w-2 rounded-full border border-ink bg-white" : kind === "red" ? "h-2.5 w-2 rounded-[1px] bg-[#ff3344] ring-1 ring-white/80" : "h-2 w-1.5 rounded-[1px] bg-[#ffd400]"}`}
+          style={{ left: `${pct}%` }}
+          title={`${MARK_NAME[kind]} · ${team(e.side)} · ${minuteLabel(e.min)}`}
+          data-testid="timeline-mark"
+          data-kind={kind}
+          data-side={e.side ?? undefined}
+          data-min={e.min}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -662,17 +867,20 @@ function Stats({ st, view }: { st: PubState | null; view: MatchView }) {
         <span className="text-muted">Possession</span>
         <Abbr team={fx.away} away />
       </div>
+      {/* #207: "First minute" holds the bar's own height, so the bar's arrival never moves the rows below. */}
       {earlyPossession ? (
-        <p className="text-xs text-muted">First minute</p>
+        <p className="flex h-[26px] items-center text-xs text-muted">First minute</p>
       ) : (
         <>
+          <div className="h-[26px]">
           <div className="flex h-2 overflow-hidden rounded-full bg-panel-2">
             <div style={{ width: `${st.pos}%`, background: fx.home.primary_color }} />
             <div style={{ width: `${100 - st.pos}%`, background: "#f4f7ff" }} />
           </div>
-          <div className="flex justify-between tabular text-xs text-muted">
+          <div className="mt-0.5 flex justify-between tabular text-xs text-muted">
             <span>{st.pos}%</span>
             <span>{100 - st.pos}%</span>
+          </div>
           </div>
         </>
       )}
@@ -720,7 +928,7 @@ function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: Mat
   const list = feedRows(events, (e) => FEED_TYPES.has(e.t)).reverse();
   if (!list.length) return <p className="text-sm text-muted">{view.fixture.status === "scheduled" ? "Not kicked off yet. Goals, cards, chances and every key moment will be listed here from kick-off." : "Waiting for the first action…"}</p>;
   return (
-    <ol className="max-h-80 space-y-1 overflow-y-auto pr-1 text-sm" data-testid="event-feed">
+    <ol className="space-y-1 text-sm" data-testid="event-feed">
       {list.map(({ e, lead, text }) => {
         // A merged row is the attacking side's: a save or block is the defenders' event, but the attack was the shooter's.
         const sideKey = lead.side;
@@ -860,7 +1068,7 @@ function Coaching({ view, onDone }: { view: MatchView; onDone: () => void }) {
 function Lineups({ view, sentOff: off }: { view: MatchView; sentOff: Set<string> }) {
   const fx = view.fixture;
   return (
-    <section className="panel p-3">
+    <section className="panel p-3" data-testid="lineups">
       <h2 className="panel-title mb-2">Line-ups</h2>
       <div className="grid grid-cols-2 gap-3 text-sm">
         {(["home", "away"] as const).map((side) => {

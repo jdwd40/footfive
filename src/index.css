@@ -300,25 +300,44 @@ h3,
   display: none;
 }
 
-/* Reclaim insets only beyond very-small phones. Keep score/clock readable and
-   trade desktop scoreboard padding for pitch height, not a different camera aspect. */
-.match-page > [aria-label="Other matches"] { margin-bottom: 4px; }
-.match-page > [data-testid="ticker"] > div > .flex-1 { padding-block: 2px; }
-.match-page [data-testid="match-scoreboard"] > :first-child { padding-block: 2px; }
-.match-score-row { padding-block: 4px; }
-/* Put clock and penalties beside the score, rather than adding two chrome rows. */
-.match-score-row > .text-center { display: grid; grid-template-columns: auto auto; align-items: center; column-gap: 8px; }
-.match-score-row [data-testid="match-score"] { grid-row: 1 / span 2; }
-.match-score-row > .text-center > :not([data-testid="match-score"]) { margin-top: 0; }
-.match-score-row > .text-center > :nth-child(2) { display: flex; align-items: center; }
-.match-score-row > .text-center > :nth-child(2) > span { line-height: 1.2; }
-.match-page > .grid { margin-top: 8px; }
-/* Final chrome must fit without taking height from the pitch. */
-.match-page [data-testid="final-result"] { padding-block: 2px; }
-.match-page > div:has(> [data-testid="auto-return"]) { margin-top: 0; line-height: 1; }
+/* #207: the match page's chrome above the pitch is one slim row of other matches and the one merged ticker (side by side on
+   desktop), then the single scoreboard (score, big clock, timeline). Every row has a fixed height, so nothing that arrives during
+   a match moves the pitch. The camera aspect never changes. */
+.match-top { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.match-top > [data-testid="ticker"] > div > .flex-1 { height: 28px; }
+.match-top > [data-testid="ticker"] > div > [data-testid="ticker-badge"] { min-height: 28px; }
+.score-crest abbr { font-size: 13px; padding: 2px 6px; min-width: 3.25rem; border-radius: 6px; }
+.btn-odds[data-reserved] { opacity: 0.4; border-style: dashed; }
+@media (min-width: 1024px) {
+  .match-top { flex-direction: row; align-items: center; gap: 8px; }
+  /* The strip takes the room its chips need (a round's eight fixtures fit at 1280 px), up to 72%; the ticker has the rest. A chip
+     never changes width (its score has a fixed slot), so a goal elsewhere never moves the ticker. */
+  .match-top > .match-others { flex: 0 1 auto; max-width: 76%; min-width: 0; gap: 4px; }
+  .match-others [data-testid="other-match"] { padding-inline: 4px; gap: 2px; }
+  .match-others [data-testid="other-match"] abbr { min-width: 2.25rem; padding-inline: 3px; }
+  .match-others [data-testid="other-score"] { min-width: 2rem; }
+  .match-top > [data-testid="ticker"] { flex: 1 1 0; min-width: 18rem; }
+  .match-top > [data-testid="ticker"] > div > .flex-1 { height: 32px; }
+}
+/* #207 review: a strip that cannot show every other match fades out at its clipped edge. */
+.match-others[data-clipped] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+/* #207 review: under 360 px the scoreboard row is narrower (smaller crests, score and clock slots), so each crest keeps a clear gap
+   from the score and the clock. */
 @media (max-width: 359px) {
-  /* The pitch HUD already carries the final score, clock and penalties. */
-  .match-page [data-testid="match-scoreboard"]:has([data-testid="final-result"]) .match-score-row { display: none; }
+  .match-score-row { column-gap: 6px; }
+  .match-score-row .score-center { gap: 6px; }
+  .match-score-row .score-slot { width: 4.25rem; }
+  .match-score-row [data-testid="match-score"] { font-size: 32px; }
+  .match-score-row .match-clock { width: 4rem; font-size: 24px; }
+  .match-score-row .match-clock [aria-label="Match clock"] { font-size: 24px; }
+  .match-score-row .match-clock [data-testid="match-shootout-score"] { font-size: 15px; }
+  .score-crest abbr { font-size: 11px; padding: 2px 4px; min-width: 2.4rem; }
+}
+/* Final chrome must fit without taking height from the pitch. */
+@media (max-width: 359px) {
   .match-page:has([data-testid="final-result"]) [aria-label="Highlights"] { position: absolute; top: 8px; right: 8px; }
 }
 @media (min-width: 360px) {
@@ -329,7 +348,6 @@ h3,
   .match-pitch-panel { padding: 8px; }
 }
 @media (min-width: 1024px) {
-  .match-score-row { padding-block: 2px; }
   .match-score-row [data-testid="match-score"] { font-size: 40px; }
   /* Desktop (#8/#55): size the pitch so pitch + its rows (score/legend, message strip, commentary) fill one
      viewport once scrolled to, and take the full column width — the camera aspect never changes. */
