@@ -104,3 +104,9 @@ export function autoReplay(memo: ReplayMemo, events: MatchEvent[], scenes: Map<n
   const at = plan ? replayAt(plan, clock) : null;
   return plan && at ? { plan, ...at } : null;
 }
+
+/** Has this celebration's replay started (it may be over)? The big goal screen and its cheer then never come back for that goal. */
+export function replayStarted(memo: ReplayMemo, cur: MatchEvent | null, clock: number) {
+  const plan = cur && cur.t === "celebration" ? memo.plans.get(cur.seq) : undefined;
+  return !!plan && clock >= plan.startAt;
+}

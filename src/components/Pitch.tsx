@@ -17,6 +17,7 @@ type Props = {
   revealed: boolean; // MatchPage decides when the result may show (flash moment + displayed ball at the impact point)
   hud?: ReactNode; // compact score / clock / shootout strip pinned to the pitch's top-left corner
   minute?: number; // #206: the drawn event's match minute, for the goal screen
+  replayed?: boolean; // #206: this goal's replay has already started: the live celebration keeps the GOAL! chip, no second big screen or cheer
 };
 
 const W = 100;
@@ -241,7 +242,7 @@ function MoveFx({ fx, players, projectX, revealed }: { fx: Fx | null; players: F
   );
 }
 
-export default function Pitch({ frame, home, away, replay, revealed, hud, minute }: Props) {
+export default function Pitch({ frame, home, away, replay, revealed, hud, minute, replayed }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
   const kits = useMemo(() => kitsFor(home, away), [home, away]);
@@ -269,7 +270,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud, minute
   const flash = frame && revealed ? frame.flash : null;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
   // #206: a replay shows the small GOAL! chip instead: the big screen belongs to the live goal, which it follows.
-  const goal = !replay && frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
+  const goal = !replay && !replayed && frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
   // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
   const kick = frame?.kick;
   const team = frame?.side === "away" ? away : home;

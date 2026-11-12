@@ -1758,6 +1758,30 @@ describe("MatchPage big moments (#206)", () => {
     });
   }, 10000);
 
+  it("a restart later than the replay's hold brings back no second goal screen and no second cheer", async () => {
+    await withClock(async () => {
+      const G = Date.now() - 60000;
+      const late = goalRun(G).map((e) => (e.t === "restart" ? { ...e, at: G + 3150 + 20000 } : e)); // published long after the replay
+      vi.setSystemTime(G + 3150 + 300 + LAG);
+      await mount(paced(late, Date.now()));
+      expect(screen.getByTestId("goal-banner")).toBeTruthy(); // the celebration's own moment
+      await playheadAt(G + 3150 + 600 + 1000);
+      expect(screen.getByText("Replay")).toBeTruthy();
+      const stand = screen.getByTestId("home-crowd");
+      expect(stand.classList.contains("cheer")).toBe(false);
+      // past the replay and its hold (no next event known when it was planned), still on the celebration
+      for (const t of [G + 3150 + 600 + 5000 + 1500 + 200, G + 3150 + 12000]) {
+        await playheadAt(t);
+        expect(screen.queryByText("Replay")).toBeNull();
+        expect(screen.queryByTestId("goal-banner")).toBeNull();
+        expect(screen.getByText("GOAL!")).toBeTruthy(); // the chip, as during the replay
+        expect(screen.getByTestId("home-crowd")).toBe(stand); // the Crowd cue is unchanged: no restarted cheer
+        expect(stand.classList.contains("cheer")).toBe(false);
+      }
+      expect(screen.getByTestId("match-score").textContent).toBe("1–0");
+    });
+  }, 10000);
+
   it("skips the replay when the restart is due too soon, and under reduced motion", async () => {
     await withClock(async () => {
       const G = Date.now() - 60000;

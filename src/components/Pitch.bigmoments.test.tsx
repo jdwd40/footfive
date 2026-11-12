@@ -72,6 +72,15 @@ describe("goal celebration and replay (#206)", () => {
     expect(screen.getByTestId("home-crowd").classList.contains("cheer")).toBe(false);
   });
 
+  it("once the goal's replay has run, its celebration shows the GOAL! chip: no second goal screen, no second cheer", () => {
+    const cel = frame({ type: "celebration", flash: "goal", side: "home", who: "Jo Striker", score: [1, 0], players, p: 1 });
+    render(<Pitch frame={cel} home={home} away={away} revealed replayed />);
+    expect(screen.queryByTestId("goal-banner")).toBeNull();
+    expect(screen.getByText("GOAL!")).toBeTruthy();
+    expect(screen.queryByText("Replay")).toBeNull();
+    expect(screen.getByTestId("home-crowd").classList.contains("cheer")).toBe(false);
+  });
+
   it("the live goal screen carries the minute when known", () => {
     render(<Pitch frame={frame({ type: "goal", flash: "goal", side: "away", who: "Jo Striker", score: [1, 2], p: 0.7 })} home={home} away={away} revealed minute={67} />);
     expect(screen.getByTestId("banner-who")).toHaveTextContent("Jo Striker · 67′");
