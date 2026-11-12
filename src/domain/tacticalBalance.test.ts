@@ -67,10 +67,12 @@ describe("balanced v balanced manual matches are unchanged by #133", () => {
   // Seed 13 refreshed from main ed72f0c (pre-#133 engine after #145/#146 fitness/overclock changes).
   // #195 recommended goal tuning deliberately re-pins seeds 11/13; seed12 is unchanged.
   // Same inputs, timing and strict score/event/RNG assertions; see docs/balance-195.md.
+  // #213 re-pins all three `hash`es (11: 2e8a828f…, 12: 283e1937…, 13: 0c3c21d3…): midfield passes are placed from the ball's
+  // spot, with the same draws. `unplaced` — every event without its `ball`/`from`/`target` — is main's at 72e459c.
   const GOLDEN = [
-    { seed: 11, h: 0, a: 15, rc: 2265, score: [5, 2], events: 423, hash: "2e8a828f43125a52d168ef85fafffcb37dbe24f5d688b76c76174fc185649eae" },
-    { seed: 12, h: 5, a: 6, rc: 2068, score: [2, 0], events: 367, hash: "283e19375049323e703ae1b7b51de620be4ae70832b8b3bf2f19619fe6c95b61" },
-    { seed: 13, h: 9, a: 2, rc: 2668, score: [2, 1], events: 475, hash: "0c3c21d38d4a29b626c4a4fc5a1e659cd2a81d8f90c3eaa49bcde6a84c437fc4" },
+    { seed: 11, h: 0, a: 15, rc: 2265, score: [5, 2], events: 423, hash: "4d81b1f17e5bd430c4bdc1e315bb58f29df5ed125f39a01f9d0841f5588bd789", unplaced: "5ee1047653eb2e794646443293f01b138403218975ddf0f3c31776529f015177" },
+    { seed: 12, h: 5, a: 6, rc: 2068, score: [2, 0], events: 367, hash: "93760df3cd67fad7f605eb134774f16cd3acb25887bb47db4d3024dcbb2a6b92", unplaced: "8d782c8ed74242c394b454df9fc405e2dca3557a30b51130eae87ebc82d20572" },
+    { seed: 13, h: 9, a: 2, rc: 2668, score: [2, 1], events: 475, hash: "d78b3737daef4111bb0b0d565eea874d60f778f08398327cff1bdba425447c1b", unplaced: "5b906f8578407d755b42c7f423bbcdd5049b2f08a833736ccfaa218066aa12e5" },
   ];
 
   it.each(GOLDEN)("seed $seed reproduces the identical event stream, score and RNG count", (g) => {
@@ -79,6 +81,7 @@ describe("balanced v balanced manual matches are unchanged by #133", () => {
     expect(st.rc).toBe(g.rc);
     expect(st.score).toEqual(g.score);
     expect(ev).toHaveLength(g.events);
+    expect(hash(ev.map(({ ball: _b, from: _f, target: _t, ...rest }: Record<string, unknown>) => rest)), "events without positions").toBe(g.unplaced);
     expect(hash(ev)).toBe(g.hash);
   });
 

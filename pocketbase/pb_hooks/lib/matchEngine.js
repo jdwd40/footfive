@@ -446,7 +446,9 @@ function midfield(st, out, ctx, side) {
   for (var i = 0; i < n; i++) {
     var recv = attacker(st, side, last);
     var from = st.ball;
-    st.ball = pos(side, 25 + rnd(st) * 30, 8 + rnd(st) * 48);
+    // #213: on from where the ball is (up to 3 back, 13 on, between x22 and x66 in the attacking direction), not a random spot in
+    // the own half. The same two draws in the same order, so the RNG stream and every outcome are unchanged; only positions move.
+    st.ball = pos(side, clamp(px(side, from[0]) + rnd(st) * 16 - 3, 22, 66), 8 + rnd(st) * 48);
     emit(st, out, ctx.at(f), "pass", {
       side: side,
       p: last.name,
@@ -758,7 +760,7 @@ function bounce(st, out, ctx, f, side, chain) {
  * before nextAt and never touch ctx.pause, so no real event moves; stats, score, danger, markets and outcomes are untouched.
  */
 var COS = {
-  rate: 0.3, // chance per eligible minute: two or three extra attempts a match at the live pace (real shots: about 16)
+  rate: 0.5, // chance per eligible minute: about six extra attempts a match at the live pace (real shots: about 16; #213, was 0.3)
   minAlong: 45, // the side in possession has the ball at least this far up the pitch (its attacking direction)
   missShare: 0.6, // otherwise blocked
   // Spacing in fractions of a minute, as a real move: after the last real event, to the result, back off the boards, and

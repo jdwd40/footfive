@@ -27,6 +27,8 @@ export const FWD_LEAD = 12;
 export const FWD_WIDTH = 14;
 /** #189: with the ball wide, the inner forward attacks the box this far past the goal's centre line. */
 export const FWD_BOX = 4;
+/** #213: a defending forward off the ball holds at least this far upfield of it (and FWD_WIDTH to one side of its lane). */
+export const SCREEN_LEAD = 9;
 /** Open-play scenes in which `scene.side` has the ball: that side's shape moves up the pitch with it (#102). */
 const IN_PLAY = new Set(["build_up", "pass", "through_ball", "dribble", "cross", "tackle", "interception", "shot", "bounce"]);
 /** Possession side of a scene, or null when nobody is building an attack (set pieces, breaks, results). */
@@ -61,9 +63,14 @@ export function shapeAt(i: number, bx: number, by: number, attacking: boolean, d
   }
   if (defending) {
     // Off the ball (#103): defenders track goal-side of the ball and squeeze across to it (#189: a third of the way, not half, so the
-    // block keeps its width); forwards drop in to screen.
-    const x = fwd ? clamp(ax + (bx - ax) * 0.5, 6, Math.max(10, bx + 6)) : clamp(Math.min(ax + (bx - ax) * 0.45, bx - 5), 4, 80);
-    const y = ay + (by - ay) * (fwd ? 0.35 : 0.3);
+    // block keeps its width). #213: the forwards screen the lanes either side of it, a little upfield, as the attacking ones run
+    // (#184) — not on the ball's spot, where they crowded round the carrier with the defenders once play reached their half.
+    if (fwd) {
+      const w = Math.max(FWD_WIDTH, Math.abs(32 - by) + FWD_BOX);
+      return [clamp(Math.max(ax + (bx - ax) * 0.5, bx + SCREEN_LEAD), 6, 94), clamp(by + (i === 3 ? -w : w), 4, 60)];
+    }
+    const x = clamp(Math.min(ax + (bx - ax) * 0.45, bx - 5), 4, 80);
+    const y = ay + (by - ay) * 0.3;
     return [x, clamp(y, 2, 62)];
   }
   return [clamp(ax + (bx - ax) * 0.3, 1, 99), clamp(ay + (by - ay) * 0.3, 2, 62)];

@@ -456,6 +456,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       const off = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(def, along), p[1] + lat * across]); // `along`: the loser's attacking direction
       const near = lerp(at, end, 0.6);
       const tackle = e.t === "tackle";
+      // He runs in from his own goal's side, wide of the end spot; from the other side if that run would start on the loser.
+      const sw = Math.hypot(off(end, 7, 3.5)[0] - at[0], off(end, 7, 3.5)[1] - at[1]) < 3 ? -1 : 1;
       return {
         ...base,
         ms: d(1600),
@@ -464,7 +466,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         actors: [
           { id: "lost", side: def, label: short(e.p2), path: tackle ? [off(at, -0.8, 0), off(near, -0.8, 0), off(end, -1.2, 0), off(end, 2, -2), off(end, 3, -2.5)] : [off(at, -0.8, 0), off(at, 1, 0), off(at, 2, 0), off(at, 2, 0), off(at, 2, 0)] },
           ...(tackle ? [] : [{ id: "tgt", side: def, path: [off(end, 9, -3), off(end, 6.5, -2), off(end, 4.5, -1.5), off(end, 4, -1.5), off(end, 4, -1.5)] as Pt[] }]), // the pass he meant
-          { id: "win", side, label: short(e.p), path: [off(end, 7, 3.5), off(end, 4, 2), end, end, end] },
+          { id: "win", side, label: short(e.p), path: [off(end, 7, 3.5 * sw), off(end, 4, 2 * sw), end, end, end] },
         ],
       };
     }

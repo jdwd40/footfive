@@ -183,12 +183,18 @@ const runs = SEEDS.map((seed) => {
 const render = (events: Ev[]) => events.map((_, i) => line(events, i));
 const summary = (st: State, events: Ev[]) => ({ score: st.score, winner: st.winner, by: st.by, so: st.so, stats: st.stats, rc: st.rc, last: events.at(-1)?.st.x, goals: events.filter((e) => e.t === "goal" || e.t === "penalty_goal").map((e) => [e.seq, e.side, e.p]) });
 /** Engine at the parent of this change (no engine file is touched by #84): score, winner, how, shootout, stats, RNG counter, published stats and scorers of all 200 seeds. */
-const BASELINE = "408d73e764db2a1c17f7ea39f06324b1b3209f850dc60baa749d04e2c03d96df";
+// #213 re-pins 408d73e7… → f1484c4b…: more cosmetic rows (`cos: 1`) move the goals' transport `seq`. With each goal numbered among
+// the real rows only, the summary is main's at 72e459c (REAL_ROWS), so nothing else changed.
+const BASELINE = "f1484c4b11002b0574edebe33a88f3596d965370726230e56f875ba8757ae94a";
+const REAL_ROWS = "4f49987fcbb99e902741ee9c980eaf5a06d967d2c84bcc401046532f4812988f";
 
 describe("seeded matches (issue #84)", () => {
   it("outcomes, scorelines and official stats are the pre-change engine's", () => {
     const sha = createHash("sha256").update(JSON.stringify(runs.map(({ st, events }) => summary(st, events)))).digest("hex");
     expect(sha).toBe(BASELINE);
+    const real = (events: Ev[]) => events.filter((e) => !e.cos);
+    const realRows = runs.map(({ st, events }) => ({ ...summary(st, real(events)), goals: real(events).flatMap((e, i) => (e.t === "goal" || e.t === "penalty_goal" ? [[i, e.side, e.p]] : [])) }));
+    expect(createHash("sha256").update(JSON.stringify(realRows)).digest("hex"), "goals numbered among real rows").toBe(REAL_ROWS);
   });
 
   it("rendering commentary after every step changes nothing in the match", () => {

@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sample, sceneFor, short, type Pt, type Scene } from "./scenes";
-import { DWELL_ADVANCE, DWELL_LANE, DWELL_LINE, DWELL_MARK, FWD_BOX, FWD_LEAD, FWD_WIDTH, GAP, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player, type PlayerStarts } from "./sim";
+import { DWELL_ADVANCE, DWELL_LANE, DWELL_LINE, DWELL_MARK, FWD_BOX, FWD_LEAD, FWD_WIDTH, GAP, SCREEN_LEAD, frameAt, playhead, reveal, sentOffAt, settle, shapeAt, smooth, spaceOut, type Frame, type Player, type PlayerStarts } from "./sim";
 import type { LineupPlayer, MatchEvent } from "../lib/pocketbase";
 
 const require = createRequire(import.meta.url);
@@ -691,6 +691,25 @@ describe("frameAt", () => {
         }
   });
 
+  it("defending forwards screen the lanes, not the carrier: a little upfield of the ball and wide of its lane, outside 16 of it wherever the attack has it (#213)", () => {
+    // #213 moves midfield play up the pitch: with the old drop-in, both defending forwards stood on the ball's spot as soon as it
+    // reached their half, and six or more players crowded round it. Now they hold off it, as the attacking forwards do (#184).
+    for (let bx = 4; bx <= 96; bx += 2)
+      for (let by = 2; by <= 62; by += 2)
+        for (const i of [3, 4]) {
+          const [x, y] = shapeAt(i, bx, by, false, true);
+          expect(x, `forward ${i}, ball ${bx},${by}`).toBeGreaterThanOrEqual(Math.min(94, bx + SCREEN_LEAD) - 1e-9);
+          if (by >= 18 && by <= 46) expect((i === 3 ? -1 : 1) * (y - by), `forward ${i}, ball ${bx},${by}: his own side of its lane`).toBeGreaterThanOrEqual(FWD_WIDTH);
+        }
+    // Drawn, through the mirror and the spacing, along the whole of the attack's midfield and into the final third.
+    for (const poss of ["home", "away"] as const)
+      for (let ox = 20; ox <= 80; ox += 5)
+        for (let by = 18; by <= 46; by += 4) {
+          const f = frameAt(shapeOnly(poss === "home" ? ox : 100 - ox, by, poss), 0.5, ms[0].lineups);
+          for (const p of f.players.filter((q) => q.side !== poss).slice(3)) expect(Math.hypot(p.x - f.ball[0], p.y - f.ball[1]), `${poss} ${ox},${by} defending #${p.no}`).toBeGreaterThan(16);
+        }
+  });
+
   it("the spacing adds no jump of its own: along a slow ball path, no player moves further per step than the shapes themselves do (#184)", () => {
     const m = ms[0];
     const raw = (side: "home" | "away", i: number, bx: number, by: number, poss: "home" | "away"): Pt => {
@@ -941,17 +960,19 @@ describe("#189: role slots, width, the dwell's lanes and runs from where players
     }
     // Continuity: a lateral sweep moves the outlet (ball on the other half) and every defending slot by no more than the sweep allows.
     for (const bx of [30, 50, 70]) {
-      const sweep = (i: number, attacking: boolean, from: number, to: number) => {
+      const sweep = (i: number, attacking: boolean, from: number, to: number, limit = 0.2 - 1e-9) => {
         let prev = shapeAt(i, bx, from, attacking, !attacking);
         for (let by = from + 0.1; by <= to; by += 0.1) {
           const q = shapeAt(i, bx, by, attacking, !attacking);
-          expect(near(q, prev), `slot ${i} ${attacking ? "attacking" : "defending"}, ball ${bx},${by.toFixed(1)}`).toBeLessThan(0.2);
+          expect(near(q, prev), `slot ${i} ${attacking ? "attacking" : "defending"}, ball ${bx},${by.toFixed(1)}`).toBeLessThanOrEqual(limit);
           prev = q;
         }
       };
       sweep(2, true, 2, 32);
       sweep(1, true, 32, 62);
-      for (const i of [1, 2, 3, 4]) sweep(i, false, 2, 62);
+      for (const i of [1, 2]) sweep(i, false, 2, 62);
+      // #213: the defending forwards hold the lanes either side of the ball, as the attacking ones do: at most twice the sweep's pace.
+      for (const i of [3, 4]) sweep(i, false, 2, 62, 0.2 + 1e-9);
     }
   });
 
