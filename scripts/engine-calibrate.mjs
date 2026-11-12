@@ -38,7 +38,7 @@ let counters = 0, rebounds = 0, staged90 = 0;
 const trail = { pre: { mins: 0, shots: 0, cos: 0 }, late: { mins: 0, shots: 0, cos: 0 } };
 /** Expected normal-time goals from kick-off under the staged in-play model (score difference walked minute by minute). */
 const stagedGoals = (m) => {
-  if (!m.s) return 90 * (m.lh + m.la);
+  if (!m.r) return 90 * (m.lh + m.la);
   let dist = new Map([[0, 1]]);
   let g = 0;
   for (let k = 1; k <= 90; k++) {

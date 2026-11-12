@@ -20,6 +20,10 @@
 // error of the observed share). Markets: winner (to qualify), next goal, winning margin (exactly 1/2/3), exact score (grouped
 // by goals still to come: +0-0, +1-0, ...). "ROI" is the bettor's mean return per unit staked at the offered odds (null when
 // withdrawn), with the 6% margin a calibrated model returns about −6%.
+// Extra cell groups: "fav view" (the pre-match favourite leads / is level / trails); "strength" (#219 review F1: the pre-match
+// underdog's chance to qualify <15%, 15–25%, 25–50%, × its score state: winner and next goal); "pre-match" (the winner price
+// before kick-off by the underdog's chance, <15% … 45–50%, checked against the offered catalogue too). The summary also gives
+// the underdog's pre-match ROI for the <15% class and the in-play strength cells' worst ROI.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,7 +84,7 @@ const add = (key, p, hit, o) => {
     b.ret += hit ? o : 0;
   }
 };
-let snaps = 0, skippedSuspended = 0, skippedOver = 0, priceChecks = 0;
+let snaps = 0, skippedSuspended = 0, skippedOver = 0, priceChecks = 0, roundingBoundary = 0;
 const favNext = new Map(); // minute -> { n, ret } for "next goal: the pre-match favourite"
 const favNextFrom70 = { n: 0, ret: 0 };
 
@@ -91,7 +95,10 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
   const st = eng.createMatch({ fixtureId: "c" + i, seed: eng.hashSeed(PREFIX + i), kickoffAt: 0, timing: eng.buildTiming(MINUTE_MS, 1), home: H, away: A });
   const ev = eng.advanceTo(st, Infinity).filter((e) => !e.cos); // cosmetic rows carry the last real snapshot: nothing to price
   const final = { sh: st.score[0], sa: st.score[1], winner: st.winner };
-  const fav = odds.pairQualify(model) >= 0.5 ? "home" : "away";
+  const q0 = odds.pairQualify(model);
+  const fav = q0 >= 0.5 ? "home" : "away";
+  const dogQ = Math.min(q0, 1 - q0); // the pre-match underdog's chance to qualify
+  const strength = dogQ < 0.15 ? "dog<15%" : dogQ < 0.25 ? "dog 15-25%" : "dog 25-50%";
   const fx = { id: "c" + i, status: "live", kickoffAt: 0, model, home: { id: "h", abbr: H.abbr, name: H.name }, away: { id: "a", abbr: A.abbr, name: A.name } };
   const sample = (M, fromIdx, t0, record) => {
     let idx = fromIdx;
@@ -125,9 +132,16 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
       const s = m && m.sel.find((x) => x.id === id);
       return s ? s.odds : null;
     };
+    // The catalogue prices from the fast paths, the probabilities here from the reference walk; they agree within 1e-9, so a
+    // price may differ only where p sits on a rounding boundary of the 2-decimal price.
     const check = (o, p) => {
       priceChecks++;
-      if (o !== mkt.okP(p, true)) throw new Error(`match ${i} at ${M}': offered ${o}, model ${mkt.okP(p, true)}`);
+      if (o === mkt.okP(p, true)) return;
+      if (o === mkt.okP(p + 1e-9, true) || o === mkt.okP(p - 1e-9, true)) {
+        roundingBoundary++;
+        return;
+      }
+      throw new Error(`match ${i} at ${M}': offered ${o}, model ${mkt.okP(p, true)}`);
     };
     const q = { home: fd.qualifyHome, away: 1 - fd.qualifyHome };
     const B = `${M}' ${lead}`;
@@ -172,6 +186,11 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
     add(`${FB}|winner (fav view)|favourite`, q[fav], final.winner === fav, sel("winner", fav));
     add(`${FB}|next_goal (fav view)|favourite`, ng[fav], nextSide === fav, sel("next_goal", fav));
     add(`${FB}|next_goal (fav view)|underdog`, ng[dog], nextSide === dog, sel("next_goal", dog));
+    // #219 review F1: the same by strength, the pre-match underdog's chance to qualify (<15%, 15–25%, 25–50%), and its score state.
+    const SB = `${M}' ${strength}, dog ${fd2 < 0 ? "leads" : fd2 > 0 ? "trails" : "level"}`;
+    add(`${SB}|winner (strength)|underdog`, q[dog], final.winner === dog, sel("winner", dog));
+    add(`${SB}|next_goal (strength)|underdog`, ng[dog], nextSide === dog, sel("next_goal", dog));
+    add(`${SB}|next_goal (strength)|favourite`, ng[fav], nextSide === fav, sel("next_goal", fav));
     snaps++;
     if (record) {
       const o = sel("next_goal", fav);
@@ -179,6 +198,21 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
     }
     return true;
   };
+  // Pre-match: the catalogue a bettor sees before kick-off, priced and checked as in play; the underdog by its chance to qualify.
+  {
+    const pre = mkt.fixtureMarkets({ ...fx, status: "scheduled", kickoffAt: 1 }, null, 0, 0);
+    const fd0 = odds.finalDist(model, { sc: [0, 0], ph: "pre" }, 0);
+    const dog0 = fav === "home" ? "away" : "home";
+    const pq = { home: fd0.qualifyHome, away: 1 - fd0.qualifyHome };
+    const o = (side) => pre.markets.find((m) => m.key === "winner").sel.find((x) => x.id === side).odds;
+    for (const side of ["home", "away"]) {
+      priceChecks++;
+      if (o(side) !== mkt.okP(pq[side], false) && o(side) !== mkt.okP(pq[side] + 1e-9, false) && o(side) !== mkt.okP(pq[side] - 1e-9, false)) throw new Error(`match ${i} pre-match: offered ${o(side)}, model ${mkt.okP(pq[side], false)}`);
+    }
+    const qb = dogQ < 0.15 ? "<15%" : dogQ < 0.25 ? "15-25%" : dogQ < 0.35 ? "25-35%" : dogQ < 0.45 ? "35-45%" : "45-50%";
+    add(`0' pre-match, dog ${qb}|winner (pre-match)|underdog`, pq[dog0], final.winner === dog0, o(dog0));
+    add(`0' pre-match, dog ${qb}|winner (pre-match)|favourite`, pq[fav], final.winner === fav, o(fav));
+  }
   for (const M of MINUTES) {
     const s = snapshotAt(ev, M);
     if (!s || ev[s.i].st.ph === "finished") {
@@ -231,12 +265,14 @@ const summary = {
   snapshotsMovedPastSuspension: skippedSuspended,
   snapshotsAfterTheEnd: skippedOver,
   priceChecks,
+  priceChecksOnARoundingBoundary: roundingBoundary,
   cellsJudged: judged.length,
   minCell: MIN_N,
   cellsOutside3pp: outside.length,
   worst: worst.bucket ? `${worst.bucket} ${worst.market} ${worst.selection}: model ${worst.model}% vs ${worst.observed}% (n ${worst.n}, se ${worst.sePp})` : null,
   nextGoalFavourite: Object.fromEntries([...favNext.entries()].map(([m, r]) => [m + "'", { n: r.n, roi: +(r.ret / r.n - 1).toFixed(3) }])),
   nextGoalFavouriteFrom70: { n: favNextFrom70.n, roi: +(favNextFrom70.ret / Math.max(1, favNextFrom70.n) - 1).toFixed(3) },
+  preMatchUnderdog: Object.fromEntries(rows.filter((r) => r.market === "winner (pre-match)" && r.selection === "underdog").map((r) => [r.bucket.replace("0' pre-match, ", ""), { n: r.n, model: r.model, observed: r.observed, roi: r.roi }])),
 };
 if (JSON_OUT) console.log(JSON.stringify({ summary, rows }, null, 1));
 else {
