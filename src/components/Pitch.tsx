@@ -16,6 +16,8 @@ type Props = {
   replay?: boolean;
   revealed: boolean; // MatchPage decides when the result may show (flash moment + displayed ball at the impact point)
   hud?: ReactNode; // compact score / clock / shootout strip pinned to the pitch's top-left corner
+  minute?: number; // #206: the drawn event's match minute, for the goal screen
+  replayed?: boolean; // #206: this goal's replay has already started: the live celebration keeps the GOAL! chip, no second big screen or cheer
 };
 
 const W = 100;
@@ -23,6 +25,10 @@ const H = 64;
 const R = 1.45; // referee body radius (his figure is unchanged by #204)
 /** Result badge per flash kind (what actually happened, never a generic "no goal"); shootout goals and cards are special-cased below. */
 const BADGE: Record<string, string> = { goal: "GOAL!", save: "SAVED!", wood: "WOODWORK", miss: "WIDE", over: "OVER", block: "BLOCKED", pen: "PENALTY" };
+/** #206: result scenes whose save or woodwork gets the reveal pulse. */
+const EMPH_TYPES = new Set(["save", "woodwork", "penalty_saved", "penalty_woodwork", "shootout_kick"]);
+/** #206: arms raised above the head (a celebrating outfielder). */
+const CHEER_SLEEVES = "M -1.3 -1.55 L -2.1 -3.4 L -1.3 -3.7 L -0.8 -1.85 Z M 1.3 -1.55 L 2.1 -3.4 L 1.3 -3.7 L 0.8 -1.85 Z";
 
 // Shirt outline in player-local units (about 4.5 wide, 4 tall), drawn from above like a kit icon. The player's x/y is its centre.
 const BODY = "M -1.3 -1.55 L -0.55 -1.95 Q 0 -1.4 0.55 -1.95 L 1.3 -1.55 L 1.3 1.95 L -1.3 1.95 Z";
@@ -57,8 +63,10 @@ function Referee({ frame, projectX }: { frame: Frame; projectX: (x: number) => n
   const dx = projectX(aim[0]) - projectX(frame.ref[0]);
   const dy = aim[1] - frame.ref[1];
   const distance = Math.hypot(dx, dy) || 1;
-  const arm: [number, number] = pose === "point" ? [dx / distance * 3.8, dy / distance * 3.8] : [dx < 0 ? -1.8 : 1.8, -3.4];
   const card = pose === "card-yellow" || pose === "card-red";
+  // #206: a card is held straight up above his head (not at the offender), so it reads at a glance; a point aims at the target.
+  // Close to the top touchline he holds it out to the side instead, so the card stays inside the drawn pitch.
+  const arm: [number, number] = pose === "point" ? [dx / distance * 3.8, dy / distance * 3.8] : card ? (frame.ref[1] > 8 ? [dx < 0 ? -1.1 : 1.1, -4.4] : [dx < 0 ? -3.4 : 3.4, -0.6]) : [dx < 0 ? -1.8 : 1.8, -3.4];
   return (
     <g transform={`translate(${projectX(frame.ref[0])} ${frame.ref[1]})`} data-testid="ref" data-pose={pose} role="img" aria-label={`Referee: ${pose.replaceAll("-", " ")}`}>
       <ellipse cy={2} rx={1.5} ry={0.55} fill="rgba(0,0,0,0.35)" />
@@ -75,7 +83,7 @@ function Referee({ frame, projectX }: { frame: Frame; projectX: (x: number) => n
         <>
           <line x1={arm[0] * 0.25} y1={0} x2={arm[0]} y2={arm[1]} stroke="#111" strokeWidth={1} strokeLinecap="round" />
           <line x1={arm[0] * 0.25} y1={0} x2={arm[0]} y2={arm[1]} stroke="#ffd400" strokeWidth={0.65} strokeLinecap="round" data-ref-arm />
-          {card ? <rect x={arm[0] - 0.7} y={arm[1] - 1.6} width={1.4} height={1.8} rx={0.15} fill={pose === "card-red" ? "#ff3344" : "#ffd400"} stroke="#111" strokeWidth={0.25} data-testid="ref-card" /> : <circle cx={arm[0]} cy={arm[1]} r={0.3} fill="#f2c6a0" />}
+          {card ? <rect className="pitch-figure-c" x={arm[0] - 1.25} y={arm[1] - 3.1} width={2.5} height={3.3} rx={0.25} fill={pose === "card-red" ? "#ff3344" : "#ffd400"} stroke="#fff" strokeWidth={0.4} data-testid="ref-card" /> : <circle cx={arm[0]} cy={arm[1]} r={0.3} fill="#f2c6a0" />}
         </>
       ) : <path d="M -1 0 L -2 1 M 1 0 L 1.8 0.8" fill="none" stroke="#ffd400" strokeWidth={0.65} strokeLinecap="round" />}
     </g>
@@ -234,7 +242,7 @@ function MoveFx({ fx, players, projectX, revealed }: { fx: Fx | null; players: F
   );
 }
 
-export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
+export default function Pitch({ frame, home, away, replay, revealed, hud, minute, replayed }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
   const kits = useMemo(() => kitsFor(home, away), [home, away]);
@@ -261,7 +269,8 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   const carrier = frame?.players.find((p) => frame.carrier === p.side + ":" + p.no && lift < 0.05 && Math.hypot(p.x - frame.ball[0], p.y - frame.ball[1]) <= 1.6) ?? null;
   const flash = frame && revealed ? frame.flash : null;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
-  const goal = frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
+  // #206: a replay shows the small GOAL! chip instead: the big screen belongs to the live goal, which it follows.
+  const goal = !replay && !replayed && frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
   // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
   const kick = frame?.kick;
   const team = frame?.side === "away" ? away : home;
@@ -292,7 +301,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   const ft = frame?.type === "match_end" && frame.side ? frame : null;
   const glow = goal ? (goal.side === "away" ? ac : hc) : null;
   const banner = goal
-    ? { id: "goal-banner", title: "GOOOAL!", sub: goal.score ? `${home.abbreviation} ${goal.score[0]}–${goal.score[1]} ${away.abbreviation}` : "", who: goal.who, cls: "goal-pop text-white" }
+    ? { id: "goal-banner", title: "GOOOAL!", sub: goal.score ? `${home.abbreviation} ${goal.score[0]}–${goal.score[1]} ${away.abbreviation}` : "", who: goal.who ? `${goal.who}${minute != null ? ` · ${minute}′` : ""}` : "", cls: "goal-pop text-white" }
     : ft
       ? { id: "ft-banner", title: "FULL-TIME", sub: `${team.name} go through!`, who: ft.by === "aet" ? "after extra time" : ft.by === "pens" && ft.pens ? `on penalties ${Math.max(...ft.pens)}–${Math.min(...ft.pens)}` : "", cls: "goal-pop text-lime" }
       : period
@@ -305,6 +314,12 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   const cheering = goal?.side ?? ft?.side ?? (frame?.type === "shootout_end" ? frame.side : null) ?? null;
   // A goal and its celebration share a score; a new goal restarts the cheer even for consecutive goals by the same side.
   const cue = goal && cheering ? `goal:${goal.score?.join("-") ?? goal.seq}` : cheering ? `winner:${cheering}` : "";
+  // #206: the scorer and the mates who join him celebrate arms up, once the goal is in (pose only: their spots are the frame's).
+  const celebrating = goal && (goal.type === "celebration" || goal.p >= 0.4) ? goal.side : null;
+  // #206: a save or the woodwork gets a short pulse round the pitch, from the reveal (`flash` is already gated) and only in the result's
+  // own scene (not the badge's linger into the next one). No zoom, no shift: one overlay, restarted per result.
+  const emph = flash === "save" || flash === "wood" ? (EMPH_TYPES.has(frame!.type) ? flash : null) : null;
+  const card = flash === "card" && (frame!.type === "yellow_card" || frame!.type === "red_card") ? frame : null;
   const pitchMaxWidth = `max(260px, calc((100vh - var(--pitch-chrome, 360px)) * ${(FULL_CAM[2] / FULL_CAM[3]).toFixed(4)}))`;
 
   return (
@@ -325,13 +340,13 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           // A dive lays him out towards the ball (his collar along `dir`); a claim keeps him upright, arms up, coming off his line.
           const turn = pose?.pose === "dive" ? (Math.atan2(flip ? -pose.dir[0] : pose.dir[0], -pose.dir[1]) * 180) / Math.PI : 0;
           return (
-            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x + (p === claimKeeper ? step![0] : 0))} ${p.y + (p === claimKeeper ? step![1] : 0)})`} data-testid="player" data-side={p.side} data-gk={p.gk || undefined} data-pose={pose?.pose}>
+            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x + (p === claimKeeper ? step![0] : 0))} ${p.y + (p === claimKeeper ? step![1] : 0)})`} data-testid="player" data-side={p.side} data-gk={p.gk || undefined} data-pose={pose?.pose ?? (!p.gk && celebrating === p.side && p.hot ? "cheer" : undefined)}>
               {/* keepers always carry this turn group (one fixed node each): the figure's own scale is CSS, so the turn sits outside it */}
               <Turn on={p.gk} deg={turn}>
               <g className="pitch-figure">
                 <ellipse cx={0} cy={SHIRT_H} rx={2} ry={0.65} fill="rgba(0,0,0,0.35)" />
                 {p === carrier ? <circle r={3.1} fill="rgba(255,255,255,0.12)" stroke="#fff" strokeWidth={0.45} data-ring /> : null}
-                <path d={pose ? REACH_SLEEVES : p.gk ? GK_SLEEVES : SLEEVES} fill={kit.sleeves} stroke={edge} strokeWidth={0.22} strokeLinejoin="round" data-sleeves />
+                <path d={pose ? REACH_SLEEVES : p.gk ? GK_SLEEVES : celebrating === p.side && p.hot ? CHEER_SLEEVES : SLEEVES} fill={kit.sleeves} stroke={edge} strokeWidth={0.22} strokeLinejoin="round" data-sleeves />
                 <path d={BODY} fill={kit.body} stroke={edge} strokeWidth={0.22} strokeLinejoin="round" data-kit />
                 <path d={COLLAR} fill="none" stroke={kit.trim} strokeWidth={0.45} strokeLinecap="round" data-trim />
                 {p.gk ? <path d={pose ? REACH_GLOVES : GLOVES} fill="#f4f7ff" stroke={edge} strokeWidth={0.15} data-gloves /> : null}
@@ -404,30 +419,38 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
               ))}
             </div>
           ) : null}
-          <div className={`min-w-0 max-w-full text-center [overflow-wrap:anywhere] ${banner.cls}`}>
+          <div className={`min-w-0 max-w-full text-center [overflow-wrap:anywhere] ${banner.cls} ${glow ? "goal-screen rounded-xl px-[5%] py-[2%]" : ""}`} style={glow ? ({ "--glow": glow } as CSSProperties) : undefined}>
             <div className="font-display font-black leading-none text-balance" style={{ fontSize: `min(3.75rem, ${(108 / longest).toFixed(2)}cqw)`, ...(glow ? { textShadow: `0 0 18px ${glow}, 0 0 40px ${glow}` } : null) }} data-testid="banner-title">
               {titleLines.map((part, i) => (i % 2 ? <span key={i} className="hidden">{` ${part} `}</span> : <span key={i} className="block">{part}</span>))}
             </div>
-            {banner.sub ? <div className="mt-1 font-display font-black leading-tight tabular text-balance" style={{ fontSize: "min(1.875rem, 6.5cqw)" }}>{banner.sub}</div> : null}
-            {banner.who ? <div className="mt-1 font-bold leading-tight" style={{ fontSize: "min(1rem, 4.5cqw)" }}>{banner.who}</div> : null}
+            {banner.sub ? <div className="mt-1 font-display font-black leading-tight tabular text-balance" style={{ fontSize: glow ? "min(2.5rem, 8cqw)" : "min(1.875rem, 6.5cqw)" }} data-testid="banner-sub">{banner.sub}</div> : null}
+            {banner.who ? <div className="mt-1 font-bold leading-tight" style={{ fontSize: glow ? "min(1.5rem, 5.5cqw)" : "min(1rem, 4.5cqw)" }} data-testid="banner-who">{glow ? <span aria-hidden>⚽ </span> : null}{banner.who}</div> : null}
           </div>
         </div>
       ) : frame && flash ? (
         <div className="pointer-events-none absolute inset-x-0 top-9 flex justify-center">
           <span
-            className={`event-enter rounded-md px-3 py-1 font-display text-sm font-black tracking-widest shadow-lg ${
-              flash === "goal" ? "bg-lime text-ink" : flash === "save" ? "bg-cyan text-ink" : flash === "card" ? "bg-live text-white" : "bg-amber text-ink"
+            className={`event-enter rounded-md px-3 py-1 font-display font-black tracking-widest shadow-lg ${card ? "text-sm sm:text-base" : "text-sm"} ${
+              flash === "goal" ? "bg-lime text-ink" : flash === "save" ? "bg-cyan text-ink" : flash === "card" ? (frame.type === "yellow_card" ? "bg-[#ffd400] text-ink" : "bg-live text-white") : "bg-amber text-ink"
             }`}
+            data-testid={card ? "card-badge" : undefined}
           >
-            {flash === "goal"
-              ? frame.type === "shootout_kick" && frame.pens
-                ? `GOAL! ${frame.pens[0]}–${frame.pens[1]}`
-                : "GOAL!"
-              : flash === "card"
-                ? frame.type === "red_card"
-                  ? "RED CARD"
-                  : "BOOKED"
-                : BADGE[flash]}
+            {flash === "goal" ? (
+              frame.type === "shootout_kick" && frame.pens ? (
+                `GOAL! ${frame.pens[0]}–${frame.pens[1]}`
+              ) : (
+                "GOAL!"
+              )
+            ) : flash === "card" ? (
+              <>
+                {/* #206: the card itself, the decision and who got it */}
+                <span className={`mr-1.5 inline-block h-[1.05em] w-[0.75em] rounded-[2px] border border-black/60 align-[-0.15em] ${frame.type === "red_card" ? "bg-[#ff3344]" : "bg-[#ffd400]"}`} aria-hidden />
+                <span>{frame.type === "red_card" ? "RED CARD" : "BOOKED"}</span>
+                {card && frame.who ? <span className="ml-1.5">· {frame.who.trim().split(/\s+/).at(-1)!.toUpperCase()}</span> : null}
+              </>
+            ) : (
+              BADGE[flash]
+            )}
           </span>
         </div>
       ) : null}
@@ -448,6 +471,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           </span>
         </div>
       ) : null}
+        {emph ? <div key={`${replay ? "r" : "l"}:${frame!.seq}`} className={`pitch-emph pitch-emph-${emph}`} data-testid="pitch-emphasis" data-kind={emph} aria-hidden /> : null}
         {replay ? <span className="chip chip-amber absolute right-2 top-2">Replay</span> : null}
       </div>
       </div>

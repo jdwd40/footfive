@@ -109,5 +109,5 @@ describe("Pitch event-snapshot end projection", () => {
       }
     }
     expect([...phases]).toEqual(expect.arrayContaining(["first_half", "half_time", "second_half", "et_break", "extra_time_1", "et_half_time", "extra_time_2", "shootout", "finished"]));
-  });
+  }, 20000); // heavy deterministic test (~1.8 s alone, on main too) that times out at 5 s under full-suite parallel load
 });

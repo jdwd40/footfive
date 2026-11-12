@@ -9,8 +9,9 @@ import { Abbr, TeamLabel } from "../components/Team";
 import { commentaryLine, feedRows } from "../domain/commentary";
 import { sampleN, sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
+import { autoReplay, replayStarted, type ReplayMemo } from "../domain/replay";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
-import { footfiveApi, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
+import { footfiveApi, type FixtureCard as FixtureCardData, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
 import { startPolling } from "../lib/polling";
 
@@ -105,7 +106,7 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball and players were when the current scene began. */
-type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
+type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; auto?: string | null /* #206: the automatic goal replay being drawn (its caption), else null */; replayed?: boolean /* #206: this goal's replay has started: its big screen and cheer are over */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
 
 /** #189: a copy of every drawn player's spot, keyed side:no (pitch units, before any camera projection). */
 function starts(frame: Frame): PlayerStarts {
@@ -130,6 +131,9 @@ export default function MatchPage() {
   const [replay, setReplay] = useState<{ scene: Scene; startedAt: number } | null>(null);
   const [stay, setStay] = useState(false);
   const refreshMatch = useRef<(() => Promise<unknown>) | null>(null);
+  // #206: this visit's automatic goal replays, by celebration seq: the plan (once started; null = none fits) and the ones skipped by catch-up.
+  const autoRef = useRef<ReplayMemo & { id: string }>({ id: fixtureId, plans: new Map(), skipped: new Set() });
+  if (autoRef.current.id !== fixtureId) autoRef.current = { id: fixtureId, plans: new Map(), skipped: new Set() };
   const clockRef = useRef<{ clock: number | null; target: number | null; seq: number | null }>({ clock: null, target: null, seq: null });
   // Display floor for this fixture visit. It outlives a HUD gap and is cleared only when the route fixture changes.
   const clockHold = useRef<{ id: string; sec: number }>({ id: fixtureId, sec: 0 });
@@ -220,6 +224,8 @@ export default function MatchPage() {
     }
     return m;
   }, [events, minuteMs, homeLabel, awayLabel]);
+  // #206: each event's match minute, for the goal screen.
+  const minutes = useMemo(() => new Map(events.map((e) => [e.seq, e.min])), [events]);
 
   const lineups = view?.lineups ?? null;
   const serverSentOff = view?.sentOff;
@@ -250,22 +256,32 @@ export default function MatchPage() {
       ck.target = now - LAG_MS;
       const ph = playhead(events, clock);
       ck.seq = ph ? ph.cur.seq : ck.seq;
+      // #206: the automatic goal replay, a pure function of this playhead: drawn only while it is still on the goal's celebration
+      // (the next event being due ends it), never under reduced motion or with highlights off, never instead of a requested replay,
+      // and skipped for good if any of that celebration is fast-forwarded (catch-up). It never touches the clock above.
+      const ar = !replay && !sysReduced && pref !== "off" ? autoReplay(autoRef.current, events, scenes, ph?.cur ?? null, clock, now - LAG_MS) : null;
+      const auto = ar ? { scene: ar.scene, p: ar.p, src: -ar.plan.goalSeq, caption: ar.plan.caption } : null;
       // Reduced motion: final frame of each event, still ticking per event (same information, no movement).
       // Live p runs past 1 so frameAt can keep routine play moving until the next event (dwell).
       const liveScene = ph ? scenes.get(ph.cur.seq) : null;
-      const prevBuilt = ph?.prev && !replay ? scenes.get(ph.prev.seq) : undefined;
+      const replaying = !!replay || !!auto;
+      const prevBuilt = ph?.prev && !replaying ? scenes.get(ph.prev.seq) : undefined;
       // A pass that arrives after the chip has already expired must not start the 2.5 s tail again.
       const prevScene = prevBuilt && ph?.prev && clock - ph.prev.at < prevBuilt.ms + LINGER_MS ? prevBuilt : undefined;
       const liveP = sysReduced ? 1 : ph && liveScene?.ms ? ph.elapsed / liveScene.ms : 1;
-      const scene = replay ? replay.scene : liveScene;
-      const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : liveP;
-      const elapsed = replay ? t0 - replay.startedAt : ph?.elapsed ?? 0; // real scene time: p holds at 1 under reduced motion and at a replay's end
-      const src = replay ? replay.startedAt : null;
+      const scene = replay ? replay.scene : auto ? auto.scene : liveScene;
+      const p = replay ? (sysReduced ? 1 : Math.min(1, (t0 - replay.startedAt) / replay.scene.ms)) : auto ? auto.p : liveP;
+      const elapsed = replay ? t0 - replay.startedAt : auto ? auto.p * auto.scene.ms : ph?.elapsed ?? 0; // real scene time: p holds at 1 under reduced motion and at a replay's end
+      const src = replay ? replay.startedAt : auto ? auto.src : null;
+      const autoCaption = auto ? auto.caption : null;
+      // After its replay (a late restart), the live celebration comes back without its big screen or a second cheer.
+      const replayed = !replay && !auto && replayStarted(autoRef.current, ph?.cur ?? null, clock);
       setAnim((a) => {
-        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set() };
-        const same = a.frame?.seq === scene.seq;
+        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set(), auto: null, replayed: false };
+        // One scene of one source (live, or one replay): switching source is a cut, never a chase or a carried verdict.
+        const same = a.frame?.seq === scene.seq && a.src === src;
         // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
-        const jumped = !!a.frame && !same && Math.abs(scene.seq - a.frame.seq) > 1;
+        const jumped = !!a.frame && !same && (Math.abs(scene.seq - a.frame.seq) > 1 || a.src !== src);
         // A new scene starts where the drawn ball actually is (the previous scene may have dwelt on), not at its authored first keyframe.
         const startBall = same ? a.startBall : jumped ? null : a.frame?.ball ?? null;
         // #189: the named players start where they are drawn too. Taken once, from the frame drawn just before a contiguous new scene
@@ -281,17 +297,17 @@ export default function MatchPage() {
         // Result gate is decided here, once, from the ball actually drawn; `reached` carries over within one scene.
         const gate = reveal(scene, p, frame.ball, same && a.reached);
         // The live result has its own gate: during a replay no live ball is drawn, so the live scene's flash moment alone decides.
-        const liveRevealed = replay ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
+        const liveRevealed = replaying ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
         // The line-ups follow the live playhead: a replay of something older than a red card must not un-strike the player.
-        const liveSentOff = replay && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
+        const liveSentOff = replaying && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
         // WON IT waits for the drawn ball to be at a player of the winning side, then holds for its window (no flicker as he moves it on).
         const wonSeen = !!frame.won && ((same && !!a.wonSeen) || (frame.lift < 0.05 && frame.players.some((q) => q.side === frame.won && Math.hypot(q.x - frame.ball[0], q.y - frame.ball[1]) <= 1.6)));
-        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed };
+        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed, auto: autoCaption, replayed };
       });
     };
     step();
     return () => cancelAnimationFrame(id);
-  }, [events, scenes, lineups, serverSentOff, replay, sysReduced]);
+  }, [events, scenes, lineups, serverSentOff, replay, sysReduced, pref]);
   const { now, frame, revealed, liveSentOff } = anim;
   const ph = playhead(events, anim.clock);
   // A newly fetched playhead must not inherit the previous scene's reveal verdict:
@@ -350,7 +366,9 @@ export default function MatchPage() {
     if (raw != null && raw > clockHold.current.sec) clockHold.current.sec = raw;
   }
   const others = (live?.fixtures || []).filter((f) => f.id !== fx.id);
-  const current = replay ? null : ph?.cur;
+  // A requested replay, or the automatic goal replay the loop is drawing (#206).
+  const replayCaption = replay ? replay.scene.caption : anim.auto ?? null;
+  const current = replayCaption != null ? null : ph?.cur;
   // The shot is still travelling until the loop says the result is in: keep the previous caption until then.
   const holding = !!(current && !liveRevealed && ph?.prev);
   const presentedSeq = current ? (holding ? ph!.prev!.seq : current.seq) : null;
@@ -370,16 +388,12 @@ export default function MatchPage() {
           ← Round
         </Link>
         {others.map((o) => (
-          <Link key={o.id} to={`/match/${o.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs hover:border-cyan/50">
-            <Abbr team={o.home} />
-            <span className="tabular font-bold">{o.st ? `${o.st.sc[0]}–${o.st.sc[1]}` : "v"}</span>
-            <Abbr team={o.away} away />
-          </Link>
+          <OtherMatch key={o.id} fx={o} />
         ))}
       </div>
       <Ticker key={fx.id} items={recent} label="Match events" badge="This match" empty="Goals, cards and penalties from this match appear here." />
       {otherTicker.length ? (
-        <Ticker items={otherTicker} label="Other matches" badge="Around the grounds" empty="Goals, penalties, red cards and results from the other matches appear here." />
+        <Ticker items={otherTicker} flashGoals label="Other matches" badge="Around the grounds" empty="Goals, penalties, red cards and results from the other matches appear here." />
       ) : (
         // Other matches can post an item at any time (and the round's fixture list may load late): hold the filled ticker's row
         // (one line, its 2px compact padding, the 4px gap its "Other matches" label gets) from kick-off so its arrival or clearing
@@ -407,12 +421,12 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              <Pitch frame={frame} home={fx.home} away={fx.away} replay={!!replay} revealed={revealed} hud={st ? <Hud fx={shown.fixture} now={clockNow} minSec={clockHold.current.sec} /> : null} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={replayCaption != null} replayed={!!anim.replayed} revealed={revealed} minute={frame ? minutes.get(frame.seq) : undefined} hud={st ? <Hud fx={shown.fixture} now={clockNow} minSec={clockHold.current.sec} /> : null} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <CommentaryLine
                 fixtureId={fx.id}
-                replayCaption={replay ? replay.scene.caption : null}
+                replayCaption={replayCaption}
                 seq={presentedSeq}
                 text={presentedText}
                 idle={fx.status === "scheduled" ? "Waiting for kick-off" : "…"}
@@ -466,6 +480,21 @@ export default function MatchPage() {
       </div>
       </div>
     </Layout>
+  );
+}
+
+/** One other match of the round, from the round snapshot already polled. #206: a goal there (its score changes) flashes the chip. */
+function OtherMatch({ fx }: { fx: FixtureCardData }) {
+  const score = fx.st ? `${fx.st.sc[0]}–${fx.st.sc[1]}` : "";
+  const flash = useChanged(fx.st ? fx.st.sc.join("-") : "0-0"); // kick-off (no state yet → 0–0) is not a goal
+  return (
+    <Link to={`/match/${fx.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs hover:border-cyan/50" data-testid="other-match">
+      <Abbr team={fx.home} />
+      <span key={flash} className={`tabular rounded px-0.5 font-bold ${flash ? "goal-flash inline-block" : ""}`} data-testid="other-score" data-flash={flash || undefined}>
+        {score || "v"}
+      </span>
+      <Abbr team={fx.away} away />
+    </Link>
   );
 }
 
@@ -699,7 +728,11 @@ function EventFeed({ events, view, onReplay }: { events: MatchEvent[]; view: Mat
           <li key={e.seq} className={`flex items-start gap-2 rounded px-1 py-0.5 ${big ? "bg-lime/10" : ""}`}>
             <span className="w-11 shrink-0 tabular text-xs text-muted" data-testid="event-time" title={eventClockTime(e) || undefined}>{eventTime(e)}</span>
             {side ? <Abbr team={side} away={sideKey === "away"} /> : <span className="w-[2.6rem] shrink-0" />}
-            <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>{text}</span>
+            <span className={`min-w-0 flex-1 ${big ? "font-bold" : ""}`}>
+              {/* #206: cards are marked on the match's timeline (this feed) with the card itself */}
+              {e.t === "yellow_card" || e.t === "red_card" ? <span className={`mr-1.5 inline-block h-3.5 w-2.5 rounded-[2px] align-[-0.15em] ${e.t === "red_card" ? "bg-[#ff3344]" : "bg-[#ffd400]"}`} data-testid="feed-card" data-card={e.t === "red_card" ? "red" : "yellow"} aria-label={e.t === "red_card" ? "Red card" : "Yellow card"} role="img" /> : null}
+              {text}
+            </span>
             {REPLAYABLE.has(e.t) ? (
               <button type="button" className="shrink-0 text-xs text-cyan hover:underline" onClick={() => onReplay(e)} aria-label={`Replay: ${e.text}`}>
                 ▶ Replay

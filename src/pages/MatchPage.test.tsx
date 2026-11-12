@@ -1680,3 +1680,169 @@ describe("MatchPage drawn player starts (#189)", () => {
     }
   }, 10000);
 });
+
+describe("MatchPage big moments (#206)", () => {
+  const LAG = 1500;
+  afterEach(async () => {
+    vi.useRealTimers();
+    h.live = null;
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.match).mockReset();
+  });
+  /** A goal's run of events as the engine publishes it (goal, celebration 3.15 s on, restart 9 s on), the clock running for readability. */
+  const goalRun = (G: number) => {
+    const timed = (s: number, sc: [number, number]) => ({ ...st!, sc, clk: { s, run: 1 as const } }) as NonNullable<MatchView["fixture"]["st"]>;
+    return [
+      { ...ev(1, G - 2000, "Build-up"), t: "pass", chain: 1, st: timed(600, [0, 0]) },
+      { ...ev(2, G - 480, "Shoots!"), t: "shot", chain: 1, ball: [85, 32] as [number, number], from: null, st: timed(602, [0, 0]) },
+      { ...ev(3, G, "GOAL! Home P3 scores"), t: "goal", chain: 1, min: 11, p: "Home P3", target: [100, 32] as [number, number], major: 1, st: timed(602, [1, 0]) },
+      { ...ev(4, G + 3150, "Home P3 wheels away"), t: "celebration", chain: 1, p: "Home P3", st: timed(605, [1, 0]) },
+      { ...ev(5, G + 9000, "Away restart from the centre"), t: "restart", side: "away" as const, ball: [50, 32] as [number, number], st: timed(611, [1, 0]) },
+    ] as MatchEvent[];
+  };
+  const paced = (events: MatchEvent[], now: number) => {
+    const v = view(events, { home: names("Home"), away: names("Away") }, now);
+    v.fixture = { ...v.fixture, minuteMs: 60000 }; // one match second per real second
+    return v;
+  };
+  const withClock = async (body: () => Promise<void>) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const live = await import("../lib/live");
+    const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
+    try {
+      await body();
+    } finally {
+      serverClock.mockRestore();
+    }
+  };
+  /** Jump the lagged playhead to `t` (over a second: the pitch clock snaps, as for a resumed tab, so this is never a catch-up). */
+  const playheadAt = async (t: number) => {
+    vi.setSystemTime(t + LAG);
+    await act(() => new Promise((r) => setTimeout(r, 40)));
+  };
+  const clock = () => screen.getByLabelText("Match clock").textContent;
+
+  it("shows the goal screen with scorer, minute and score on the reveal tick, with or without a replay to follow", async () => {
+    await withClock(async () => {
+      const G = Date.now() - LAG - 0.35 * 3800; // just past the ball crossing the line (p = 0.25 of the 3.8 s goal at this pace)
+      await mount(paced(goalRun(G), Date.now()));
+      const banner = screen.getByTestId("goal-banner");
+      expect(banner).toHaveTextContent("GOOOAL!");
+      expect(screen.getByTestId("banner-sub")).toHaveTextContent("HOM 1–0 AWA");
+      expect(screen.getByTestId("banner-who")).toHaveTextContent("Home P3 · 11′");
+      expect(screen.queryByText("Replay")).toBeNull(); // nothing delays or replaces it
+      expect(screen.getByTestId("match-score").textContent).toBe("1–0");
+    });
+  });
+
+  it("replays the move during the pause after the goal; the clock and playhead run on at real pace and the restart ends it", async () => {
+    await withClock(async () => {
+      const G = Date.now() - 60000;
+      vi.setSystemTime(G + 3150 + 600 + 400 + LAG);
+      await mount(paced(goalRun(G), Date.now()));
+      // the celebration has had its moment: the replay of the move is on, captioned with the goal, the big screen gives way to it
+      expect(screen.getByText("Replay")).toBeTruthy();
+      expect(screen.getByTestId("commentary")).toHaveTextContent("GOAL! Home P3 scores");
+      expect(screen.queryByTestId("goal-banner")).toBeNull();
+      expect(screen.getByTestId("match-score").textContent).toBe("1–0");
+      const c0 = clock();
+      expect(c0).toBe("10:06"); // 605 s at the celebration + 1 s of play: the live clock, not the replay's
+      await playheadAt(G + 3150 + 600 + 2400);
+      expect(screen.getByText("Replay")).toBeTruthy();
+      expect(clock()).toBe("10:08");
+      // the restart is due: the replay is cut, live play resumes on its own time
+      await playheadAt(G + 9000 + 200);
+      expect(screen.queryByText("Replay")).toBeNull();
+      expect(screen.getByTestId("commentary")).toHaveTextContent("Away restart from the centre");
+      expect(clock()).toBe("10:11");
+    });
+  }, 10000);
+
+  it("a restart later than the replay's hold brings back no second goal screen and no second cheer", async () => {
+    await withClock(async () => {
+      const G = Date.now() - 60000;
+      const late = goalRun(G).map((e) => (e.t === "restart" ? { ...e, at: G + 3150 + 20000 } : e)); // published long after the replay
+      vi.setSystemTime(G + 3150 + 300 + LAG);
+      await mount(paced(late, Date.now()));
+      expect(screen.getByTestId("goal-banner")).toBeTruthy(); // the celebration's own moment
+      await playheadAt(G + 3150 + 600 + 1000);
+      expect(screen.getByText("Replay")).toBeTruthy();
+      const stand = screen.getByTestId("home-crowd");
+      expect(stand.classList.contains("cheer")).toBe(false);
+      // past the replay and its hold (no next event known when it was planned), still on the celebration
+      for (const t of [G + 3150 + 600 + 5000 + 1500 + 200, G + 3150 + 12000]) {
+        await playheadAt(t);
+        expect(screen.queryByText("Replay")).toBeNull();
+        expect(screen.queryByTestId("goal-banner")).toBeNull();
+        expect(screen.getByText("GOAL!")).toBeTruthy(); // the chip, as during the replay
+        expect(screen.getByTestId("home-crowd")).toBe(stand); // the Crowd cue is unchanged: no restarted cheer
+        expect(stand.classList.contains("cheer")).toBe(false);
+      }
+      expect(screen.getByTestId("match-score").textContent).toBe("1–0");
+    });
+  }, 10000);
+
+  it("skips the replay when the restart is due too soon, and under reduced motion", async () => {
+    await withClock(async () => {
+      const G = Date.now() - 60000;
+      const soon = goalRun(G).map((e) => (e.t === "restart" ? { ...e, at: G + 3150 + 600 + 1200 } : e));
+      vi.setSystemTime(G + 3150 + 600 + 300 + LAG);
+      await mount(paced(soon, Date.now()));
+      expect(screen.queryByText("Replay")).toBeNull();
+      expect(screen.getByTestId("commentary")).toHaveTextContent("Home P3 wheels away");
+    });
+    cleanup();
+    const prev = window.matchMedia;
+    window.matchMedia = reducedMotionList;
+    try {
+      const G = Date.now() - 1500 - 3150 - 1000;
+      await mount(paced(goalRun(G), Date.now()));
+      expect(screen.queryByText("Replay")).toBeNull();
+    } finally {
+      window.matchMedia = prev;
+    }
+  });
+
+  it("skips the replay of a goal that arrives in a late batch and is fast-forwarded", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); // real rAF and poll interval, frozen server clock
+    const now = Date.now();
+    const target = now - LAG;
+    const run = goalRun(target - 3150 - 800); // caught up, the playhead sits 200 ms into the replay window
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const match = vi.mocked(footfiveApi.match).mockReset();
+    match.mockResolvedValueOnce(view([ev(1, now - 30000, "Old pass")], null, now));
+    match.mockResolvedValue(view(run.slice(1), null, now)); // shot, goal, celebration, restart: published late
+    await mount();
+    await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 100)));
+    expect(screen.getByTestId("commentary")).toHaveTextContent("Shoots!"); // rewound to the first unshown event
+    let replayed = false;
+    for (let i = 0; i < 30; i++) {
+      await act(() => new Promise((r) => setTimeout(r, 50)));
+      replayed ||= !!screen.queryByText("Replay");
+    }
+    expect(screen.getByTestId("commentary")).toHaveTextContent("Home P3 wheels away"); // caught up, inside the window
+    expect(replayed).toBe(false);
+  }, 10000);
+
+  it("flashes another match's score chip when it scores, from the round data already polled (no extra request)", async () => {
+    const now = Date.now();
+    const other = (sc: [number, number]) => ({ id: "fx2", home: team("North"), away: team("South"), st: { ...st!, sc } });
+    h.live = { mode: "live", fixtures: [other([0, 0])], ticker: [] };
+    await mount(view([ev(1, now - 30000, "Pass")], null, now));
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const calls = vi.mocked(footfiveApi.match).mock.calls.length;
+    expect(screen.getByTestId("other-score").textContent).toBe("0–0");
+    expect(screen.getByTestId("other-score").hasAttribute("data-flash")).toBe(false);
+    h.live = { mode: "live", fixtures: [other([1, 0])], ticker: [] };
+    await act(() => new Promise((r) => setTimeout(r, 40))); // the next animation frame re-reads the round snapshot
+    expect(screen.getByTestId("other-score").textContent).toBe("1–0");
+    expect(screen.getByTestId("other-score").className).toContain("goal-flash");
+    expect(vi.mocked(footfiveApi.match).mock.calls.length).toBe(calls);
+  });
+
+  it("marks a card on the match's timeline with the card itself", async () => {
+    const now = Date.now();
+    await mount(view([{ ...ev(1, now - 30000, "Yellow card — Away P2 (AWA)"), t: "yellow_card", side: "away" }, { ...ev(2, now - 20000, "Red card! Home P1 is sent off"), t: "red_card", major: 1 }], null, now));
+    expect(screen.getAllByTestId("feed-card").map((c) => c.getAttribute("data-card"))).toEqual(["red", "yellow"]);
+  });
+});
