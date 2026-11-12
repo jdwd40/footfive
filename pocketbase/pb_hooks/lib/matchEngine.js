@@ -769,6 +769,8 @@ function attack(st, out, ctx, side, c, ctr) {
   }
   var ball = pos(side, x, y);
   var turn = takeBall(st, side);
+  // The build-up itself reveals that a real attack has started. Suspend before publishing it, including counters.
+  st.danger = true;
   emit(st, out, ctx.at(f), "build_up", {
     side: side,
     chain: chain,
@@ -812,7 +814,7 @@ function attack(st, out, ctx, side, c, ctr) {
 
   // #218: about half of the failed attacks get into the final third first — a progression shaped like the shot path's — and die
   // there: a last-ditch tackle or a clearance after a dribble or through ball, a keeper claim or a clearance after a cross or
-  // through ball. Markets suspend with the progression and reopen with the turnover, as for a shot and its result.
+  // through ball. Markets remain suspended from the build-up (#229) and reopen with the turnover, as for a shot result.
   if ((outcome === "tackle" || outcome === "interception") && (ctr || rnd(st) < M.deepTurnoverRate)) return deepTurnover(st, out, ctx, side, outcome, chain, f, last, x, y, ball);
 
   if (outcome === "tackle" || outcome === "interception") {
@@ -820,6 +822,7 @@ function attack(st, out, ctx, side, c, ctr) {
     var d = defender(st, def);
     var from2 = ball;
     ball = pos(side, Math.min(x + 6 + rnd(st) * 10, 74), clamp(y + (rnd(st) - 0.5) * 16, 6, 58));
+    st.danger = false; // a shallow turnover ends the attack just as a final-third stop does
     emit(st, out, ctx.at(f), outcome, {
       side: def,
       chain: chain,
@@ -839,7 +842,7 @@ function attack(st, out, ctx, side, c, ctr) {
     return;
   }
 
-  // Progression into the final third — markets suspend until the outcome is public.
+  // Progression into the final third — markets remain suspended until the outcome is public.
   // A long-range effort skips it: the shot comes from where the move stalls.
   var kind = null;
   var runner = last;

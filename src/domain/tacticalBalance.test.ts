@@ -71,10 +71,11 @@ describe("balanced v balanced manual matches are unchanged by #133", () => {
   // #218 final-third turnovers (extra rnd draws on half the failed attacks) deliberately re-pin all three; see docs/balance-218.md.
   // #218 review: through-ball claims now gathered inside the area (x ≥ 86) re-pin seed 13's event hash only (same score/RNG/events).
   // #219 game state (urgency, counters, rebounds, saveBase 0.59) deliberately re-pins all three; see docs/balance-219.md.
+  // #229 changes published danger flags only; score/event-count/RNG assertions stay fixed. See docs/balance-229.md.
   const GOLDEN = [
-    { seed: 11, h: 0, a: 15, rc: 2296, score: [3, 2], events: 409, hash: "5a14a147fbb3c9fea5d104672865bbb6ffcb49b181cbacb6aed36ddf545c67b3" },
-    { seed: 12, h: 5, a: 6, rc: 2416, score: [1, 0], events: 418, hash: "512f1ca768d90da0af1f633c4cb876d0c0aef882a36b41ea7fdb50609d817a22" },
-    { seed: 13, h: 9, a: 2, rc: 3173, score: [1, 1], events: 564, hash: "f3bb3f0cec2a8bb0c4bfb179ceba46725ed664c9955863fcbe02bce3a1a6a7f9" },
+    { seed: 11, h: 0, a: 15, rc: 2296, score: [3, 2], events: 409, hash: "0512a474f1b3c8998d9db0067ec9ab65e31d4c4359b7521767e3d3414e17e80e" },
+    { seed: 12, h: 5, a: 6, rc: 2416, score: [1, 0], events: 418, hash: "4aa4002ee26f0ca63bc02d132b784ae9e231bebb32178684e11a90c829141604" },
+    { seed: 13, h: 9, a: 2, rc: 3173, score: [1, 1], events: 564, hash: "1495cad8a6fecf02c92729c899d85f507cf813aa3bb0780f2a066e71f220afce" },
   ];
 
   it.each(GOLDEN)("seed $seed reproduces the identical event stream, score and RNG count", (g) => {
