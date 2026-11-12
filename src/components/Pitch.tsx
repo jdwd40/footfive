@@ -5,6 +5,7 @@
 import { memo, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import type { Side, TeamPublic } from "../lib/pocketbase";
 import type { Frame } from "../domain/sim";
+import type { Fx } from "../domain/moves";
 import { FULL_CAM } from "../domain/scenes";
 import { kitsFor } from "./kits";
 
@@ -28,6 +29,18 @@ const BODY = "M -1.3 -1.55 L -0.55 -1.95 Q 0 -1.4 0.55 -1.95 L 1.3 -1.55 L 1.3 1
 const SLEEVES = "M -1.3 -1.55 L -2.25 -0.8 L -1.75 0.1 L -1.3 -0.2 Z M 1.3 -1.55 L 2.25 -0.8 L 1.75 0.1 L 1.3 -0.2 Z";
 const GK_SLEEVES = "M -1.3 -1.55 L -2.3 -0.6 L -2.05 1 L -1.45 1 L -1.3 0.1 Z M 1.3 -1.55 L 2.3 -0.6 L 2.05 1 L 1.45 1 L 1.3 0.1 Z";
 const GLOVES = "M -2.15 1 h 0.8 v 0.75 h -0.8 Z M 1.35 1 h 0.8 v 0.75 h -0.8 Z";
+// #205: a keeper diving or claiming has both arms stretched out past his head, gloves at the tips (the figure turns to the ball).
+const REACH_SLEEVES = "M -1.3 -1.55 L -1.75 -3.6 L -0.85 -3.75 L -0.55 -1.95 Z M 1.3 -1.55 L 1.75 -3.6 L 0.85 -3.75 L 0.55 -1.95 Z";
+const REACH_GLOVES = "M -1.95 -4.5 h 1.05 v 0.85 h -1.05 Z M 0.9 -4.5 h 1.05 v 0.85 h -1.05 Z";
+/** Drawn height of a lifted ball (pitch units per unit of lift): the ball, its trail and the move lines share it. */
+const LIFT_Y = 3;
+/** #205: how each move's line is drawn (one path; colour, weight and dash name the move). */
+const FX_LINE: Record<string, { stroke: string; width: number; dash?: string }> = {
+  pass: { stroke: "#ffffff", width: 0.35 },
+  through: { stroke: "#eaff7a", width: 0.45, dash: "1.6 1" },
+  cross: { stroke: "#ffffff", width: 0.45, dash: "1.1 0.8" },
+  long: { stroke: "#ffffff", width: 0.8 },
+};
 const COLLAR = "M -0.55 -1.95 Q 0 -1.4 0.55 -1.95";
 const SHIRT_H = 1.95;
 const BALL_R = 1.15;
@@ -144,6 +157,23 @@ const Field = memo(function Field() {
 });
 
 /** Where the drawn ball was about TRAIL_MS ago, from this component's own recent samples (presentation only). */
+/** #205: a claim's come-off-the-line offset (pitch units), eased in over CLAIM_EASE_MS of real time from the first frame it is drawn
+ * (the reveal), so he steps out rather than jumps. `frame` is null while the result is held back. */
+const CLAIM_EASE_MS = 220;
+function useClaimStep(frame: Frame | null): [number, number] | null {
+  const since = useRef<{ seq: number; at: number } | null>(null);
+  const step = frame?.keeper?.pose === "claim" && frame.keeper.k >= 0.2 ? frame.keeper.step : undefined;
+  if (!frame || !step) {
+    since.current = null; // the next claim (or a replay of this one) steps out afresh
+    return null;
+  }
+  const now = performance.now();
+  if (since.current?.seq !== frame.seq) since.current = { seq: frame.seq, at: now };
+  const f = Math.min(1, (now - since.current.at) / CLAIM_EASE_MS);
+  const e = f * (2 - f);
+  return [step[0] * e, step[1] * e];
+}
+
 function useTrail(pos: [number, number] | null) {
   const hist = useRef<Sample[]>([]);
   const h = hist.current;
@@ -164,6 +194,46 @@ function useTrail(pos: [number, number] | null) {
   return { x: pos[0] - dx * k, y: pos[1] - dy * k };
 }
 
+/** A keeper's turn group (outfielders draw none). */
+function Turn({ on, deg, children }: { on: boolean; deg: number; children: ReactNode }) {
+  return on ? <g transform={deg ? `rotate(${deg.toFixed(1)}) scale(1 1.2)` : undefined} data-turn>{children}</g> : <>{children}</>; // a dive stretches him out
+}
+
+/**
+ * #205: the current move's signature, always the same four nodes (hidden when unused) whatever is happening, so a fast-forwarded
+ * backlog cannot pile effects up: a line (pass, through ball, cross arc, long-shot wake), the through ball's space, speed lines behind a
+ * sprinting player and the woodwork's rattle (shown with the result, never before it).
+ */
+function MoveFx({ fx, players, projectX, revealed }: { fx: Fx | null; players: Frame["players"]; projectX: (x: number) => number; revealed: boolean }) {
+  const style = FX_LINE[fx?.kind ?? ""] ?? FX_LINE.pass;
+  const line = fx && fx.line.length > 1 && fx.alpha > 0 ? fx.line.map(([px, py, h], i) => `${i ? "L" : "M"} ${projectX(px).toFixed(2)} ${(py - h * LIFT_Y).toFixed(2)}`).join(" ") : null;
+  const runner = fx?.sprint ? players.find((p) => p.side + ":" + p.no === fx.sprint!.key) : undefined;
+  let streaks: string | null = null;
+  if (runner && fx?.sprint) {
+    const [rx, ry] = [projectX(runner.x), runner.y];
+    const [tx, ty] = [projectX(fx.sprint.to[0]), fx.sprint.to[1]];
+    const len = Math.hypot(tx - rx, ty - ry);
+    if (len > 0.5) {
+      const [ux, uy] = [(tx - rx) / len, (ty - ry) / len];
+      streaks = [[-1.1, 3], [0, 4.4], [1.1, 3]]
+        .map(([o, l]) => {
+          const [ax, ay] = [rx - ux * 2 + -uy * o, ry - uy * 2 + ux * o];
+          return `M ${ax.toFixed(2)} ${ay.toFixed(2)} L ${(ax - ux * l).toFixed(2)} ${(ay - uy * l).toFixed(2)}`;
+        })
+        .join(" ");
+    }
+  }
+  const burst = fx?.burst && revealed ? fx.burst : null;
+  return (
+    <g data-testid="move-fx" data-kind={fx?.kind ?? undefined} className="move-fx" pointerEvents="none" fill="none" strokeLinecap="round">
+      <path d={line ?? "M 0 0"} display={line ? undefined : "none"} stroke={style.stroke} strokeWidth={style.width} strokeDasharray={style.dash} opacity={fx?.alpha ?? 0} data-fx="line" />
+      <circle cx={fx?.spot ? projectX(fx.spot.at[0]) : 0} cy={fx?.spot?.at[1] ?? 0} r={2} display={fx?.spot && fx.spot.alpha > 0 ? undefined : "none"} stroke="#eaff7a" strokeWidth={0.4} strokeDasharray="0.9 0.6" fill="rgba(234,255,122,0.14)" opacity={fx?.spot?.alpha ?? 0} data-fx="spot" />
+      <path d={streaks ?? "M 0 0"} display={streaks && fx!.sprint!.alpha > 0 ? undefined : "none"} stroke="#ffffff" strokeWidth={0.45} opacity={fx?.sprint?.alpha ?? 0} data-fx="sprint" />
+      <circle cx={burst ? projectX(burst.at[0]) : 0} cy={burst?.at[1] ?? 0} r={burst?.r ?? 1} display={burst ? undefined : "none"} stroke="#ffffff" strokeWidth={0.5} opacity={burst?.alpha ?? 0} data-fx="burst" />
+    </g>
+  );
+}
+
 export default function Pitch({ frame, home, away, replay, revealed, hud }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
@@ -174,10 +244,18 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   const x = (v: number) => flip ? W - v : v;
   // #203: no camera zoom. The view is always the whole pitch (symmetric about x = 50, so the end switch needs no projection).
   const viewBox = FULL_CAM;
-  const ball = [x(frame?.ball[0] ?? 50), frame?.ball[1] ?? 32];
+  // #205: a scene with a result (save, goal, miss, woodwork, block, penalty...) draws no move effect and no keeper pose until that result
+  // is revealed to the viewer: up to then the keeper stands as he would for any outcome, and the dive, claim or beaten dive snaps in at
+  // the reveal. Open-play scenes (no result) are never held.
+  const held = !!frame?.flash && !revealed;
+  const step = useClaimStep(held ? null : frame);
+  const claimKeeper = step ? frame!.players.find((p) => p.gk && p.side === frame!.keeper!.side) : undefined;
+  // He comes off his line with the ball: it moves with him when it is in his hands (the frame's own positions are untouched).
+  const withBall = !!claimKeeper && !!frame && Math.hypot(claimKeeper.x - frame.ball[0], claimKeeper.y - frame.ball[1]) <= 2.5;
+  const ball = [x((frame?.ball[0] ?? 50) + (withBall ? step![0] : 0)), (frame?.ball[1] ?? 32) + (withBall ? step![1] : 0)];
   const lift = frame?.lift ?? 0;
   const ballR = BALL_R + lift * 0.45;
-  const drawnBall: [number, number] = [ball[0], ball[1] - lift * 3];
+  const drawnBall: [number, number] = [ball[0], ball[1] - lift * LIFT_Y];
   const trail = useTrail(frame ? drawnBall : null);
   // The carrier: the scene's candidate, only while the drawn ball is actually at his feet (unchanged rule; ring and name share it).
   const carrier = frame?.players.find((p) => frame.carrier === p.side + ":" + p.no && lift < 0.05 && Math.hypot(p.x - frame.ball[0], p.y - frame.ball[1]) <= 1.6) ?? null;
@@ -237,23 +315,31 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
       <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: pitchMaxWidth }} data-testid="pitch">
         <svg viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <Field />
+        <MoveFx fx={held ? null : frame?.fx ?? null} players={frame?.players ?? []} projectX={x} revealed={revealed} />
 
         {frame?.players.map((p) => {
           const kit = p.gk ? (p.side === "home" ? kits.homeGk : kits.awayGk) : kits[p.side];
           const edge = kit.num === "#fff" ? "rgba(255,255,255,0.85)" : "rgba(5,10,20,0.8)";
+          // #205: a result scene's dive or claim turns the keeper to the ball with both arms out (pose only: his spot is the frame's).
+          const pose = !held && p.gk && frame.keeper && frame.keeper.side === p.side && frame.keeper.k >= 0.2 ? frame.keeper : null;
+          // A dive lays him out towards the ball (his collar along `dir`); a claim keeps him upright, arms up, coming off his line.
+          const turn = pose?.pose === "dive" ? (Math.atan2(flip ? -pose.dir[0] : pose.dir[0], -pose.dir[1]) * 180) / Math.PI : 0;
           return (
-            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x)} ${p.y})`} data-testid="player" data-side={p.side} data-gk={p.gk || undefined}>
+            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x + (p === claimKeeper ? step![0] : 0))} ${p.y + (p === claimKeeper ? step![1] : 0)})`} data-testid="player" data-side={p.side} data-gk={p.gk || undefined} data-pose={pose?.pose}>
+              {/* keepers always carry this turn group (one fixed node each): the figure's own scale is CSS, so the turn sits outside it */}
+              <Turn on={p.gk} deg={turn}>
               <g className="pitch-figure">
                 <ellipse cx={0} cy={SHIRT_H} rx={2} ry={0.65} fill="rgba(0,0,0,0.35)" />
                 {p === carrier ? <circle r={3.1} fill="rgba(255,255,255,0.12)" stroke="#fff" strokeWidth={0.45} data-ring /> : null}
-                <path d={p.gk ? GK_SLEEVES : SLEEVES} fill={kit.sleeves} stroke={edge} strokeWidth={0.22} strokeLinejoin="round" data-sleeves />
+                <path d={pose ? REACH_SLEEVES : p.gk ? GK_SLEEVES : SLEEVES} fill={kit.sleeves} stroke={edge} strokeWidth={0.22} strokeLinejoin="round" data-sleeves />
                 <path d={BODY} fill={kit.body} stroke={edge} strokeWidth={0.22} strokeLinejoin="round" data-kit />
                 <path d={COLLAR} fill="none" stroke={kit.trim} strokeWidth={0.45} strokeLinecap="round" data-trim />
-                {p.gk ? <path d={GLOVES} fill="#f4f7ff" stroke={edge} strokeWidth={0.15} data-gloves /> : null}
+                {p.gk ? <path d={pose ? REACH_GLOVES : GLOVES} fill="#f4f7ff" stroke={edge} strokeWidth={0.15} data-gloves /> : null}
                 <text y={0.95} textAnchor="middle" fontWeight={800} fill={kit.num} fontSize={2.3}>
                   {p.no}
                 </text>
               </g>
+              </Turn>
             </g>
           );
         })}

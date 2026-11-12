@@ -424,7 +424,7 @@ main {
   .stadium-stand::after { top: 0; height: 2px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ball-trail { display: none; }
+  .ball-trail, .move-fx { display: none; }
   .stadium-stand.cheer::before,
   .stadium-stand.cheer::after {
     animation: none !important;
