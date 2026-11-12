@@ -447,3 +447,39 @@ describe("Pitch stadium frame (#204)", () => {
     expect(container.querySelectorAll("svg *").length).toBeLessThan(200);
   });
 });
+
+describe("Pitch break summary and pre-match overlay (#208)", () => {
+  const summary = <div data-testid="the-summary">summary</div>;
+  it("docks the half-time banner at the top of the pitch, its text unchanged, with the summary under it inside the pitch box", () => {
+    render(<Pitch frame={frame({ type: "half_time", score: [1, 0], ms: 30000, p: 8000 / 30000 })} home={home} away={away} revealed summary={summary} />);
+    const banner = screen.getByTestId("period-banner");
+    expect(banner.textContent).toBe("HALF-TIME · HOM 1–0 AWY");
+    expect(banner.hasAttribute("data-docked")).toBe(true);
+    const overlay = screen.getByTestId("break-overlay");
+    expect(screen.getByTestId("pitch").contains(overlay)).toBe(true);
+    expect(overlay.className).toContain("absolute");
+    expect(overlay.contains(screen.getByTestId("the-summary"))).toBe(true);
+    expect(overlay.style.opacity).toBe(""); // the summary is never dimmed with the break banner
+  });
+  it("full time keeps the winner on the docked banner", () => {
+    render(<Pitch frame={frame({ type: "match_end", side: "away", by: "aet", score: [1, 2], p: 1 })} home={home} away={away} revealed summary={summary} />);
+    expect(screen.getByTestId("ft-banner").textContent).toBe("FULL-TIMEAway City go through! · after extra time");
+    expect(screen.getByTestId("the-summary")).toBeTruthy();
+  });
+  it("past the scene's life (reduced motion holds p at 1) the break's title still heads the summary", () => {
+    render(<Pitch frame={frame({ type: "half_time", score: [0, 0], ms: 30000, p: 1 })} home={home} away={away} revealed summary={summary} />);
+    expect(screen.getByTestId("period-banner").textContent).toBe("HALF-TIME · HOM 0–0 AWY");
+    cleanup();
+    render(<Pitch frame={frame({ type: "half_time", score: [0, 0], ms: 30000, p: 1 })} home={home} away={away} revealed />);
+    expect(screen.queryByTestId("period-banner")).toBeNull(); // unchanged without a summary
+  });
+  it("never docks the goal screen, and draws no summary over it", () => {
+    render(<Pitch frame={frame({ type: "celebration", flash: "goal", side: "home", score: [1, 0], p: 0.5 })} home={home} away={away} revealed summary={summary} />);
+    expect(screen.getByTestId("goal-banner").hasAttribute("data-docked")).toBe(false);
+    expect(screen.queryByTestId("the-summary")).toBeNull();
+  });
+  it("draws the pre-match overlay inside the pitch box", () => {
+    render(<Pitch frame={null} home={home} away={away} revealed overlay={<div data-testid="the-overlay" />} />);
+    expect(screen.getByTestId("pitch").contains(screen.getByTestId("the-overlay"))).toBe(true);
+  });
+});

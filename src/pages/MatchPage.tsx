@@ -4,12 +4,14 @@ import Layout from "../components/Layout";
 import Pitch from "../components/Pitch";
 import MarketsPanel from "../components/MarketsPanel";
 import Ticker from "../components/Ticker";
+import { BreakSummary, PreMatch } from "../components/BreakPanels";
 import { MatchClock, PhaseChip, useChanged } from "../components/FixtureCard";
 import { Abbr } from "../components/Team";
 import { commentaryLine, feedRows } from "../domain/commentary";
 import { sampleN, sceneFor, type Pt, type Scene } from "../domain/scenes";
 import { LINGER_MS, frameAt, playhead, reveal, sentOffAt, settle, smooth, type Frame, type PlayerStarts } from "../domain/sim";
-import { autoReplay, replayStarted, type ReplayMemo } from "../domain/replay";
+import { autoReplay, CATCHUP_SLACK_MS, replayStarted, type ReplayMemo } from "../domain/replay";
+import { breakCard, breakSummary, SUMMARY_BREAKS } from "../domain/breaks";
 import { clockSeconds, countdown, eventClockTime, eventTime, minuteLabel, noteServerTime, phaseInfo, serverNow, useLive, useNow } from "../lib/live";
 import { footfiveApi, type FixtureCard as FixtureCardData, type MatchEvent, type MatchView, type PubState, type Side, type TickerItem } from "../lib/pocketbase";
 import { reportConnectionFail, reportConnectionOk } from "../hooks/useConnectionStatus";
@@ -118,7 +120,7 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball and players were when the current scene began. */
-type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; auto?: string | null /* #206: the automatic goal replay being drawn (its caption), else null */; replayed?: boolean /* #206: this goal's replay has started: its big screen and cheer are over */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
+type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; auto?: string | null /* #206: the automatic goal replay being drawn (its caption), else null */; replayed?: boolean /* #206: this goal's replay has started: its big screen and cheer are over */; behind?: boolean /* #208: the pitch clock is fast-forwarding a late batch */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
 
 /** #189: a copy of every drawn player's spot, keyed side:no (pitch units, before any camera projection). */
 function starts(frame: Frame): PlayerStarts {
@@ -288,8 +290,10 @@ export default function MatchPage() {
       const autoCaption = auto ? auto.caption : null;
       // After its replay (a late restart), the live celebration comes back without its big screen or a second cheer.
       const replayed = !replay && !auto && replayStarted(autoRef.current, ph?.cur ?? null, clock);
+      // #208: a late batch is being fast-forwarded (the clock is behind its target): break summaries wait until it has caught up.
+      const behind = now - LAG_MS - clock > CATCHUP_SLACK_MS;
       setAnim((a) => {
-        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set(), auto: null, replayed: false };
+        if (!scene) return { now, clock, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set(), auto: null, replayed: false, behind };
         // One scene of one source (live, or one replay): switching source is a cut, never a chase or a carried verdict.
         const same = a.frame?.seq === scene.seq && a.src === src;
         // Skipped events (suspended tab): the drawn frame is history — snap to the scene's own start rather than chase across the gap.
@@ -314,7 +318,7 @@ export default function MatchPage() {
         const liveSentOff = replaying && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
         // WON IT waits for the drawn ball to be at a player of the winning side, then holds for its window (no flicker as he moves it on).
         const wonSeen = !!frame.won && ((same && !!a.wonSeen) || (frame.lift < 0.05 && frame.players.some((q) => q.side === frame.won && Math.hypot(q.x - frame.ball[0], q.y - frame.ball[1]) <= 1.6)));
-        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed, auto: autoCaption, replayed };
+        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed, auto: autoCaption, replayed, behind };
       });
     };
     step();
@@ -325,6 +329,9 @@ export default function MatchPage() {
   // A newly fetched playhead must not inherit the previous scene's reveal verdict:
   // the ticker retains shown/queued items even after a later render removes them.
   const liveRevealed = !!ph && anim.liveSeq === ph.cur.seq && anim.liveRevealed;
+  // #208: the break the lagged pitch is on (half-time, end of 90, full time) and its summary, from the events up to that break only.
+  const breakSeq = ph && SUMMARY_BREAKS[ph.cur.t] ? ph.cur.seq : null;
+  const summary = useMemo(() => (breakSeq == null ? null : breakSummary(events, breakSeq)), [events, breakSeq]);
 
   // Back to the round RETURN_MS after the final whistle; any interaction after full time cancels it.
   // Public state as the lagged pitch shows it: every event carries its own snapshot, held back until the result is revealed. Auto-return keys off the real state.
@@ -396,6 +403,12 @@ export default function MatchPage() {
   const otherTicker = live?.ticker?.filter((i) => i.fixtureId !== fx.id) ?? [];
   // #207: one ticker row for this match (as the lagged pitch has shown it) and the other matches, newest first.
   const tickerItems = [...recent, ...otherTicker].sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+  // #208: dead time on the pitch, all following the lagged playhead. In a summary break, once the big banner has had its moment, the
+  // summary of the play shown so far (never while a late batch is fast-forwarded, nor over a replay). Before the first event is on
+  // the pitch, the line-ups walk out.
+  const card = summary && replayCaption == null && !anim.behind ? breakCard(ph?.cur, anim.clock) : null;
+  const breakPanel = card && summary ? <BreakSummary key={summary.seq} summary={summary} page={card.page} pair={card.pair} home={fx.home} away={fx.away} /> : null;
+  const preMatch = !ph && !st && view.lineups ? <PreMatch lineups={view.lineups} home={fx.home} away={fx.away} /> : null;
 
   return (
     <Layout wide>
@@ -431,7 +444,7 @@ export default function MatchPage() {
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
               // #207: the score and clock live on the one scoreboard above the pitch; the pitch carries no score strip.
-              <Pitch frame={frame} home={fx.home} away={fx.away} replay={replayCaption != null} replayed={!!anim.replayed} revealed={revealed} minute={frame ? minutes.get(frame.seq) : undefined} />
+              <Pitch frame={frame} home={fx.home} away={fx.away} replay={replayCaption != null} replayed={!!anim.replayed} revealed={revealed} minute={frame ? minutes.get(frame.seq) : undefined} summary={breakPanel} overlay={preMatch} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <CommentaryLine
