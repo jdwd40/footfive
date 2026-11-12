@@ -4,10 +4,11 @@
  */
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 import { goalX, sample, sampleN, short, type Actor, type Pt, type Scene } from "./scenes";
+import { crossBend, keeperPose, moveFx, type Fx, type KeeperPose } from "./moves";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
 export type RefPose = "run" | "whistle" | "point" | "card-yellow" | "card-red";
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */; fx?: Fx /* #205: this move's signature (one at a time) */; keeper?: KeeperPose /* #205: a result scene's dive or claim */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 /** #189: where each player (side:no) was drawn on a scene's first tick, so its runners start from there. */
 export type PlayerStarts = Readonly<Record<string, Pt>>;
@@ -183,6 +184,12 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   const bridged = startPlayers ? bridge(scene, routed, startPlayers, lineups, sentOff) : null;
   const { ball: b, players, unlabelled, ref } = layout(bridged?.scene ?? routed, t, lineups, sentOff);
   const ball: Pt = [b[0], b[1]]; // copy: sample() may hand back the scene's own keyframe
+  if (scene.type === "cross") {
+    // #205: the delivery curls in (a bend in flight only: the winger's spot and the drop are untouched).
+    const [bx, by] = crossBend(scene, t, routed);
+    ball[0] += bx;
+    ball[1] += by;
+  }
   const bind = binding(scene, lineups, sentOff);
   for (const a of unlabelled) {
     const q = players.find((p) => p.side + ":" + p.no === bind[a.id] && !p.hot);
@@ -275,6 +282,14 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPt = [86, 19]; // beside the box, where setupScene / penaltyScene keep him (penRefSpot("home"))
   }
   const runs = bridged && t <= 1 && bridged.runs.length ? { runs: bridged.runs } : {};
+  // #205: the move's signature and the keeper's pose, from this scene alone (a shot's frames cannot depend on its result).
+  const keyOf = (id: string) => {
+    const a = scene.actors.find((x) => x.id === id);
+    const p = a && a.side !== "ref" && players.find((q) => q.side === a.side && (a.keeper ? q.gk : a.label ? short(q.name) === a.label : q.side + ":" + q.no === bind[a.id]));
+    return p ? p.side + ":" + p.no : undefined;
+  };
+  const fx = moveFx(scene, t, keyOf, routed);
+  const keeper = keeperPose(scene, t);
   // Signals last through the final frame too: reduced motion already renders t = 1 without smoothing.
   let refPose: RefPose = "run";
   let refAim: Pt | undefined;
@@ -289,7 +304,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPose = "point";
     refAim = scene.impact; // the actual penalty spot, including the mirrored away end
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}) };
 }
 
 /** #189: scenes whose receiver/runner (`r`, a cross's `h`) and marker (`m`) run from where they were drawn. Turnover contests (`lost`) and
