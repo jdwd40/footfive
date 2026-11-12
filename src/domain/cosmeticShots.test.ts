@@ -46,7 +46,7 @@ const ORIGINAL = {
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
-type State = { seq: number; lastAt?: number; phase: string; nextAt: number; minute: number; score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number; ball: [number, number]; bs: Side | null; timing: Record<string, number>; teams: Record<Side, { players: Array<{ name: string; role: string; is_starter: boolean; sentOff: boolean }> }> };
+type State = { seq: number; lastAt?: number; lastChance?: number; phase: string; nextAt: number; minute: number; score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number; ball: [number, number]; bs: Side | null; timing: Record<string, number>; teams: Record<Side, { players: Array<{ name: string; role: string; is_starter: boolean; sentOff: boolean }> }> };
 const team = (i: number) => {
   const t = TEAMS[i];
   return { id: t.slug, name: t.name, abbr: t.abbreviation, grade: t.grade, players: defaultStarters(t.players) };
@@ -78,6 +78,7 @@ function project(events: Ev[], st: State) {
   });
   const final = structuredClone(st);
   final.seq = st.seq - (events.length - real.length);
+  delete final.lastChance; // #215: the half-chances' own memory (presentation only), absent from the original engine
   return { out, final };
 }
 
@@ -111,6 +112,7 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
         const saved = JSON.parse(JSON.stringify(st));
         delete saved.seq;
         delete saved.lastAt;
+        delete saved.lastChance; // #215: presentation-only memory of the half-chances
         steps.update(JSON.stringify(saved));
         st = JSON.parse(JSON.stringify(st));
         if (st.nextAt === null) st.nextAt = Infinity;
@@ -118,7 +120,7 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
       expect(JSON.stringify(split), `seed ${seed}`).toBe(JSON.stringify(events));
     }
     expect(steps.digest("hex"), "state after every step: stats, score, ball, possession, counter, RNG, nextAt, wear").toBe(ORIGINAL.steps);
-  });
+   }, 20_000); // 200 matches stepped and reloaded minute by minute: ~3 s alone, past the 5 s default under full-suite load
 
   it("an old saved state (legacy timing, no new fields) resumes with the identical stream, cosmetics included", () => {
     expect(Object.keys(match(1000))).toEqual(["v", "fx", "seed", "rc", "seq", "timing", "teams", "phase", "minute", "nextAt", "score", "so", "stats", "possMin", "ball", "bs", "counter", "pending", "danger", "winner", "by", "finishedAt"]);
@@ -151,9 +153,9 @@ describe("cosmetic rows (issue #73)", () => {
       });
       expect(cosmetic(events[0]) || cosmetic(events[events.length - 1])).toBe(false);
     }
-    // Every cosmetic row belongs to exactly one shot → miss|block → bounce run.
-    expect(attempts.length * 3).toBe(all.flat().filter(cosmetic).length);
-  });
+    // Every cosmetic row belongs to exactly one shot → miss|block → bounce run, or is a #215 half-chance's (halfChances.test.ts).
+    expect(attempts.length * 3).toBe(all.flat().filter((e) => cosmetic(e) && !e.hc).length);
+  }, 20_000); // an expect per event of 200 matches: past the 5 s default under full-suite load
 
   it("flagged, never a goal, no chain, never major or ticker; both misses and blocks", () => {
     for (const { rows } of attempts) {

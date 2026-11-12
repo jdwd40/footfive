@@ -117,7 +117,7 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
 export const LINGER_MS = 2500;
 /** WON IT stays this long (real ms, into the winner's dwell) from the moment the challenge winner has the ball. */
 export const WON_MS = 1500;
-const LINGERING = new Set(["save", "wood", "miss", "over", "block"]);
+const LINGERING = new Set(["save", "wood", "miss", "over", "block", "clear", "heavy", "stop"]); // #215: half-chance answers too
 function lingers(prev: Scene | undefined, scene: Scene, t: number) {
   return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || LINGERING.has(prev.flash));
 }
@@ -166,6 +166,7 @@ function carrierActor(scene: Scene, t: number): string | null {
     case "block": return t >= 0.5 ? "b" : null;
     case "woodwork": return t >= 0.97 ? "gk" : null;
     case "bounce": return t >= 0.8 ? "c" : null;
+    case "clearance": return t >= 0.7 ? "own" : t <= 0.25 && scene.flash === "stop" ? "run" : null; // #215: the runner has it until the slide; the defending side ends with it
     case "restart": return "w";
     case "penalty_setup": case "shootout_setup": return t < 0.2 ? "taker" : null;
     case "penalty_goal": case "penalty_saved": case "penalty_missed": case "penalty_woodwork": case "shootout_kick": return t >= 0.43 && t <= 0.5 ? "taker" : null;

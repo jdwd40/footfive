@@ -6,7 +6,7 @@ import { memo, useMemo, useRef, type CSSProperties, type ReactNode } from "react
 import type { Side, TeamPublic } from "../lib/pocketbase";
 import type { Frame } from "../domain/sim";
 import type { Fx } from "../domain/moves";
-import { FULL_CAM } from "../domain/scenes";
+import { FULL_CAM, HALF_CHANCE_BADGE } from "../domain/scenes";
 import { kitsFor } from "./kits";
 
 type Props = {
@@ -24,7 +24,7 @@ const W = 100;
 const H = 64;
 const R = 1.45; // referee body radius (his figure is unchanged by #204)
 /** Result badge per flash kind (what actually happened, never a generic "no goal"); shootout goals and cards are special-cased below. */
-const BADGE: Record<string, string> = { goal: "GOAL!", save: "SAVED!", wood: "WOODWORK", miss: "WIDE", over: "OVER", block: "BLOCKED", pen: "PENALTY" };
+const BADGE: Record<string, string> = { goal: "GOAL!", save: "SAVED!", wood: "WOODWORK", miss: "WIDE", over: "OVER", block: "BLOCKED", pen: "PENALTY", ...HALF_CHANCE_BADGE };
 /** #206: result scenes whose save or woodwork gets the reveal pulse. */
 const EMPH_TYPES = new Set(["save", "woodwork", "penalty_saved", "penalty_woodwork", "shootout_kick"]);
 /** #206: arms raised above the head (a celebrating outfielder). */

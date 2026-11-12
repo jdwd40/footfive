@@ -181,7 +181,9 @@ const runs = SEEDS.map((seed) => {
   return { seed, st, events: eng.advanceTo(st, 1e13) as Ev[] };
 });
 const render = (events: Ev[]) => events.map((_, i) => line(events, i));
-const summary = (st: State, events: Ev[]) => ({ score: st.score, winner: st.winner, by: st.by, so: st.so, stats: st.stats, rc: st.rc, last: events.at(-1)?.st.x, goals: events.filter((e) => e.t === "goal" || e.t === "penalty_goal").map((e) => [e.seq, e.side, e.p]) });
+/** #215 half-chance rows (`hc`) take transport seqs too: a goal's seq as the pre-#215 stream numbered it (cosmetic tries kept). */
+const preHalfChanceSeq = (events: Ev[], e: Ev) => e.seq - events.filter((x) => x.hc && x.seq < e.seq).length;
+const summary = (st: State, events: Ev[]) => ({ score: st.score, winner: st.winner, by: st.by, so: st.so, stats: st.stats, rc: st.rc, last: events.at(-1)?.st.x, goals: events.filter((e) => e.t === "goal" || e.t === "penalty_goal").map((e) => [preHalfChanceSeq(events, e), e.side, e.p]) });
 /** Engine at the parent of this change (no engine file is touched by #84): score, winner, how, shootout, stats, RNG counter, published stats and scorers of all 200 seeds. */
 const BASELINE = "408d73e764db2a1c17f7ea39f06324b1b3209f850dc60baa749d04e2c03d96df";
 
