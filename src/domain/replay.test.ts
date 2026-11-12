@@ -63,7 +63,9 @@ describe("automatic goal replay (#206)", () => {
       expect(replayAt(plan, plan.endAt)).toBeNull();
       // Live, the restart is usually not fetched yet: the last frame then holds (the restart arriving cuts it, see below).
       const blind = planGoalReplay(events.slice(0, i + 1), scenes, i)!;
-      expect(blind.total).toBe(REPLAY_MS);
+      // The full budget, or the whole move when it is shorter (#214: a shorter build-up): then it starts at the build-up's first frame.
+      expect(blind.total).toBeLessThanOrEqual(REPLAY_MS);
+      if (blind.total < REPLAY_MS) expect([blind.parts[0].scene.type, blind.parts[0].p0]).toEqual(["build_up", 0]);
       expect(replayAt(blind, blind.startAt + blind.total + 100)).toMatchObject({ scene: blind.parts.at(-1)!.scene, p: blind.parts.at(-1)!.p1 });
     }
   });

@@ -122,8 +122,9 @@ function play(before: Scene | null, dwellMs: number, s: Scene, lineups: Lineups)
 const keyOf = (lineups: Lineups, side: Side, name?: string) => `${side}:${lineups[side].find((p) => p.name === name)!.no}`;
 /** The lay-off man: the extra, unnamed attacking actor who takes the ball in between. */
 const layoffOf = (s: Scene) => s.actors.find((a) => a.id === "l");
-/** The same event drawn as an ordinary pass: a build-up shares the ordinary pass branch and never gets the lay-off. */
-const ordinary = (e: MatchEvent, prev: Pt = e.from as Pt) => ({ ...sceneFor({ ...e, t: "build_up" }, prev, 15000)!, type: e.t, tempo: sceneFor(e, prev, 15000)!.tempo }); // #105: tempo follows the event type
+/** The same event drawn as an ordinary pass: a build-up shares the ordinary pass branch and never gets the lay-off. #214: a build-up
+ * is played quicker, to fit before its move's first pass, so the length is the pass's own; everything drawn must match. */
+const ordinary = (e: MatchEvent, prev: Pt = e.from as Pt) => ({ ...sceneFor({ ...e, t: "build_up" }, prev, 15000)!, type: e.t, tempo: sceneFor(e, prev, 15000)!.tempo, ms: sceneFor(e, prev, 15000)!.ms }); // #105: tempo follows the event type
 
 /** Lay-off then forward release, as authored and on the target frames (both sides, any lineup). */
 function expectLayoff(s: Scene, e: MatchEvent, lineups: Lineups, tag: string) {
@@ -210,8 +211,9 @@ describe("a backward midfield pass is a lay-off, then a forward release (FF-69)"
     expect(holders.every((h) => h.startsWith(side)), JSON.stringify(holders)).toBe(true);
     expect(holders.indexOf(l), JSON.stringify(holders)).toBeGreaterThanOrEqual(0);
     expect(holders.lastIndexOf(r), JSON.stringify(holders)).toBeGreaterThan(holders.indexOf(l));
-    // The lay-off man's ring is drawn while he holds it (smoothing lags the 1/3 receive instant, not the hold).
-    const holding = frames.filter(({ ms }) => ms >= 0.5 * s.ms && ms <= 0.6 * s.ms);
+    // The lay-off man's ring is drawn while he holds it (smoothing lags the 1/3 receive instant, not the hold). #214: a dwell this long
+    // may have switched play to the far wing, so he runs a long way onto the rerouted ball; he has it from 0.55 of the scene.
+    const holding = frames.filter(({ ms }) => ms >= 0.55 * s.ms && ms <= 0.6 * s.ms);
     expect(holding.length).toBeGreaterThan(0);
     for (const { ms, f } of holding) expect(ringed(f), `drawn hold at ${ms} ms`).toBe(l);
     // The reroute never touches the final key: the drawn ball comes to rest on the engine's spot, and the scene object is unchanged.

@@ -2,7 +2,7 @@ import { render, cleanup } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Pitch from "./Pitch";
 import { sceneFor, type Scene } from "../domain/scenes";
-import { dwellRate, frameAt, smooth, type Frame, type Lineups } from "../domain/sim";
+import { DWELL_CARRY, dwellRate, frameAt, smooth, type Frame, type Lineups } from "../domain/sim";
 import type { MatchEvent, TeamPublic } from "../lib/pocketbase";
 const home = { abbreviation: "HOM" } as TeamPublic, away = { abbreviation: "AWY" } as TeamPublic;
 const lineups: Lineups = { home: ["Keeper", "Passer", "Receiver", "Mate", "Other"].map((name, i) => ({ name, no: i + 1, role: i ? "util" : "gk", starter: true })), away: ["Goalie", "Winner", "Defender", "Mate", "Other"].map((name, i) => ({ name, no: i + 1, role: i ? "util" : "gk", starter: true })) };
@@ -58,8 +58,12 @@ describe("actual carrier, never hot event actors", () => {
   it("dwell passes have no mark in flight even though hot binding still places a player at the ball", () => {
     const s = sceneFor(event("pass"), [30, 32], 15000)!;
     const r = dwellRate(s.tempo); // #105: the dwell clock runs at the phase's tempo
-    expect(draw(at(s, 1 + 2400 / r / s.ms))).toHaveLength(1);
-    expect(draw(at(s, 1 + 2750 / r / s.ms))).toEqual([]);
-    expect(draw(at(s, 1 + 3100 / r / s.ms))).toHaveLength(1);
+    const dwell = (ms: number) => at(s, 1 + ms / r / s.ms);
+    expect(draw(dwell(DWELL_CARRY - 300))).toHaveLength(1); // carried
+    expect(draw(dwell(DWELL_CARRY + 300))).toEqual([]); // the lay-off in flight
+    let ms = DWELL_CARRY + 300;
+    while (!dwell(ms).carrier) ms += 50;
+    expect(draw(dwell(ms + 300))).toHaveLength(1); // the receiver has it
+
   });
 });

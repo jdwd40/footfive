@@ -141,6 +141,9 @@ function pace(minuteMs: number) {
   return (base: number, floor = 0) => Math.max(floor, Math.round(base * k));
 }
 
+/** #214: a build-up scene's length at the 15 s pace (scaled like the rest); its move's first pass follows 1650 later. */
+export const BUILD_UP_MS = 1350;
+
 /** Fields every scene copies from its event. */
 function head(e: MatchEvent) {
   const so = e.st?.so;
@@ -154,6 +157,10 @@ function head(e: MatchEvent) {
  */
 export function sceneFor(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent, prevLift = 0): Scene | null {
   const s = build(e, prevBall, minuteMs, next);
+  // #214: the engine always plays a move's first pass 0.11 of a minute after its build-up. The build-up (a contest or a keeper's
+  // distribution included) fits well inside that, so its ball is at the collector's feet before the pass starts: never cut off in
+  // flight (the pass then had to set off from mid-air) and never still rolling at speed when the pass takes over.
+  if (s && e.t === "build_up") s.ms = Math.min(s.ms, pace(minuteMs)(BUILD_UP_MS));
   if (s) {
     s.tempo = tempoFor(e, s);
     const move = moveOf(e, prevBall, prevLift);
