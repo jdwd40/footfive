@@ -235,6 +235,10 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   // The carrier: the scene's candidate, only while the drawn ball is actually at his feet (unchanged rule; ring and name share it).
   const carrier = frame?.players.find((p) => frame.carrier === p.side + ":" + p.no && lift < 0.05 && Math.hypot(p.x - frame.ball[0], p.y - frame.ball[1]) <= 1.6) ?? null;
   const flash = frame && revealed ? frame.flash : null;
+  // #205: a scene with a result (save, goal, miss, woodwork, block, penalty...) draws no move effect and no keeper pose until that result
+  // is revealed to the viewer: up to then the keeper stands as he would for any outcome, and the dive, claim or beaten dive snaps in at
+  // the reveal. Open-play scenes (no result) are never held.
+  const held = !!frame?.flash && !revealed;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
   const goal = frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
   // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
@@ -290,13 +294,13 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
       <div className="match-pitch relative mx-auto w-full overflow-hidden rounded-xl border border-line bg-[#0a2416]" style={{ aspectRatio: `${FULL_CAM[2]}/${FULL_CAM[3]}`, maxWidth: pitchMaxWidth }} data-testid="pitch">
         <svg viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet" className="block h-full w-full" role="img" aria-label={frame ? frame.caption : "Pitch"}>
         <Field />
-        <MoveFx fx={frame?.fx ?? null} players={frame?.players ?? []} projectX={x} revealed={revealed} />
+        <MoveFx fx={held ? null : frame?.fx ?? null} players={frame?.players ?? []} projectX={x} revealed={revealed} />
 
         {frame?.players.map((p) => {
           const kit = p.gk ? (p.side === "home" ? kits.homeGk : kits.awayGk) : kits[p.side];
           const edge = kit.num === "#fff" ? "rgba(255,255,255,0.85)" : "rgba(5,10,20,0.8)";
           // #205: a result scene's dive or claim turns the keeper to the ball with both arms out (pose only: his spot is the frame's).
-          const pose = p.gk && frame.keeper && frame.keeper.side === p.side && frame.keeper.k >= 0.2 ? frame.keeper : null;
+          const pose = !held && p.gk && frame.keeper && frame.keeper.side === p.side && frame.keeper.k >= 0.2 ? frame.keeper : null;
           // A dive lays him out towards the ball (his collar along `dir`); a claim keeps him upright, arms up, coming off his line.
           const turn = pose?.pose === "dive" ? (Math.atan2(flip ? -pose.dir[0] : pose.dir[0], -pose.dir[1]) * 180) / Math.PI : 0;
           return (

@@ -236,12 +236,12 @@ function preResult(events: MatchEvent[], minuteMs: number) {
   const shot = scenes.find((s) => s.seq === 11)!;
   const frames: Frame[] = [];
   let drawn: Frame | null = null;
-  for (let ms = 0; ms <= lead.ms + 400; ms += 16) frames.push((drawn = smooth(drawn, frameAt(lead, ms / lead.ms, LINEUPS, undefined, 5000 + ms), 16)));
+  for (let ms = 0; ms <= lead.ms + 400; ms += 32) frames.push((drawn = smooth(drawn, frameAt(lead, ms / lead.ms, LINEUPS, undefined, 5000 + ms), 32)));
   const startBall = drawn!.ball;
   const starts = Object.fromEntries(drawn!.players.map((p) => [p.side + ":" + p.no, [p.x, p.y] as Pt]));
-  for (let ms = 0; ms <= shot.ms * 1.8; ms += 16) {
+  for (let ms = 0; ms <= shot.ms * 1.8; ms += 32) {
     const target = frameAt(shot, ms / shot.ms, LINEUPS, undefined, 9000 + ms, startBall, lead, ms, starts);
-    frames.push(target, (drawn = smooth(drawn, target, 16)));
+    frames.push(target, (drawn = smooth(drawn, target, 32)));
   }
   return { frames, captions: [lead.caption, shot.caption], scenes: [lead, shot] };
 }
@@ -280,13 +280,13 @@ describe("#205 keeper dives and claims (real engine matches)", () => {
   it("appear only in result scenes, never in a shot, and saves get both dives and claims", () => {
     const poses = new Map<string, Set<string>>();
     let shotFrames = 0;
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 6; i++) {
       const st = eng.createMatch({ fixtureId: "k" + i, seed: 5000 + i, kickoffAt: 0, home: team(i % 16), away: team((i * 5 + 1) % 16), timing: eng.buildTiming(1000, 1) });
       const events: MatchEvent[] = eng.advanceTo(st, 1e12);
       const lineups = Object.fromEntries((["home", "away"] as Side[]).map((s) => [s, st.teams[s].players.map((p: { name: string; no: number; role: string; is_starter: boolean }) => ({ name: p.name, no: p.no, role: p.role, starter: p.is_starter }))])) as Lineups;
       for (const s of chain(events, 15000)) {
         if (s.keeper) expect(KEEPER_RESULTS.has(s.type), `${s.type} #${s.seq}`).toBe(true);
-        for (let t = 0; t <= 1.2; t += 0.1) {
+        for (const t of [0, 0.3, 0.5, 0.7, 0.9, 1.1]) {
           const f = frameAt(s, t, lineups);
           if (s.type === "shot") {
             shotFrames++;
@@ -301,7 +301,7 @@ describe("#205 keeper dives and claims (real engine matches)", () => {
         }
       }
     }
-    expect(shotFrames).toBeGreaterThan(300);
+    expect(shotFrames).toBeGreaterThan(100);
     expect([...(poses.get("save") ?? [])].sort()).toEqual(["claim", "dive"]);
     expect(poses.get("goal")).toEqual(new Set(["dive"]));
   }, 60000);

@@ -576,7 +576,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         ...base,
         ms: d(2600),
         ball: [shotFrom, lerp(shotFrom, catchPt, 0.85), catchPt, parry],
-        keeper: dives ? { pose: "dive", to: catchPt, at: [0.1, 0.42, 0.72, 0.95] } : { pose: "claim", to: catchPt, at: [0.08, 0.45, 0.8, 1] },
+        keeper: dives ? { pose: "dive", to: catchPt, at: [0.1, 0.42, 0.85, 1] } : { pose: "claim", to: catchPt, at: [0.08, 0.45, 0.9, 1.05] }, // drawn only from the reveal (~0.62–0.67): held past it
         actors: [
           { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, parry] },
           { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
