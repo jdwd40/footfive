@@ -49,7 +49,7 @@ export default function LivePage() {
         {live.mode !== "champion" && live.mode !== "idle" ? (
           <>
             {live.recentChampion ? <ChampionStrip c={live.recentChampion} /> : null}
-            <Ticker items={live.ticker} />
+            <Ticker items={live.ticker} flashGoals />
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4" data-testid="fixtures-grid">
               {live.fixtures.map((fx) => (
                 <FixtureCard

@@ -439,3 +439,33 @@ main {
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* #206: big moments. The goal screen is a team-coloured band behind the instant GOOOAL text; a save or the woodwork pulses the
+   pitch's edge once, from the reveal; a goal elsewhere flashes the score chip or the ticker. All presentation, no layout. */
+.goal-screen {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--glow) 38%, rgba(5, 10, 20, 0.55)) 18%, color-mix(in srgb, var(--glow) 38%, rgba(5, 10, 20, 0.55)) 82%, transparent);
+}
+.pitch-emph {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0;
+  animation: pitch-emph 0.9s ease-out;
+}
+.pitch-emph-save { --emph: rgba(0, 240, 255, 0.75); }
+.pitch-emph-wood { --emph: rgba(255, 176, 32, 0.85); }
+@keyframes pitch-emph {
+  0% { opacity: 0; box-shadow: inset 0 0 0 0 var(--emph); background: transparent; }
+  18% { opacity: 1; box-shadow: inset 0 0 28px 6px var(--emph); background: rgba(255, 255, 255, 0.08); }
+  100% { opacity: 0; box-shadow: inset 0 0 40px 10px transparent; background: transparent; }
+}
+@keyframes goal-flash {
+  0%, 100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(184, 255, 60, 0); }
+  20%, 60% { background-color: rgba(184, 255, 60, 0.22); box-shadow: 0 0 0 2px rgba(184, 255, 60, 0.8); }
+}
+.goal-flash { animation: goal-flash 1.6s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .pitch-emph { display: none; }
+  .goal-flash { animation: none; }
+}

@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { TickerItem } from "../lib/pocketbase";
+import { serverNow } from "../lib/live";
 
 const HOLD_MS = 5000;
+/** #206: an item this recent (server time) when the ticker first appears is still news: the match page only mounts its
+ * "Around the grounds" ticker with the first item, so that goal must flash too. Older history never does. */
+const FRESH_MS = 8000;
 
 function tone(t: string) {
   if (t === "goal" || t === "penalty_goal") return "text-lime";
@@ -27,17 +31,26 @@ function icon(t: string) {
  * Round-wide recent-events ticker. Each new item holds for a readable time; when several
  * arrive together they queue (bounded) and the expandable feed lets users catch up.
  */
-export default function Ticker({ items, label = "Round events", badge = "Live feed", empty = "Goals, penalties, red cards and results from every match appear here." }: { items: TickerItem[]; label?: string; badge?: string; empty?: string }) {
+export default function Ticker({ items, label = "Round events", badge = "Live feed", empty = "Goals, penalties, red cards and results from every match appear here.", flashGoals = false }: { items: TickerItem[]; label?: string; badge?: string; empty?: string; flashGoals?: boolean /* #206: a goal that arrives while watching flashes the row once */ }) {
   const [shown, setShown] = useState<TickerItem | null>(items[0] || null);
   const [open, setOpen] = useState(false);
   const queue = useRef<TickerItem[]>([]);
   const seen = useRef<Set<string>>(new Set(items.map((i) => i.id)));
+  // ids that are news, not history: first seen after mount, or already just in when the ticker appeared
+  const arrived = useRef<Set<string> | null>(null);
+  if (!arrived.current) {
+    const since = serverNow() - FRESH_MS;
+    arrived.current = new Set(items.filter((i) => i.at >= since).map((i) => i.id));
+  }
   const lastSwap = useRef(0);
 
   useEffect(() => {
     // items arrive newest-first; enqueue unseen ones oldest-first, keep the queue short
     const fresh = items.filter((i) => !seen.current.has(i.id)).reverse();
-    fresh.forEach((i) => seen.current.add(i.id));
+    fresh.forEach((i) => {
+      seen.current.add(i.id);
+      arrived.current!.add(i.id);
+    });
     queue.current = [...queue.current, ...fresh].slice(-4);
     if (!shown && items[0]) setShown(items[0]);
   }, [items, shown]);
@@ -53,8 +66,10 @@ export default function Ticker({ items, label = "Round events", badge = "Live fe
   }, []);
 
   const pending = queue.current.length;
+  const flash = flashGoals && !!shown && (shown.t === "goal" || shown.t === "penalty_goal") && arrived.current!.has(shown.id);
   return (
-    <section className="panel overflow-hidden" aria-label={label} data-testid="ticker">
+    <section className="panel relative overflow-hidden" aria-label={label} data-testid="ticker">
+      {flash ? <span key={shown!.id} className="goal-flash pointer-events-none absolute inset-0" data-testid="ticker-flash" aria-hidden /> : null}
       <div className="flex items-stretch">
         <div className="flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white" data-testid="ticker-badge">{badge}</div>
         <div className="min-w-0 flex-1 px-3 py-2.5" aria-live="polite">
