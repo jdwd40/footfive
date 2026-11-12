@@ -345,10 +345,10 @@ function engineTeam($app, team, opts) {
   };
 }
 
+/** Kickoff odds model (model_json). #219: with the late game states odds.js walks in play (matchEngine.inPlayModel). */
 function pairModel(homeT, awayT) {
   var st = eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: homeT, away: awayT });
-  var r = eng.goalRates(st);
-  return { lh: Math.round(r.home * 1e6) / 1e6, la: Math.round(r.away * 1e6) / 1e6 };
+  return eng.inPlayModel(st);
 }
 
 // ------------------------------------------------------------------ lifecycle
@@ -403,18 +403,57 @@ function createTournament($app, startAt) {
     createFirstRound(tx, t, teams, startAt);
     created = t;
   });
-  if (created) log("championship_created", { number: created.get("number"), startsAt: toPbDate(startAt), ms: Date.now() - t0 });
+  if (created) {
+    log("championship_created", { number: created.get("number"), startsAt: toPbDate(startAt), ms: Date.now() - t0 });
+    ensureOddsSafe($app, created.id);
+  }
   return created;
+}
+
+/**
+ * #219: the championship odds (odds_json) are computed after the R16 draw commits, never inside its transaction: pricing 120
+ * pairings takes ~0.5 s in the VM and must not hold the SQLite write lock. Reads first, then one small write that only fills
+ * odds_json if it is still missing. Only while the R16 round is still to kick off (the markets close then, and the odds are
+ * those of the pre-R16 squads, as before). Returns true when it wrote.
+ */
+function ensureChampionshipOdds($app, tournamentId) {
+  var t = $app.findRecordById("shared_tournaments", tournamentId);
+  if (t.get("status") !== "active") return false;
+  var have = readJson(t, "odds_json", null);
+  if (have && have.champion) return false;
+  var r16 = one($app, "shared_rounds", "tournament = {:t} && round_key = 'r16'", "", { t: t.id });
+  if (!r16 || (r16.get("status") !== "scheduled" && r16.get("status") !== "management") || fixturesOf($app, r16.id).length < 8) return false;
+  var t0 = Date.now();
+  var odds = championshipOdds($app, r16);
+  var wrote = false;
+  $app.runInTransaction(function (tx) {
+    var fresh = tx.findRecordById("shared_tournaments", t.id);
+    var cur = readJson(fresh, "odds_json", null);
+    if (cur && cur.champion) return;
+    fresh.set("odds_json", odds);
+    tx.save(fresh);
+    wrote = true;
+  });
+  if (wrote) log("championship_odds", { tournamentId: t.id, ms: Date.now() - t0 });
+  return wrote;
+}
+
+/** ensureChampionshipOdds that never throws: a failure is logged and the next tick retries (the championship stands without it). */
+function ensureOddsSafe($app, tournamentId) {
+  try {
+    return ensureChampionshipOdds($app, tournamentId);
+  } catch (err) {
+    log("championship_odds_error", { tournamentId: tournamentId, message: String(err).slice(0, 300) });
+    return false;
+  }
 }
 
 function createFirstRound(tx, t, teams, startAt) {
   var ids = teams.map(function (x) {
     return x.id;
   });
-  var round = createRound(tx, t, "r16", tourneyMod.drawRoundOf16(ids, eng.hashSeed(t.id + ":r16")), startAt);
-  t.set("odds_json", championshipOdds(tx, round));
-  tx.save(t);
-  return round;
+  // #219: odds_json is written after this transaction commits (ensureChampionshipOdds), not here.
+  return createRound(tx, t, "r16", tourneyMod.drawRoundOf16(ids, eng.hashSeed(t.id + ":r16")), startAt);
 }
 
 /**
@@ -1013,6 +1052,7 @@ function repairMissingRound($app, tournamentId, now, T) {
     out = scheduleNextRound(tx, t, last.get("round_key"), winners, finished, now, T);
   });
   if (out) log("round_repaired", { tournamentId: tournamentId, result: out });
+  if (out && out.next === "r16") ensureOddsSafe($app, tournamentId);
   return out;
 }
 
@@ -1096,6 +1136,8 @@ function tickLocked($app, world, now) {
     if (t) actions.push("championship_created");
     if (!t) return { actions: actions };
   }
+  // #219: a championship whose odds could not be written after its draw gets them on a later tick.
+  if (ensureOddsSafe($app, t.id)) actions.push("championship_odds");
 
   for (var guard = 0; guard < 6; guard++) {
     var round = currentRound($app, t.id);

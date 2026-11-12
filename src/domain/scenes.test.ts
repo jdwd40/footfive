@@ -171,7 +171,7 @@ describe("highlight scenes agree with the simulation", () => {
     let n = 0;
     for (const m of matches)
       for (let i = 0; i + 1 < m.length; i++)
-        if (held.has(m[i].t)) {
+        if (held.has(m[i].t) && !m[i].loose) { // #219: a loose save plays on into its rebound (reboundsCounters.test.ts)
           n++;
           expect(m[i + 1].at - m[i].at, `${m[i].t} → ${m[i + 1].t}`).toBeGreaterThanOrEqual(hold);
           // the hold shifts the whole schedule: the event after next must not collapse onto the next
@@ -373,7 +373,7 @@ describe("highlight scenes agree with the simulation", () => {
   it("failed attacks resolve possession on screen: the blocker ends on the loose ball, the keeper ends with a save or a woodwork rebound", () => {
     let n = 0;
     for (const e of all) {
-      if (!["block", "save", "woodwork"].includes(e.t)) continue;
+      if (!["block", "save", "woodwork"].includes(e.t) || e.loose) continue; // #219: a loose ball goes to the rebound's taker (reboundsCounters.test.ts)
       const s = sceneFor(e, [70, 32], 15000)!;
       const who = e.t === "block" ? s.actors.find((a) => a.id === "b")! : s.actors.find((a) => a.keeper)!;
       const [bx, by] = end(s);

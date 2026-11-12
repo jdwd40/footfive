@@ -88,6 +88,12 @@ Weak bootstrap passwords force `must_change_password=true`.
 - #218 intentionally changes outcomes: `deepTurnoverRate = 0.5` takes half the failed attacks into the final third
   before a tackle, clearance or keeper claim (docs/balance-218.md). Same outcome rates, so `model_json` is unchanged;
   deploy between rounds the same way, since a live match reads the constant as it plays.
+- #219 intentionally changes outcomes and in-play odds: late urgency for a trailing side, counter-attacks, rebound shots
+  and `saveBase = 0.59` (docs/balance-219.md). `model_json` gains game-state rates (`r`, `k`, `at`), and odds.js walks the
+  remaining minutes through them. **Deploy between rounds.** A match already in flight resumes on the new engine (the saved
+  state has the same shape), but its `model_json` is the old `{ lh, la }`, which odds.js still prices with the old
+  constant-rate model: late in-play prices for that match would be miscalibrated until it ends. Fixtures scheduled before
+  the deploy are fine: kickoff rebuilds `model_json`.
 
 ### App admin account
 

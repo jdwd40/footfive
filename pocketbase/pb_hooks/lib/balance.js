@@ -65,7 +65,7 @@ var BALANCE = {
     onTargetK: 0.003,
     blockRate: 0.22,
     woodworkRate: 0.12,
-    saveBase: 0.54,
+    saveBase: 0.59,
     saveK: 0.004,
     // Occasional long-range effort: fraction of shots taken from deep (x 58–70)
     // without final-third progression; the keeper's save chance gets this bonus.
@@ -76,6 +76,20 @@ var BALANCE = {
     // #218: share of tackle/interception attacks that first reach the final third (a cross, through ball or dribble into
     // x 74–82) and die there to a last-ditch tackle, a clearance or a keeper claim. Outcomes are unchanged; only where they happen.
     deepTurnoverRate: 0.5,
+    // #219: game state. From urgencyMinute a trailing side (any stance) attacks in more of its possession minutes and has a
+    // little more of the ball; a turnover becomes a real counter-attack (a fast 1–2 pass break into the final third with a
+    // better shot chance), more often against a trailing side committed forward; and a parried save or a blocked shot can
+    // drop to an attacker for a second shot in the same chain. goalRates models all of it (docs/balance-219.md).
+    urgencyMinute: 70, // = the AI chase minute (matchEngine AI.chase): the in-play odds model starts both together
+    urgencySeq: 1.25, // × pSeq for the trailing side
+    urgencyPoss: 0.04, // extra possession share for the trailing side
+    counterRate: 0.07, // chance that a side which won the ball last minute (st.counter) and keeps it breaks at once
+    counterRisk: 1.6, // × counterRate when the side that lost it was trailing late (committed forward)
+    counterShot: 1.2, // × pShot on a counter (fewer defenders back)
+    reboundSave: 0.15, // share of saves parried loose to an attacker
+    reboundBlock: 0.15, // share of blocks that drop to an attacker
+    reboundOn: 0.85, // × pOn for the second shot (snatched)
+    reboundSaveDrop: 0.1, // the keeper is scrambling: save chance − this on the second shot
     possK: 0.004,
     penBase: 0.006,
     penK: 0.0002,
