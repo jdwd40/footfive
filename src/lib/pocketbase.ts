@@ -62,6 +62,9 @@ export type MatchEvent = {
   turn?: number; // 1 on the first touch after the ball changed hands (build_up / first pass of a minute)
   header?: number;
   long?: number; // 1 on a shot from distance (engine-published)
+  ctr?: 1; // #219: on a build-up, a counter-attack (the side won the ball off a failed attack and breaks at once)
+  reb?: 1; // #219: on a shot, the second shot of its chain (a rebound off a parried save or a loose block)
+  loose?: 1; // #219: on a save or block, the ball is left loose for that second shot (markets stay suspended)
   stop?: "tackle" | "clear" | "claim"; // #218: a tackle/interception that ends an attack in the final third: last-ditch tackle, clearance or keeper claim
   post?: string;
   pen?: PenPlan;

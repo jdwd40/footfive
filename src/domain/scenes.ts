@@ -73,7 +73,7 @@ export function touchStyle(seq: number): Touch {
 export type Tempo = "fast" | "normal" | "slow";
 const FAST = new Set(["tackle", "interception", "through_ball", "cross", "shot", "dribble"]);
 export function tempoFor(e: MatchEvent, s: Scene): Tempo {
-  if (e.turn || FAST.has(e.t)) return "fast";
+  if (e.turn || e.ctr || FAST.has(e.t)) return "fast"; // #219: a counter-attack's build-up is a break
   const from = e.from as Pt | undefined;
   const fwd = from && e.ball && e.side ? toward(e.side, e.ball[0] - from[0]) : 0;
   if (e.t === "pass" && (s.touch === "carry" || fwd > 18)) return "fast";
@@ -232,6 +232,24 @@ function stopScene(e: MatchEvent, base: ReturnType<typeof head>, at: Pt, end: Pt
       { id: "col", side, path: [off(end, -4, 3 + jit(s, 5, 2)), off(end, -3, 2), off(end, -1.5, 1), end, off(end, -1.5, 0)] }, // collects the clearance
     ],
   };
+}
+
+/**
+ * #219: after a loose save or block, the player who strikes the rebound: read from the next published row when it is that
+ * rebound (`reb`, same chain, the very next seq), as a cross reads its header. Only the runner's identity is read, never an
+ * outcome. Undefined when it is not fetched yet: the follower is then unlabelled (the nearest team-mate).
+ */
+function reboundTaker(e: MatchEvent, next?: MatchEvent) {
+  return e.loose && next && next.t === "shot" && next.reb && next.side !== e.side && next.chain === e.chain && next.seq === e.seq + 1 ? short(next.p) : undefined;
+}
+/** #219: a loose ball's runners. The shooter goes for it himself when he takes the rebound; else a team-mate arrives (`n` keyframes). */
+function looseRunners(e: MatchEvent, next: MatchEvent | undefined, atkSide: Side, shotFrom: Pt, spot: Pt, n: number): { shooter: Pt[]; follower: Actor[] } {
+  const taker = reboundTaker(e, next);
+  const at: Pt = clampPt([spot[0] - toward(atkSide, 1.5), spot[1] + (spot[1] > GOAL_Y ? 1 : -1)]); // just behind the ball, on his shooting side
+  const steps = Array.from({ length: n }, (_, k) => k / (n - 1));
+  if (taker && taker === short(e.p2)) return { shooter: steps.map((u) => (u < 0.5 ? shotFrom : lerp(shotFrom, at, (u - 0.5) * 2))), follower: [] };
+  const startF: Pt = clampPt([spot[0] - toward(atkSide, 10), spot[1] + (spot[1] > GOAL_Y ? -6 : 6)]);
+  return { shooter: [], follower: [{ id: "f", side: atkSide, label: taker, path: steps.map((u) => lerp(startF, at, u)) }] };
 }
 
 /** #190: results that carry on the shot's flight (penalties have their own). */
@@ -611,21 +629,24 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent,
       const gk = keeperSpot(side);
       const catchPt: Pt = [gk[0], target[1]];
       const held = jit(s, 6, 1) > 0; // catch and hold, or parry and gather: the keeper ends up with the ball either way
-      const parry: Pt = held ? catchPt : clampPt([ball[0], ball[1] + (target[1] > GOAL_Y ? 6 : -6)]);
+      // #219: `loose`: parried out to the engine's spot (`ball`), where the rebound shot is struck; the keeper stays down.
+      const parry: Pt = e.loose ? ball : held ? catchPt : clampPt([ball[0], ball[1] + (target[1] > GOAL_Y ? 6 : -6)]);
       // #205: ball and keeper paths are exactly as before (no new cue ahead of the reveal); only the pose, drawn from the reveal, is new.
       // A shot saved from close in and central (every header off a cross is) is claimed: once revealed he comes CLAIM_STEP off his line
       // with it (`step`, eased in by the drawing). Anything else he dives for along his line (stands up to one at his body).
       const claim = Math.abs(goalX(shooterSide) - shotFrom[0]) <= CLAIM_RANGE && Math.abs(shotFrom[1] - GOAL_Y) <= 8;
       const dives = !claim && Math.abs(catchPt[1] - gk[1]) >= 1.5;
       const step: Pt = [toward(side, CLAIM_STEP), 0];
+      const lr = e.loose ? looseRunners(e, next, shooterSide, shotFrom, ball, 4) : null;
       return {
         ...base,
         ms: d(2600),
         ball: [shotFrom, lerp(shotFrom, catchPt, 0.85), catchPt, parry],
         keeper: dives ? { pose: "dive", to: catchPt, at: [0.1, 0.42, 0.85, 1] } : { pose: "claim", to: [catchPt[0] + step[0], catchPt[1]], at: claim ? [0.08, 0.45, Infinity, Infinity] : [0.08, 0.45, 0.9, 1.05], ...(claim ? { step } : {}) }, // drawn only from the reveal (~0.62–0.67): held past it
         actors: [
-          { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, parry] },
-          { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
+          { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, e.loose ? catchPt : parry] },
+          { id: "s", side: shooterSide, label: short(e.p2), path: lr && lr.shooter.length ? lr.shooter : [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
+          ...(lr ? lr.follower : []), // #219: whoever follows in on the parried ball
         ],
         flash: "save",
         impact: catchPt,
@@ -636,13 +657,17 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent,
       const shotFrom = (e.from as Pt) || prevBall;
       const blockAt: Pt = clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1] + jit(s, 5, 2)]);
       const rebound: Pt = ball;
+      // #219: `loose`: it comes back off the blocker to the engine's spot, where an attacker strikes the rebound; the blocker
+      // stays where he blocked it, and the rebound's taker gets to it.
+      const lr = e.loose ? looseRunners(e, next, shooterSide, shotFrom, rebound, 3) : null;
       return {
         ...base,
         ms: d(1900),
         ball: [shotFrom, blockAt, rebound],
         actors: [
-          { id: "b", side, label: short(e.p), path: [clampPt([blockAt[0] + toward(shooterSide, 3), blockAt[1] + 4]), blockAt, rebound] }, // closes down, blocks, wins the loose ball
-          { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, shotFrom] },
+          { id: "b", side, label: short(e.p), path: [clampPt([blockAt[0] + toward(shooterSide, 3), blockAt[1] + 4]), blockAt, e.loose ? lerp(blockAt, rebound, 0.3) : rebound] }, // closes down, blocks, wins the loose ball
+          { id: "s", side: shooterSide, label: short(e.p2), path: lr && lr.shooter.length ? lr.shooter : [shotFrom, shotFrom, shotFrom] },
+          ...(lr ? lr.follower : []),
           { id: "gk", side, keeper: true, path: [keeperSpot(side), keeperSpot(side), keeperSpot(side)] },
         ],
         flash: "block",
