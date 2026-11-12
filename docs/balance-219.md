@@ -621,13 +621,16 @@ more (`fixtureMarkets` uses `marketProbs`; `fixturePrices` and `exactPrice` are 
   - MarketsPanel pre-match: 0.2 ms (target ≤ ~6 ms).
   - Fixture cards: ≤ 0.2 ms (target ≤ ~0.5 ms).
 - **Above #218:** an in-play `fixtureMarkets` for a new minute takes 4.1 ms, against #218's 2.7 ms.
-- **Not met: the championship odds,** about 550 ms against the ≤ ~150 ms target (#218: 59 ms). They run once a tournament, when
-  the R16 round is created, inside its transaction. The 120 pairings are all distinct, so nothing is cached. Each costs
-  about 4.5 ms: `pairModel` 1.7, the context 0.8, the value tables 2.0. Options for the lead:
-  - accept about 0.5 s once per tournament;
-  - price the champion and semi-finalist markets from the kickoff rates only (the legacy constant-rate qualify, about
-    60 ms), at the cost of those markets' late-game calibration;
-  - compute them outside the R16 transaction.
+- **Championship odds:** about 550 ms against the ≤ ~150 ms target (#218: 59 ms). They are priced once a tournament, and
+  the 120 pairings are all distinct, so nothing is cached. Each costs about 4.5 ms: `pairModel` 1.7, the context 0.8, the
+  value tables 2.0.
+  - Lead decision: keep the calibrated pricing, and move it out of the R16 creation transaction so the SQLite write lock is
+    not held.
+  - How it now runs: the draw commits first. `ensureChampionshipOdds` then reads, prices and fills `odds_json` in its own
+    small write, only while it is missing and before R16 kicks off.
+  - On failure: the error is logged (`championship_odds_error`), the championship stands, and every tick retries.
+  - The odds are the same as before. `world-setup-atomicity` S5b injects a failing odds write and checks that the draw
+    stands and that a later tick writes identical odds.
 
 ### Live view: `harness/view-stats.mjs --matches 200`, 60 fps, 100 ms samples
 
@@ -751,5 +754,5 @@ rebound as an ordinary shot, so the ball can jump from the keeper to the loose s
   - Before the chase, goals are Poisson. The engine allows one goal a minute, so this slightly overstates the spread of
     early goals.
   - The calibration residuals above include all of these.
-- **Championship odds** take about 0.5 s in PocketBase's VM, against a target of ~150 ms; see the odds-cost section.
+- **Championship odds** take about 0.5 s in PocketBase's VM, outside the R16 transaction; see the odds-cost section.
 - **Sample sizes.** The issue's 1,000-match criterion was run at 4,800 per seed set, and pooled over 19,200 for the odds.

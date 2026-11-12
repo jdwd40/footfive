@@ -30,6 +30,8 @@
  *      the retry kicks off once, with exactly one state per fixture
  *   S11 a live or finished fixture without a state fails closed: the slot repair and every
  *      other kick-off write roll back and the retained rows stay byte-identical
+ *   S5b (#219) the championship odds, written after the draw commits, fail to save: the championship and draw stand,
+ *      the failure is logged, and a later tick writes the same odds
  *
  * The fault spec may instead name {op: "update", field, value}: updating a record of
  * `collection` whose `field` becomes `value` throws once more than `after` have passed.
@@ -349,6 +351,26 @@ async function main() {
   ok(again && again.status === "scheduled" && fxs.length === 8, "repair created the missing R16 round with 8 fixtures");
   ok(new Set(fxs.flatMap((f) => [f.home_team, f.away_team])).size === 16, "all 16 teams drawn once");
   ok(q("select odds_json from shared_tournaments where id = ?", t.id)[0].odds_json, "championship odds written with the repaired draw");
+
+  // #219: the odds are priced after the draw commits, in their own small write. A failing odds write leaves the championship
+  // and its draw whole, and a later tick fills the odds in, identical to a clean run.
+  console.log("S5b championship odds write fails after the draw");
+  const oddsClean = q("select odds_json from shared_tournaments where id = ?", t.id)[0].odds_json;
+  const drawRows = () => JSON.stringify([q("select * from shared_rounds where tournament = ? order by id", t.id), fixturesOf(again.id)]);
+  await stopPb();
+  exec("update shared_tournaments set odds_json = NULL where id = ?", t.id);
+  const drawBefore = drawRows();
+  arm("shared_tournaments", 0, "s12", { op: "update", field: "status", value: "active" });
+  const s12LogAt = pbLog().length;
+  await startPb();
+  await tick();
+  ok(pbLog().slice(s12LogAt).includes("championship_odds_error"), "odds write failure logged, not thrown");
+  ok(!q("select odds_json from shared_tournaments where id = ?", t.id)[0].odds_json, "no odds while the write fails");
+  ok(drawRows() === drawBefore && n("shared_tournaments") === 1, "championship, R16 round and fixtures untouched by the failed odds write");
+  disarm();
+  await tick();
+  ok(q("select odds_json from shared_tournaments where id = ?", t.id)[0].odds_json === oddsClean, "a later tick writes the odds, identical to the clean run");
+  ok(drawRows() === drawBefore, "draw still untouched after the odds repair");
 
   console.log("S9 kick-off fails creating the second match state");
   await stopPb();
