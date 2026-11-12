@@ -6,6 +6,8 @@ export const REVIEW_LABEL = "fable-review";
 export const MARKER = "<!-- footfive-fable-review:v1 -->";
 const DEFAULT_REPO = "jdwd40/footfive";
 const SHA = /^[a-f0-9]{40}(?![\s\S])/i;
+/** Fable versions the owner authorised as the labelled-PR reviewer. */
+export const FABLE_MODELS = Object.freeze(["claude-fable-5-1", "claude-fable-5-2"]);
 
 function validRepo(repo) {
   return typeof repo === "string" && repo === repo.trim() && /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?\/[a-z0-9_.-]{1,100}$/i.test(repo) && ![".", ".."].includes(repo.split("/")[1]);
@@ -18,7 +20,7 @@ function parseRecord(body) {
   if (!fence) throw new Error("Expected one fenced JSON record after the marker");
   const r = JSON.parse(fence[1]);
   if (!r || typeof r !== "object" || Array.isArray(r) ||
-      ![1, 2].includes(r.round) || r.model !== "claude-fable-5-1" || typeof r.headSha !== "string" || !SHA.test(r.headSha) ||
+      ![1, 2].includes(r.round) || !FABLE_MODELS.includes(r.model) || typeof r.headSha !== "string" || !SHA.test(r.headSha) ||
       !["reserved", "complete"].includes(r.status) || !Array.isArray(r.findings) ||
       (r.status === "reserved" && Object.hasOwn(r, "verdict")) ||
       (r.status === "complete" && !["SHIP", "DO NOT SHIP"].includes(r.verdict)) ||
