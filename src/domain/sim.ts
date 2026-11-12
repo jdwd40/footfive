@@ -38,6 +38,10 @@ export const URGE_PAST = 3;
 export const URGE_LEAD = 24;
 export const URGE_WIDTH = 6;
 export const URGE_SIT = 5;
+/** #216: the chasing forwards push on only as far as this, just short of the penalty-area line (x 85), unless the ball takes them further. */
+export const URGE_BOX = 84;
+/** #216: …and hold at least this high, up near the box, however deep the ball. */
+export const URGE_HOLD = 72;
 /** #216: in the last five minutes (Urgency.late), the chasing side's keeper comes this far off his line while his side has the ball. */
 export const URGE_KEEPER = 12;
 /** Open-play scenes in which `scene.side` has the ball: that side's shape moves up the pitch with it (#102). */
@@ -60,13 +64,17 @@ export function shapeAt(i: number, bx: number, by: number, attacking: boolean, d
     // #216: chasing the game, the whole block plays URGE_PUSH higher — the defenders right up with the ball — and the forwards
     // further ahead and wider; protecting a lead, it sits URGE_SIT deeper.
     const lean = chase ? URGE_PUSH : urge === "sit" ? -URGE_SIT : 0;
-    const x = clamp(ax + Math.max(0, push) + Math.min(0, push) * 0.4 + lean, 4, fwd ? 94 : Math.max(8, chase ? bx + URGE_PAST : bx - 4));
+    const base = ax + Math.max(0, push) + Math.min(0, push) * 0.4;
+    const x = clamp(base + lean, 4, fwd ? 94 : Math.max(8, chase ? bx + URGE_PAST : bx - 4));
     // #184: the forwards make the runs — a pass ahead of the ball and wide of its lane, one either side — so the support is out
     // in space rather than round the ball; each moves smoothly with it. The defenders below keep their lanes behind the ball.
     // #189: with the ball wide, the outer one holds the touchline (the clamp) and the inner one attacks the box beyond the goal's centre.
     if (fwd) {
       const w = Math.max(FWD_WIDTH + (chase ? URGE_WIDTH : 0), Math.abs(32 - by) + FWD_BOX);
-      return [clamp(Math.max(x, bx + FWD_LEAD + (chase ? URGE_LEAD : 0)), 4, 94), clamp(by + (i === 3 ? -w : w), 4, 60)];
+      const fx = clamp(Math.max(base, bx + FWD_LEAD), 4, 94); // the ordinary run
+      // #216: chasing, further on and held up near the box (URGE_HOLD) — but short of its edge (URGE_BOX), and never behind his ordinary run.
+      const cx = chase ? Math.max(fx, Math.min(URGE_BOX, Math.max(x, URGE_HOLD, bx + FWD_LEAD + URGE_LEAD))) : clamp(Math.max(x, bx + FWD_LEAD), 4, 94);
+      return [cx, clamp(by + (i === 3 ? -w : w), 4, 60)];
     }
     // Off the ball (#103): the supporting defenders find space — nobody stands in the carrier's lane.
     let y = ay + (by - ay) * 0.25;

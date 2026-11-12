@@ -1846,3 +1846,26 @@ describe("MatchPage big moments (#206)", () => {
     expect(screen.getAllByTestId("feed-card").map((c) => c.getAttribute("data-card"))).toEqual(["red", "yellow"]);
   });
 });
+
+describe("MatchPage late pressure (#216)", () => {
+  afterEach(() => cleanup());
+  const behind = { ...st!, ph: "second_half", sc: [0, 1] as [number, number] } as NonNullable<MatchView["fixture"]["st"]>;
+  const pass = (at: number, min: number): MatchEvent => ({ ...ev(2, at, "Home P3 to Home P4"), min, st: behind });
+  const pulse = () => screen.getByTestId("urge-pulse");
+  it("folds the published coaching events into the scenes: a side behind that has gone to Attack before 70' pulses on the ball", async () => {
+    const now = Date.now();
+    const coaching: MatchEvent = { ...ev(1, now - 30000, "Home push forward — Attack"), t: "coaching", min: 60, stance: "attack", st: behind };
+    await mount(view([coaching, pass(now - 3000, 60)], { home: names("Home"), away: names("Away") }, now));
+    expect(pulse().getAttribute("display")).toBeNull();
+    expect(pulse().getAttribute("data-side")).toBe("home");
+  });
+  it("without that published Attack the same 60' spell shows nothing; from 70' the side behind pulses whatever its stance", async () => {
+    const now = Date.now();
+    const kickoff: MatchEvent = { ...ev(1, now - 30000, "Second half"), t: "second_half", min: 46, st: behind };
+    await mount(view([kickoff, pass(now - 3000, 60)], { home: names("Home"), away: names("Away") }, now));
+    expect(pulse().getAttribute("display")).toBe("none");
+    cleanup();
+    await mount(view([kickoff, pass(now - 3000, 72)], { home: names("Home"), away: names("Away") }, now));
+    expect(pulse().getAttribute("display")).toBeNull();
+  });
+});
