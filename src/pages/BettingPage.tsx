@@ -313,9 +313,6 @@ function WideMarket({ m }: { m: Market }) {
   );
 }
 
-/** Mirrors MIN_OFFER in pocketbase/pb_hooks/lib/odds.js: the server would refuse a price under it. */
-const MIN_OFFER = 1.05;
-
 /** Round-first, championship winner and semi-finalist predictions (pre-round only). */
 function WideBets({ wide }: { wide: WideMarkets }) {
   const { setPick } = useSlip();
@@ -361,11 +358,6 @@ function WideBets({ wide }: { wide: WideMarkets }) {
                 onClick={() => {
                   const ps = semis.map((id, qi) => m.quarters![qi].find((t) => t.id === id)!.p);
                   const p = ps.reduce((a, b) => a * b, 1);
-                  // Same rule as the server's price() (odds.js, #203): a near-certain pick is not offered, never clamped to 1.01.
-                  if (0.94 / p < MIN_OFFER) {
-                    setSemiPrice(NOT_OFFERED);
-                    return;
-                  }
                   const odds = Math.round(Math.min(500, Math.max(1.01, 0.94 / p)) * 100) / 100;
                   setSemiPrice(odds.toFixed(2));
                   setPick({
@@ -379,7 +371,7 @@ function WideBets({ wide }: { wide: WideMarkets }) {
                 }}
                 data-testid="semis-add"
               >
-                Add semi-finalists to slip{semiPrice === NOT_OFFERED ? ` — ${NOT_OFFERED}` : semiPrice ? ` @ ${semiPrice}` : ""}
+                Add semi-finalists to slip{semiPrice ? ` @ ${semiPrice}` : ""}
               </button>
             </div>
           ) : (

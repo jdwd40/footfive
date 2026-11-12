@@ -46,8 +46,9 @@ var RULES = {
   semis: "Pick one team from each quarter of the draw; all four must reach the semi-finals. Closes at the Round of 16 kick-off.",
 };
 
-function okP(p) {
-  return p >= MIN_P ? oddsMod.price(p) : null;
+/** `inPlay` (#203): withdraw a near-certain selection once the match has kicked off; pre-match prices are unchanged. */
+function okP(p, inPlay) {
+  return p >= MIN_P ? oddsMod.price(p, inPlay) : null;
 }
 
 /** Why a live fixture market is closed, or null when open. */
@@ -74,6 +75,7 @@ function fixtureMarkets(fx, st, minute, now) {
   var out = [];
   if (state.phase === "finished" || !fx.model) return { state: state, markets: out };
   var fd = oddsMod.finalDist(fx.model, pub, minute);
+  var live = oddsMod.inPlay(st);
   var closed = state.closed;
   var H = fx.home;
   var A = fx.away;
@@ -84,8 +86,8 @@ function fixtureMarkets(fx, st, minute, now) {
     rules: RULES.winner,
     closed: closed,
     sel: [
-      { id: "home", label: H.name, short: H.abbr, odds: okP(fd.qualifyHome) },
-      { id: "away", label: A.name, short: A.abbr, odds: okP(1 - fd.qualifyHome) },
+      { id: "home", label: H.name, short: H.abbr, odds: okP(fd.qualifyHome, live) },
+      { id: "away", label: A.name, short: A.abbr, odds: okP(1 - fd.qualifyHome, live) },
     ],
   });
   if (state.phase === "shootout") return { state: state, markets: out };
@@ -94,7 +96,7 @@ function fixtureMarkets(fx, st, minute, now) {
   var exact = [];
   for (var h = sc[0]; h <= sc[0] + 5; h++) {
     for (var a = sc[1]; a <= sc[1] + 5; a++) {
-      var o = okP(fd.dist[h + "-" + a] || 0);
+      var o = okP(fd.dist[h + "-" + a] || 0, live);
       if (o) exact.push({ id: h + "-" + a, label: H.abbr + " " + h + "–" + a + " " + A.abbr, short: h + "–" + a, odds: o });
     }
   }
@@ -107,9 +109,9 @@ function fixtureMarkets(fx, st, minute, now) {
     rules: RULES.next_goal,
     closed: closed,
     sel: [
-      { id: "home", label: H.name, short: H.abbr, odds: okP(ng.home) },
-      { id: "none", label: "No further goals", short: "None", odds: okP(ng.none) },
-      { id: "away", label: A.name, short: A.abbr, odds: okP(ng.away) },
+      { id: "home", label: H.name, short: H.abbr, odds: okP(ng.home, live) },
+      { id: "none", label: "No further goals", short: "None", odds: okP(ng.none, live) },
+      { id: "away", label: A.name, short: A.abbr, odds: okP(ng.away, live) },
     ],
   });
 
@@ -129,7 +131,7 @@ function fixtureMarkets(fx, st, minute, now) {
       if (d === m[1]) p += fd.dist[k];
     }
     var t = m[0] === "home" ? H : A;
-    margins.push({ id: m[0] + m[1], label: t.name + " by exactly " + m[1], short: t.abbr + " by " + m[1], odds: okP(p) });
+    margins.push({ id: m[0] + m[1], label: t.name + " by exactly " + m[1], short: t.abbr + " by " + m[1], odds: okP(p, live) });
   });
   out.push({ key: "margin", title: TITLES.margin, rules: RULES.margin, closed: closed, sel: margins });
   return { state: state, markets: out };

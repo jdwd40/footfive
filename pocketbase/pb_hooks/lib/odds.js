@@ -6,14 +6,15 @@
  * Poisson(rate × minutes left); a red card multiplies the side's rate by 0.75 and the
  * opponent's by 1.15. Level after 90' adds 30' of extra time; level after that is a
  * shootout (each kick scores with probability SHOOTOUT_P). Prices carry a 6 % margin.
- * A near-certain selection is withdrawn (#203): no price when the margin price would be
- * under MIN_OFFER, i.e. p > (1 - MARGIN) / MIN_OFFER ≈ 0.895. A withdrawn selection has
- * null odds and cannot be bet (bettingService: "Selection unavailable"); bets already
- * placed keep their confirmed odds and settle unchanged.
+ * In play (#203), a near-certain selection is withdrawn: no price when the margin price
+ * would be under MIN_OFFER, i.e. p > (1 - MARGIN) / MIN_OFFER ≈ 0.895. A withdrawn
+ * selection has null odds and cannot be bet (bettingService: "Selection unavailable");
+ * bets already placed keep their confirmed odds and settle unchanged. Pre-match prices
+ * are as before, including the 1.01 floor for a lopsided pairing.
  */
 var MARGIN = 0.06;
 var MIN_ODDS = 1.01;
-var MIN_OFFER = 1.05; // #203: below this the outcome is all but decided: withdraw it rather than offer 1.01
+var MIN_OFFER = 1.05; // #203: in play, below this the outcome is all but decided: withdraw it rather than offer 1.01
 var MAX_ODDS = 500;
 var SHOOTOUT_P = 0.75;
 var K = 12; // max extra goals considered per side
@@ -31,11 +32,17 @@ function pmf(lambda) {
   return out;
 }
 
-function price(p) {
+/** `inPlay`: the match has kicked off (any phase after "pre"); only then is a near-certain selection withdrawn. */
+function price(p, inPlay) {
   if (!(p > 0)) return null;
   var o = (1 - MARGIN) / p;
-  if (o < MIN_OFFER) return null;
+  if (inPlay && o < MIN_OFFER) return null;
   return Math.round(Math.min(MAX_ODDS, Math.max(MIN_ODDS, o)) * 100) / 100;
+}
+
+/** Has the match kicked off? Published state in any phase after "pre" (half-time, extra time and the shootout included). */
+function inPlay(st) {
+  return !!st && !!st.ph && st.ph !== "pre";
 }
 
 function rates(model, st) {
@@ -180,17 +187,18 @@ function marginProb(dist, side, n) {
 function fixturePrices(model, st, minute) {
   var fd = finalDist(model, st, minute);
   var ng = nextGoal(model, st, minute);
+  var live = inPlay(st);
   var exact = {};
-  for (var k in fd.dist) if (fd.dist[k] > 0.0005) exact[k] = price(fd.dist[k]);
+  for (var k in fd.dist) if (fd.dist[k] > 0.0005) exact[k] = price(fd.dist[k], live);
   return {
-    winner: { home: price(fd.qualifyHome), away: price(1 - fd.qualifyHome) },
+    winner: { home: price(fd.qualifyHome, live), away: price(1 - fd.qualifyHome, live) },
     exact: exact,
-    next_goal: { home: price(ng.home), away: price(ng.away), none: price(ng.none) },
+    next_goal: { home: price(ng.home, live), away: price(ng.away, live), none: price(ng.none, live) },
     margin: {
-      home2: price(marginProb(fd.dist, "home", 2)),
-      home3: price(marginProb(fd.dist, "home", 3)),
-      away2: price(marginProb(fd.dist, "away", 2)),
-      away3: price(marginProb(fd.dist, "away", 3)),
+      home2: price(marginProb(fd.dist, "home", 2), live),
+      home3: price(marginProb(fd.dist, "home", 3), live),
+      away2: price(marginProb(fd.dist, "away", 2), live),
+      away3: price(marginProb(fd.dist, "away", 3), live),
     },
     p: { qualifyHome: fd.qualifyHome },
   };
@@ -199,7 +207,7 @@ function fixturePrices(model, st, minute) {
 /** Exact-score price for any score (scores not in the cached map are long shots). */
 function exactPrice(model, st, minute, h, a) {
   var fd = finalDist(model, st, minute);
-  return price(fd.dist[h + "-" + a] || 0);
+  return price(fd.dist[h + "-" + a] || 0, inPlay(st));
 }
 
 /** P(home qualifies) for a pre-match model. */
@@ -287,6 +295,7 @@ if (typeof module !== "undefined") {
     MARGIN: MARGIN,
     MIN_OFFER: MIN_OFFER,
     price: price,
+    inPlay: inPlay,
     finalDist: finalDist,
     nextGoal: nextGoal,
     fixturePrices: fixturePrices,

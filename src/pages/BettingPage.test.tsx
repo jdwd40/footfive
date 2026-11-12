@@ -229,22 +229,6 @@ describe("BettingPage prices", () => {
     );
     expect(add).toHaveTextContent("15.04");
   });
-
-  it("does not offer a near-certain set of semi-finalists at 1.01, as the server would refuse it (#203)", async () => {
-    h.setPick.mockClear();
-    const q = (id: string) => [{ id, label: id, short: id.toUpperCase(), p: 0.99 }];
-    vi.mocked(footfiveApi.wideMarkets).mockResolvedValue(
-      wide([{ key: "semis", title: "Semi-finalists", rules: "One team from each quarter.", quarters: [q("a"), q("b"), q("c"), q("d")] }]),
-    );
-    renderPage();
-    const add = await screen.findByTestId("semis-add");
-    const boxes = screen.getAllByRole("combobox");
-    for (const [i, id] of ["a", "b", "c", "d"].entries()) await userEvent.selectOptions(boxes[i], id);
-    await userEvent.click(add); // 0.99^4 ≈ 0.96: 0.94 / 0.96 < 1.05
-    expect(h.setPick).not.toHaveBeenCalled();
-    expect(add).toHaveTextContent(NOT_OFFERED);
-    expect(add).not.toHaveTextContent("1.01");
-  });
 });
 
 describe("BettingPage wallet", () => {
