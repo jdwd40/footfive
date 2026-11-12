@@ -714,7 +714,11 @@ function marginProb(dist, side, n) {
   return p;
 }
 
-/** All fixture market prices from the published state. */
+/**
+ * All fixture market prices from the published state.
+ * Reference path (full finalDist walk, ~40 ms in goja): for scripts and tests only. Hooks and request handlers use
+ * marketProbs / markets.fixtureMarkets, which are cached and equal to this within 1e-9 (#219).
+ */
 function fixturePrices(model, st, minute) {
   var fd = finalDist(model, st, minute);
   var ng = nextGoal(model, st, minute);
@@ -735,7 +739,10 @@ function fixturePrices(model, st, minute) {
   };
 }
 
-/** Exact-score price for any score (scores not in the cached map are long shots). */
+/**
+ * Exact-score price for any score (scores not in the cached map are long shots).
+ * Reference path (full finalDist walk): not for hot paths; see fixturePrices (#219).
+ */
 function exactPrice(model, st, minute, h, a) {
   var fd = finalDist(model, st, minute);
   return price(fd.dist[h + "-" + a] || 0, inPlay(st));
