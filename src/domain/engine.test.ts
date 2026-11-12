@@ -265,6 +265,52 @@ describe("odds", () => {
     expect(fd.qualifyHome).toBeGreaterThan(0.7);
   });
 
+  it("in play, withdraws a near-certain selection instead of pricing it at 1.01 (#203)", () => {
+    expect(odds.MIN_OFFER).toBe(1.05);
+    const edge = (1 - odds.MARGIN) / odds.MIN_OFFER; // ≈ 0.895: the last probability still offered, at exactly 1.05
+    expect(odds.price(edge, true)).toBe(1.05);
+    expect(odds.price(edge + 0.001, true)).toBeNull();
+    expect(odds.price(0.89, true)).toBe(1.06);
+    for (const p of [0.9, 0.95, 0.99, 1]) expect(odds.price(p, true)).toBeNull(); // 0.9–0.93 used to be 1.01–1.04, above 0.93 clamped to 1.01
+    expect(odds.price(0, true)).toBeNull(); // long shots are unchanged
+    expect(odds.price(0.002, true)).toBe(470);
+    for (const ph of ["first_half", "half_time", "second_half", "et_break", "extra_time_1", "et_half_time", "extra_time_2", "shootout"]) expect(odds.inPlay({ ph }), ph).toBe(true);
+    expect(odds.inPlay({ ph: "pre" })).toBe(false);
+    expect(odds.inPlay(null)).toBe(false);
+  });
+
+  it("pre-match prices are unchanged: a near-certain favourite keeps main's 1.01 floor (#203)", () => {
+    for (const p of [0.9, 0.93, 0.95, 0.978, 0.99, 1]) {
+      expect(odds.price(p)).toBe(Math.round(Math.max(1.01, 0.94 / p) * 100) / 100);
+      expect(odds.price(p, false)).toBe(odds.price(p));
+    }
+    expect(odds.price(0.99)).toBe(1.01);
+    const lopsided = { model: { lh: 0.05, la: 0.002 }, home: { name: "Strong", abbr: "STR" }, away: { name: "Weak", abbr: "WEK" } };
+    const scheduled = mkt.fixtureMarkets({ status: "scheduled", kickoffAt: 1_000_000, ...lopsided }, null, 0, 0);
+    const fav = scheduled.markets.find((m: { key: string }) => m.key === "winner").sel.find((s: { id: string }) => s.id === "home");
+    expect(odds.finalDist(lopsided.model, { sc: [0, 0], ph: "pre" }, 0).qualifyHome).toBeGreaterThan(0.93);
+    expect(fav.odds).toBe(1.01);
+    expect(mkt.findSelection(scheduled, "winner", "home")).toMatchObject({ odds: 1.01 });
+  });
+
+  it("the playtest's 0–5 late on: the decided outcome is withdrawn and cannot be bet; nothing anywhere is priced under 1.05 (#203)", () => {
+    const sides = { model: { lh: 0.02, la: 0.03 }, home: { name: "Mega City Two", abbr: "MC2" }, away: { name: "New Metro City", abbr: "MET" } };
+    const at = (sc: [number, number], ph: string, minute: number) => mkt.fixtureMarkets({ status: "live", kickoffAt: 0, ...sides }, { sc, ph, x: [[], []], d: 0 }, minute, 1);
+    const late = at([0, 5], "second_half", 87);
+    const winner = late.markets.find((m: { key: string }) => m.key === "winner").sel;
+    expect(winner.find((s: { id: string }) => s.id === "away").odds).toBeNull();
+    expect(mkt.findSelection(late, "winner", "away")).toEqual({ closed: "Selection unavailable" });
+    // A shootout already won (4–1 with one kick each left) is withdrawn too; the loser stays unoffered as a long shot.
+    const so = mkt.fixtureMarkets({ status: "live", kickoffAt: 0, ...sides }, { sc: [1, 1], ph: "shootout", so: { h: 4, a: 1, th: 4, ta: 4, next: "home" }, x: [[], []], d: 0 }, 120, 1);
+    expect(mkt.findSelection(so, "winner", "home")).toEqual({ closed: "Selection unavailable" });
+    // A real contest stays open on both sides.
+    const open = at([1, 1], "second_half", 60).markets.find((m: { key: string }) => m.key === "winner").sel;
+    for (const s of open) expect(s.odds).toBeGreaterThan(1.05);
+    for (const [sc, ph, minute] of [[[0, 5], "second_half", 87], [[0, 3], "half_time", 45], [[2, 0], "second_half", 89], [[1, 1], "extra_time_2", 119], [[0, 0], "first_half", 1]] as const) {
+      for (const m of at([...sc], ph, minute).markets) for (const s of m.sel) if (s.odds !== null) expect(s.odds, `${m.key}/${s.id} at ${sc} ${minute}'`).toBeGreaterThanOrEqual(1.05);
+    }
+  });
+
   it("championship probabilities over the bracket sum to 1; semi-finalists to 4", () => {
     const ids = TEAMS.map((t: { slug: string }) => t.slug);
     const r16 = Array.from({ length: 8 }, (_, i) => ({ home: ids[2 * i], away: ids[2 * i + 1] }));
@@ -305,10 +351,12 @@ describe("market rules", () => {
       expect(row.odds).toBeGreaterThanOrEqual(1.01);
       expect(mkt.findSelection(pre, "margin", id)).toMatchObject({ odds: row.odds });
     }
+    // #203: 80', not 90'. At 90' with nothing left to play away3 is a certainty and is now withdrawn (asserted below); ten minutes
+    // out it is still a live, priced selection, which is what this test is about.
     const late = mkt.fixtureMarkets(
       { status: "live", kickoffAt: 0, ...sides },
       { sc: [0, 3], ph: "second_half", x: [[], []], d: 0 },
-      90,
+      80,
       1,
     );
     const rare = late.markets.find((m: { key: string }) => m.key === "margin").sel;
@@ -317,8 +365,10 @@ describe("market rules", () => {
     expect(mkt.MIN_P).toBe(0.002);
     expect(home1.odds).toBeNull();
     expect(mkt.findSelection(late, "margin", "home1")).toEqual({ closed: "Selection unavailable" });
-    expect(away3.odds).toBeGreaterThanOrEqual(1.01);
+    expect(away3.odds).toBeGreaterThanOrEqual(1.05);
     expect(mkt.findSelection(late, "margin", "away3")).toMatchObject({ odds: away3.odds });
+    const decided = mkt.fixtureMarkets({ status: "live", kickoffAt: 0, ...sides }, { sc: [0, 3], ph: "second_half", x: [[], []], d: 0 }, 90, 1);
+    expect(mkt.findSelection(decided, "margin", "away3")).toEqual({ closed: "Selection unavailable" });
     expect(mkt.settleFixtureBet("margin", "home1", res(1, 0, "home"))).toBe("won");
     expect(mkt.settleFixtureBet("margin", "home1", res(2, 0, "home"))).toBe("lost");
     expect(mkt.settleFixtureBet("margin", "home1", res(1, 1, "home"))).toBe("lost");

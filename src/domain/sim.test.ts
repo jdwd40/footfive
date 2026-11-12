@@ -151,8 +151,7 @@ describe("frameAt", () => {
     expect(arc).toHaveLength(8);
     for (const p of arc) expect(Math.abs(p.x - 80)).toBeLessThan(8);
     for (let i = 1; i < arc.length; i++) expect(arc[i].side).not.toBe(arc[i - 1].side);
-    expect(f.cam).toEqual([48, 32 - (56 * 77) / 108 / 2, 56, (56 * 77) / 108]);
-    expect(frameAt(idle(e, [50, 32]), 0, m.lineups).cam).toEqual([-4, -3, 108, 77]);
+    expect(f).not.toHaveProperty("cam"); // #203: a frame carries no camera, so nothing can zoom to the box
   });
 
   it("drifts once the scene is over: players ease slowly with time, the ball stays put, nothing moves mid-scene (#106)", () => {
@@ -559,7 +558,7 @@ describe("frameAt", () => {
     expect(ys(at("pass", 0)).every((y) => y <= 64)).toBe(true);
   });
 
-  it("shootout intro (10 s): everyone to the centre circle, a huddle at half-way, then the keepers to the shootout end and the rest to the halfway line; camera full then penalty", () => {
+  it("shootout intro (10 s): everyone to the centre circle, a huddle at half-way, then the keepers to the shootout end and the rest to the halfway line; the view never zooms (#203)", () => {
     const m = ms.find((x) => x.events.some((e) => e.t === "shootout_start")) ?? ms[0];
     const e = { ...(m.events.find((e) => e.t === "shootout_start") ?? m.events.find((e) => e.t === "kickoff")!), t: "shootout_start", side: "away" as const };
     const s = sceneFor(e, [30, 20], 1000)!;
@@ -567,17 +566,16 @@ describe("frameAt", () => {
     const at = (p: number) => frameAt(s, p, m.lineups, undefined, 1000);
     const start = at(0);
     expect(start.players.filter((p) => p.gk).every((p) => p.x < 10 || p.x > 90)).toBe(true); // keepers start on their own lines
-    expect(start.cam).toEqual([-4, -3, 108, 77]);
+    expect(start).not.toHaveProperty("cam");
     const mid = at(0.5);
     expect(mid.players).toHaveLength(10);
     for (const p of mid.players) expect(Math.hypot(p.x - 50, p.y - 32)).toBeLessThan(10);
-    expect(mid.cam).toEqual([-4, -3, 108, 77]);
     const end = at(1);
     for (const p of end.players.filter((p) => p.gk)) expect(p.x).toBeGreaterThanOrEqual(90);
     expect(end.players.find((p) => p.gk && p.side === "home")!.y).toBeCloseTo(32, 3); // away kick first: the home keeper takes the line
-    for (const p of end.players.filter((p) => !p.gk)) expect(p.x - 1.7 - 3).toBeGreaterThanOrEqual(end.cam[0]); // whole circle + number inside the pen cam
+    for (const p of end.players.filter((p) => !p.gk)) expect(p.x - 1.7 - 3).toBeGreaterThanOrEqual(s.cam![0]); // whole circle + number inside the penalty window
     for (const p of end.players.filter((p) => !p.gk)) expect(Math.abs(p.x - 58)).toBeLessThan(4); // halfway rows
-    expect(end.cam).not.toEqual([-4, -3, 108, 77]);
+    expect(end).not.toHaveProperty("cam");
     expect(end.ref).toEqual([86, 19]); // beside the box, off the spot and the ball path
     expect(at(1.5).players.map((p) => [p.x, p.y])).toEqual(end.players.map((p) => [p.x, p.y])); // holds while the setup is awaited
   });
@@ -743,7 +741,7 @@ describe("frameAt", () => {
 });
 
 describe("smooth", () => {
-  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, ms: 1500, cam: [-4, -3, 108, 77] });
+  const at = (x: number): Frame => ({ ball: [x, 32], lift: 0, players: [{ side: "home", name: "A", no: 7, gk: false, x, y: 32, hot: false }], ref: [x, 20], caption: "", flash: null, type: "pass", seq: 1, p: 0, ms: 1500 });
   it("players chase a jumped target instead of snapping, and settle on it", () => {
     let s = smooth(null, at(10), 16);
     expect(s.players[0].x).toBe(10); // first frame: nothing to chase from
@@ -759,10 +757,8 @@ describe("smooth", () => {
     expect(s.ball[0]).toBeGreaterThan(40);
     expect(s.players[0]).toMatchObject({ no: 3, x: 90, y: 10 });
   });
-  it("the camera glides", () => {
-    const s = smooth({ ...at(10), cam: [-4, -3, 108, 77] }, { ...at(10), cam: [63, 16, 50, 32] }, 100);
-    expect(s.cam[0]).toBeGreaterThan(-4);
-    expect(s.cam[0]).toBeLessThan(20);
+  it("adds no camera: there is nothing to glide or zoom (#203)", () => {
+    expect(smooth(at(10), at(60), 100)).not.toHaveProperty("cam");
   });
   it("the referee walks after his target — eased over 900 ms, never faster than 14 u/s, ignoring shifts under 4 units — so he repositions rarely and never darts", () => {
     const s = smooth({ ...at(10), ref: [10, 10] }, { ...at(10), ref: [60, 10] }, 100);
@@ -851,7 +847,7 @@ describe("reveal", () => {
     expect(reveal(goal, 1, [82, 32], false)).toEqual({ reached: false, revealed: false }); // late result event, drawn ball 20 short: the shot is still on its way
   });
   it("settle puts the drawn ball on the impact once the scene is over, so reveal follows next tick; never once reached", () => {
-    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, ms: 3800, cam: [-4, -3, 108, 77] };
+    const f: Frame = { ball: [82, 32], lift: 0, players: [], ref: [70, 20], caption: "", flash: "goal", type: "goal", seq: 5, p: 1, ms: 3800 };
     const s = settle(goal, 1, f, false);
     expect(s.ball).toEqual([102, 32]);
     expect(s.ref).toEqual([70, 20]); // only the ball snaps

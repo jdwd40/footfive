@@ -137,6 +137,34 @@ describe("MarketsPanel", () => {
     expect(setPick).not.toHaveBeenCalled();
   });
 
+  it("a selection withdrawn on a refresh turns unavailable in place: same button, not offered, cannot be picked (#203)", async () => {
+    vi.useFakeTimers();
+    setPick.mockClear();
+    const priced = openRepro();
+    const withdrawn = openRepro();
+    const [home, away] = priced.markets[0].sel!;
+    priced.markets[0] = { ...priced.markets[0], sel: [home, { ...away, odds: 1.06 }] };
+    withdrawn.markets[0] = { ...withdrawn.markets[0], sel: [home, { ...away, odds: null }] };
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.fixtureMarkets).mockReset().mockResolvedValueOnce(priced).mockResolvedValue(withdrawn);
+    const { default: MarketsPanel } = await import("./MarketsPanel");
+    render(<MarketsPanel fixtureId="fx1" seq={1} fixtureLabel="HOM v ORL" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const before = screen.getByTestId("odds-winner-away");
+    expect(before).toHaveTextContent("1.06");
+    expect(before).toBeEnabled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    const after = screen.getByTestId("odds-winner-away");
+    expect(after).toBe(before); // the same node: nothing is removed or re-laid out around it
+    expect(after).toBeDisabled();
+    expect(after).toHaveTextContent(NOT_OFFERED);
+    expect(after).toHaveAccessibleName("Orl, Not offered");
+    // The explanation is for assistive tech only, so it never adds a visible line that pushes the page down.
+    expect(screen.getByTestId("unoffered-hint")).toHaveClass("sr-only");
+    fireEvent.click(after);
+    expect(setPick).not.toHaveBeenCalled();
+  });
+
   it("shows the bare error only when nothing has loaded", async () => {
     const { footfiveApi } = await import("../lib/pocketbase");
     vi.mocked(footfiveApi.fixtureMarkets).mockReset().mockRejectedValue(new Error("Markets down"));

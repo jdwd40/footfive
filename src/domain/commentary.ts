@@ -73,3 +73,41 @@ export function commentaryLine(events: MatchEvent[], i: number, teams: TeamLabel
   const nth = ordinal(count);
   return choose(e.seq, 844, [`${nth} shot in 5 minutes for ${team}! ${line}`, `${team} keep coming, ${nth} shot in 5 minutes. ${line}`, `That's the ${nth} ${team} shot in 5 minutes. ${line}`]);
 }
+
+/** Open-play results that close the shot row right before them. */
+const SHOT_RESULTS = new Set(["goal", "save", "miss", "block", "woodwork"]);
+/** `e`: the row's event (time, styling, replay); `lead`: the event that opened the attack (the shot or the award), for the attacking side. */
+export type FeedRow = { e: MatchEvent; lead: MatchEvent; text: string };
+
+/**
+ * #203: the Match events list shows each attack once. A shot and its result (the next seq, same chain — cosmetic pairs have none)
+ * share one row, as do a penalty award and its kick: the row becomes the result's (its time, styling and replay; the badge stays
+ * the attacking side's, from the shot or award) and reads
+ * "what led to it — what happened". Until the result is published the row is the shot or award alone, so the list never grows
+ * and then shrinks. A second (third, ...) penalty says so, so it is never mistaken for a retake: each one is a new foul in the box.
+ * Events are only grouped for display: none is dropped, and rows read nothing after the events given. `events` is seq-ordered.
+ */
+export function feedRows(events: MatchEvent[], listed: (e: MatchEvent) => boolean): FeedRow[] {
+  const rows: FeedRow[] = [];
+  let pens = 0;
+  for (const [i, e] of events.entries()) {
+    if (!listed(e)) continue;
+    const last = rows.at(-1);
+    const shot = events[i - 1];
+    if (SHOT_RESULTS.has(e.t) && shot?.t === "shot" && shot.seq === e.seq - 1 && shot.chain === e.chain && last?.e === shot) {
+      rows[rows.length - 1] = { e, lead: last.lead, text: `${last.text} — ${e.text}` };
+      continue;
+    }
+    if (PENALTY_KICKS.has(e.t) && last?.e.t === "penalty_awarded" && last.e.side === e.side && last.e.chain === e.chain) {
+      rows[rows.length - 1] = { e, lead: last.lead, text: `${last.text} — ${e.text}` };
+      continue;
+    }
+    if (e.t === "penalty_awarded") {
+      pens += 1;
+      rows.push({ e, lead: e, text: pens > 1 ? `${e.text} (${ordinal(pens)} penalty of the match, a new foul in the box)` : e.text });
+      continue;
+    }
+    rows.push({ e, lead: e, text: e.text });
+  }
+  return rows;
+}

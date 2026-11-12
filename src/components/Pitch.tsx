@@ -79,8 +79,8 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   // Breaks retain the outgoing end; ET starts right, ET2 left; every shootout kick stays at the left end.
   const flip = !!frame?.phase && ["second_half", "et_break", "extra_time_2", "shootout", "finished"].includes(frame.phase);
   const x = (v: number) => flip ? W - v : v;
-  const cam = frame?.cam ?? FULL_CAM;
-  const viewBox = [flip ? W - cam[0] - cam[2] : cam[0], ...cam.slice(1)];
+  // #203: no camera zoom. The view is always the whole pitch (symmetric about x = 50, so the end switch needs no projection).
+  const viewBox = FULL_CAM;
   const ball = [x(frame?.ball[0] ?? 50), frame?.ball[1] ?? 32];
   const lift = frame?.lift ?? 0;
   const flash = frame && revealed ? frame.flash : null;
@@ -116,12 +116,16 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   const ft = frame?.type === "match_end" && frame.side ? frame : null;
   const glow = goal ? (goal.side === "away" ? ac : hc) : null;
   const banner = goal
-    ? { id: "goal-banner", title: "GOOOAL!", sub: goal.score ? `${home.abbreviation} ${goal.score[0]}–${goal.score[1]} ${away.abbreviation}` : "", who: goal.who, cls: "goal-pop text-white", big: true }
+    ? { id: "goal-banner", title: "GOOOAL!", sub: goal.score ? `${home.abbreviation} ${goal.score[0]}–${goal.score[1]} ${away.abbreviation}` : "", who: goal.who, cls: "goal-pop text-white" }
     : ft
-      ? { id: "ft-banner", title: "FULL-TIME", sub: `${team.name} go through!`, who: ft.by === "aet" ? "after extra time" : ft.by === "pens" && ft.pens ? `on penalties ${Math.max(...ft.pens)}–${Math.min(...ft.pens)}` : "", cls: "goal-pop text-lime", big: true }
+      ? { id: "ft-banner", title: "FULL-TIME", sub: `${team.name} go through!`, who: ft.by === "aet" ? "after extra time" : ft.by === "pens" && ft.pens ? `on penalties ${Math.max(...ft.pens)}–${Math.min(...ft.pens)}` : "", cls: "goal-pop text-lime" }
       : period
-        ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber", big: false }
+        ? { id: "period-banner", title: period, sub: "", who: "", cls: "event-enter text-amber" }
         : null;
+  // #203: every banner fits the pitch at any width. A title breaks onto its own line at " · " / " — " (the separator stays in the
+  // text, unseen), and its size follows the pitch width (cqw of the banner box) so the longest line fits, capped at the old 60 px.
+  const titleLines = banner ? banner.title.split(/ ([·—]) /) : [];
+  const longest = Math.max(1, ...titleLines.filter((_, i) => i % 2 === 0).map((l) => l.length));
   const cheering = goal?.side ?? ft?.side ?? (frame?.type === "shootout_end" ? frame.side : null) ?? null;
   // A goal and its celebration share a score; a new goal restarts the cheer even for consecutive goals by the same side.
   const cue = goal && cheering ? `goal:${goal.score?.join("-") ?? goal.seq}` : cheering ? `winner:${cheering}` : "";
@@ -188,7 +192,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
       </svg>
 
       {banner ? (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30 transition-opacity duration-1000" style={dim ? { opacity: 0.85 } : undefined} data-testid={banner.id}>
+        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30 px-[4%] transition-opacity duration-1000 [container-type:inline-size]" style={dim ? { opacity: 0.85 } : undefined} data-testid={banner.id}>
           {glow ? (
             <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
               {Array.from({ length: 24 }, (_, i) => (
@@ -196,12 +200,12 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
               ))}
             </div>
           ) : null}
-          <div className={`text-center ${banner.cls}`}>
-            <div className={`font-display font-black ${banner.big ? "text-5xl" : "text-4xl"} sm:text-6xl`} style={glow ? { textShadow: `0 0 18px ${glow}, 0 0 40px ${glow}` } : undefined}>
-              {banner.title}
+          <div className={`min-w-0 max-w-full text-center [overflow-wrap:anywhere] ${banner.cls}`}>
+            <div className="font-display font-black leading-none text-balance" style={{ fontSize: `min(3.75rem, ${(108 / longest).toFixed(2)}cqw)`, ...(glow ? { textShadow: `0 0 18px ${glow}, 0 0 40px ${glow}` } : null) }} data-testid="banner-title">
+              {titleLines.map((part, i) => (i % 2 ? <span key={i} className="hidden">{` ${part} `}</span> : <span key={i} className="block">{part}</span>))}
             </div>
-            {banner.sub ? <div className="mt-1 font-display text-2xl font-black tabular sm:text-3xl">{banner.sub}</div> : null}
-            {banner.who ? <div className="mt-1 text-sm font-bold sm:text-base">{banner.who}</div> : null}
+            {banner.sub ? <div className="mt-1 font-display font-black leading-tight tabular text-balance" style={{ fontSize: "min(1.875rem, 6.5cqw)" }}>{banner.sub}</div> : null}
+            {banner.who ? <div className="mt-1 font-bold leading-tight" style={{ fontSize: "min(1rem, 4.5cqw)" }}>{banner.who}</div> : null}
           </div>
         </div>
       ) : frame && flash ? (

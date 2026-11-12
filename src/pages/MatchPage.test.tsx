@@ -935,8 +935,14 @@ describe("MatchPage retained history and fixture ticker", () => {
     const listed = [...feed.querySelectorAll("li")].map((li) => li.textContent ?? "");
     expect(listed[0]).toContain("Brilliant stop by Leblanc!");
     const keyMoments = events.filter((e) => !["pass", "tackle", "foul"].includes(e.t) && e.at <= now);
-    expect(listed).toHaveLength(keyMoments.length);
+    // #203: one row per attack. Each of the six published shots shares its row with its result, the penalty award with its kick.
+    expect(listed).toHaveLength(keyMoments.length - 7);
     for (const e of keyMoments) expect(feed).toHaveTextContent(e.text);
+    for (const [i, e] of events.entries()) {
+      if (e.t !== "shot" && e.t !== "penalty_awarded") continue;
+      if (e.at > now) continue;
+      expect(listed.filter((l) => l.includes(e.text) && l.includes(events[i + 1].text)), e.text).toHaveLength(1);
+    }
     for (const t of ["shot", "save", "miss", "block", "woodwork", "goal", "penalty_missed"]) expect(keyMoments.some((e) => e.t === t)).toBe(true);
     // Every counted shot (open play and penalty, both sides: 6 + 1) has its own entry.
     expect(keyMoments.filter((e) => e.t === "shot" || e.t === "penalty_missed")).toHaveLength(7);

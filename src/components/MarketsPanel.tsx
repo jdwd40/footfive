@@ -125,11 +125,12 @@ function MarketBlock({
               aria-label={bare ? `${s.label}, ${NOT_OFFERED}` : undefined}
               aria-describedby={bare ? hintId : undefined}
               onClick={() => onPick(s)}
-              title={s.label}
+              title={bare ? `${s.label} — ${UNOFFERED_HINT}` : s.label}
               data-testid={`odds-${m.key}-${s.id}`}
             >
               <span className="max-w-full truncate text-[11px] font-semibold opacity-80">{exact ? s.short : s.short}</span>
-              <span className={priced ? "tabular text-sm" : "max-w-full text-center text-[11px] font-semibold leading-tight whitespace-normal"}>
+              {/* #203: one line at the price's own line height, so a price that is withdrawn (or comes back) never resizes the button. */}
+              <span className={priced ? "tabular text-sm" : "max-w-full truncate text-center text-[11px] font-semibold leading-5"}>
                 {selectionLabel(s.odds, open)}
               </span>
             </button>
@@ -137,7 +138,8 @@ function MarketBlock({
         })}
       </div>
       {unoffered ? (
-        <p id={hintId} className="mt-1 text-[11px] leading-tight text-muted" data-testid="unoffered-hint">
+        // Screen-reader only (as on the fixture cards): a selection withdrawn mid-match must not push the page down (#203).
+        <p id={hintId} className="sr-only" data-testid="unoffered-hint">
           {UNOFFERED_HINT}
         </p>
       ) : null}

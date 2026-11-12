@@ -103,7 +103,7 @@ describe("Pitch event-snapshot end projection", () => {
         });
         expect(container.querySelector('[data-testid="ref"]')!.getAttribute("transform")).toBe(`translate(${x(f.ref[0])} ${f.ref[1]})`);
         expect(container.querySelector('circle[stroke="#111"]')!.getAttribute("cx")).toBe(String(x(f.ball[0])));
-        expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe([flip ? 100 - f.cam[0] - f.cam[2] : f.cam[0], ...f.cam.slice(1)].join(" "));
+        expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("-4 -3 108 77"); // #203: the whole pitch at both ends, penalties included
         expect(JSON.stringify(f)).toBe(original);
         phases.add(e.st.ph);
       }
