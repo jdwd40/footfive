@@ -19,7 +19,7 @@ so the engine stays deterministic and resumable.
 
 ## Calibration
 
-Baseline: main 72e459c. Both sides measured on 2026-11-12.
+Baseline: main b4b7467 (engine and balance files unchanged since 72e459c). Both sides measured on 2026-11-12.
 
 ### Harness (production pace, all 240 pairings, 4,800 matches)
 

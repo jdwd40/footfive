@@ -121,7 +121,7 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
       expect(JSON.stringify(split), `seed ${seed}`).toBe(JSON.stringify(events));
     }
     expect(steps.digest("hex"), "state after every step: stats, score, ball, possession, counter, RNG, nextAt, wear").toBe(ORIGINAL.steps);
-  });
+  }, 20000); // heavy deterministic test (~3 s alone) that times out at 5 s under full-suite parallel load
 
   it("an old saved state (legacy timing, no new fields) resumes with the identical stream, cosmetics included", () => {
     expect(Object.keys(match(1000))).toEqual(["v", "fx", "seed", "rc", "seq", "timing", "teams", "phase", "minute", "nextAt", "score", "so", "stats", "possMin", "ball", "bs", "counter", "pending", "danger", "winner", "by", "finishedAt"]);
