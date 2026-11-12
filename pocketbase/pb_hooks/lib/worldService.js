@@ -345,10 +345,10 @@ function engineTeam($app, team, opts) {
   };
 }
 
+/** Kickoff odds model (model_json). #219: with the late game states odds.js walks in play (matchEngine.inPlayModel). */
 function pairModel(homeT, awayT) {
   var st = eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: homeT, away: awayT });
-  var r = eng.goalRates(st);
-  return { lh: Math.round(r.home * 1e6) / 1e6, la: Math.round(r.away * 1e6) / 1e6 };
+  return eng.inPlayModel(st);
 }
 
 // ------------------------------------------------------------------ lifecycle

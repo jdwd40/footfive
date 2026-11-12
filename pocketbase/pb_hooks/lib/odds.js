@@ -11,6 +11,12 @@
  * selection has null odds and cannot be bet (bettingService: "Selection unavailable");
  * bets already placed keep their confirmed odds and settle unchanged. Pre-match prices
  * are as before, including the 1.01 floor for a lopsided pairing.
+ *
+ * #219: a kickoff model with game states (`s`, matchEngine.inPlayModel) is played minute by minute instead: each remaining
+ * minute's rates come from the score at its start and the minute (a side trailing from `at.chase` attacks with urgency, a
+ * side leading by one from `at.protect` defends, level from `at.settle` both attack), with counters and rebounds already in
+ * the engine's rates. The engine plays at most one attack a minute, so a minute has one goal at most: home with probability
+ * rate.h, away with rate.a. A legacy model ({ lh, la } only, e.g. a match in flight at the #219 deploy) is priced as before.
  */
 var MARGIN = 0.06;
 var MIN_ODDS = 1.01;
@@ -43,6 +49,163 @@ function price(p, inPlay) {
 /** Has the match kicked off? Published state in any phase after "pre" (half-time, extra time and the shootout included). */
 function inPlay(st) {
   return !!st && !!st.ph && st.ph !== "pre";
+}
+
+function zeros(n) {
+  var a = [];
+  for (var i = 0; i < n; i++) a.push(0);
+  return a;
+}
+
+/** #219: model with game states? */
+function staged(model) {
+  return !!(model && model.s && model.at);
+}
+
+/** #219: per-minute [home, away] rates for minute k with the score difference d = home − away at its start. */
+function stageRates(model, k, d) {
+  var at = model.at;
+  var s = model.s;
+  if (d < 0 && k >= at.chase) return d === -1 && k >= at.protect ? s.hT1 : s.hT;
+  if (d > 0 && k >= at.chase) return d === 1 && k >= at.protect ? s.aT1 : s.aT;
+  if (d === 0 && k >= at.settle) return s.L;
+  return [model.lh, model.la];
+}
+
+/** Red-card multipliers (as rates()) for the published state. */
+function redMul(st) {
+  var rh = (st && st.x && st.x[0] && st.x[0][6]) || 0;
+  var ra = (st && st.x && st.x[1] && st.x[1][6]) || 0;
+  return { h: Math.pow(0.75, rh) * Math.pow(1.15, ra), a: Math.pow(0.75, ra) * Math.pow(1.15, rh) };
+}
+
+/** First minute still to play (engine numbering, 1-based) from the public minute, and whether play is in extra time. */
+function firstMinute(ph, minute) {
+  var inET = !!ET_PHASES[ph];
+  return { k0: inET ? Math.max(minute, 90) + 1 : Math.max(0, minute) + 1, inET: inET };
+}
+
+/**
+ * #219: final-score distribution and P(home qualifies) by walking the remaining minutes. State: goals added (i, j), capped at
+ * K each. Level after 90 plays on into extra time; level after 120 is a shootout, a coin flip before it starts (as before).
+ */
+function stagedDist(model, st, minute, noDist) {
+  if (noDist) return { dist: {}, qualifyHome: stagedQualify(model, st, minute) };
+  var sc = (st && st.sc) || [0, 0];
+  var ph = (st && st.ph) || "pre";
+  var red = redMul(st);
+  var fm = firstMinute(ph, minute);
+  var N = K + 1;
+  var dist = {};
+  var qualify = 0;
+  var cur = zeros(N * N);
+  cur[0] = 1;
+  var settle = function (i, j, p) {
+    var h = sc[0] + i;
+    var a = sc[1] + j;
+    if (h > a) qualify += p;
+    else if (h === a) qualify += p * 0.5;
+    if (!noDist && p >= 1e-12) dist[h + "-" + a] = (dist[h + "-" + a] || 0) + p;
+  };
+  for (var k = fm.k0; k <= 120; k++) {
+    if (k === 91 && !fm.inET) {
+      // Full time: a decided match ends here, a level one goes to extra time.
+      for (var u = 0; u < N; u++) {
+        for (var v = 0; v < N; v++) {
+          var q = cur[u * N + v];
+          if (q > 0 && sc[0] + u !== sc[1] + v) {
+            settle(u, v, q);
+            cur[u * N + v] = 0;
+          }
+        }
+      }
+    }
+    var nx = zeros(N * N);
+    var memo = {};
+    for (var i = 0; i < N; i++) {
+      for (var j = 0; j < N; j++) {
+        var p = cur[i * N + j];
+        if (!(p > 0)) continue;
+        var d = sc[0] + i - sc[1] - j;
+        var r = memo[d];
+        if (!r) {
+          var base = stageRates(model, k, d);
+          r = memo[d] = [Math.min(0.5, base[0] * red.h), Math.min(0.5, base[1] * red.a)];
+        }
+        var gh = i < K ? r[0] : 0;
+        var ga = j < K ? r[1] : 0;
+        nx[i * N + j] += p * (1 - gh - ga);
+        if (gh) nx[(i + 1) * N + j] += p * gh;
+        if (ga) nx[i * N + j + 1] += p * ga;
+      }
+    }
+    cur = nx;
+  }
+  for (var x = 0; x < N; x++) for (var y = 0; y < N; y++) if (cur[x * N + y] > 0) settle(x, y, cur[x * N + y]);
+  return { dist: dist, qualifyHome: qualify };
+}
+
+/** #219: P(home qualifies) only, walking the score difference alone (cheap: the bracket and fixture cards call it often). */
+function stagedQualify(model, st, minute) {
+  var sc = (st && st.sc) || [0, 0];
+  var ph = (st && st.ph) || "pre";
+  var red = redMul(st);
+  var fm = firstMinute(ph, minute);
+  var W = 2 * K + 1; // differences d0 − K .. d0 + K
+  var d0 = sc[0] - sc[1];
+  var cur = zeros(W);
+  cur[K] = 1;
+  var qualify = 0;
+  for (var k = fm.k0; k <= 120; k++) {
+    if (k === 91 && !fm.inET) {
+      for (var u = 0; u < W; u++) {
+        var du = d0 + u - K;
+        if (du !== 0 && cur[u] > 0) {
+          if (du > 0) qualify += cur[u];
+          cur[u] = 0;
+        }
+      }
+    }
+    var nx = zeros(W);
+    for (var i = 0; i < W; i++) {
+      var p = cur[i];
+      if (!(p > 0)) continue;
+      var base = stageRates(model, k, d0 + i - K);
+      var gh = i < W - 1 ? Math.min(0.5, base[0] * red.h) : 0;
+      var ga = i > 0 ? Math.min(0.5, base[1] * red.a) : 0;
+      nx[i] += p * (1 - gh - ga);
+      if (gh) nx[i + 1] += p * gh;
+      if (ga) nx[i - 1] += p * ga;
+    }
+    cur = nx;
+  }
+  for (var x = 0; x < W; x++) {
+    var dx = d0 + x - K;
+    if (dx > 0) qualify += cur[x];
+    else if (dx === 0) qualify += cur[x] * 0.5;
+  }
+  return qualify;
+}
+
+/** #219: next goal by walking the remaining minutes at the current score (it changes only with that goal). */
+function stagedNext(model, st, minute) {
+  var ph = (st && st.ph) || "pre";
+  var red = redMul(st);
+  var fm = firstMinute(ph, minute);
+  var d = st.sc[0] - st.sc[1];
+  var alive = 1;
+  var home = 0;
+  var away = 0;
+  for (var k = fm.k0; k <= 120; k++) {
+    if (k === 91 && !fm.inET && d !== 0) break;
+    var base = stageRates(model, k, d);
+    var gh = Math.min(0.5, base[0] * red.h);
+    var ga = Math.min(0.5, base[1] * red.a);
+    home += alive * gh;
+    away += alive * ga;
+    alive *= 1 - gh - ga;
+  }
+  return { home: home, away: away, none: alive };
 }
 
 function rates(model, st) {
@@ -108,6 +271,7 @@ function finalDist(model, st, minute, noDist) {
     addFinal(sc[0], sc[1], 1);
     return { dist: dist, qualifyHome: shootoutHome(st.so) };
   }
+  if (staged(model)) return stagedDist(model, st, minute, noDist);
   var r = rates(model, st);
   var inET = !!ET_PHASES[ph];
   var etMins = inET ? Math.max(0, 120 - Math.max(minute, 90)) : 30;
@@ -164,6 +328,7 @@ function finalDist(model, st, minute, noDist) {
 function nextGoal(model, st, minute) {
   var ph = (st && st.ph) || "pre";
   if (ph === "finished" || ph === "shootout") return { home: 0, away: 0, none: 1 };
+  if (staged(model)) return stagedNext(model, st, minute);
   var r = rates(model, st);
   var L = r.h + r.a;
   var level = st.sc[0] === st.sc[1];
@@ -305,5 +470,6 @@ if (typeof module !== "undefined") {
     roundFirst: roundFirst,
     shootoutHome: shootoutHome,
     clockMinute: clockMinute,
+    stageRates: stageRates,
   };
 }
