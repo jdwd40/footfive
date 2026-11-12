@@ -41,6 +41,8 @@ export type PubState = {
   pos: number;
   x: [number[], number[]];
   d: 0 | 1;
+  /** Current published stances; absent on event streams created before #228. */
+  cs?: ["balanced" | "attack" | "defend", "balanced" | "attack" | "defend"];
   win: Side | null;
   by: "normal" | "aet" | "pens" | null;
 };

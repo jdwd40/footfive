@@ -72,10 +72,11 @@ describe("balanced v balanced manual matches are unchanged by #133", () => {
   // #218 review: through-ball claims now gathered inside the area (x ≥ 86) re-pin seed 13's event hash only (same score/RNG/events).
   // #219 game state (urgency, counters, rebounds, saveBase 0.59) deliberately re-pins all three; see docs/balance-219.md.
   // #229 changes published danger flags only; score/event-count/RNG assertions stay fixed. See docs/balance-229.md.
+  // #228 adds the current published stance only; scores/RNG/event counts remain fixed. See docs/balance-228.md.
   const GOLDEN = [
-    { seed: 11, h: 0, a: 15, rc: 2296, score: [3, 2], events: 409, hash: "0512a474f1b3c8998d9db0067ec9ab65e31d4c4359b7521767e3d3414e17e80e" },
-    { seed: 12, h: 5, a: 6, rc: 2416, score: [1, 0], events: 418, hash: "4aa4002ee26f0ca63bc02d132b784ae9e231bebb32178684e11a90c829141604" },
-    { seed: 13, h: 9, a: 2, rc: 3173, score: [1, 1], events: 564, hash: "1495cad8a6fecf02c92729c899d85f507cf813aa3bb0780f2a066e71f220afce" },
+    { seed: 11, h: 0, a: 15, rc: 2296, score: [3, 2], events: 409, hash: "c719dd689ed8fa02268e5a8ff1b3dc6919249588b85c9f6426883a40916bf912" },
+    { seed: 12, h: 5, a: 6, rc: 2416, score: [1, 0], events: 418, hash: "06ec479f956bae0ac8ee4daa03f626ccf52a8fa24aada670c7f3431bfc72def8" },
+    { seed: 13, h: 9, a: 2, rc: 3173, score: [1, 1], events: 564, hash: "aa780e3aff5070f381243a6bdb45f1490d9aadb7a5659a80b044a0ac747d0677" },
   ];
 
   it.each(GOLDEN)("seed $seed reproduces the identical event stream, score and RNG count", (g) => {

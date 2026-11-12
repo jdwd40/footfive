@@ -19,6 +19,8 @@
  * engine plays at most one attack a minute, so a walked minute has one goal at most: home with probability rate.h, away
  * with rate.a. Polled callers get the same numbers from the cached fast paths (marketProbs; see "fast paths" below). A
  * legacy model ({ lh, la } only, e.g. a match in flight at the #219 deploy) is priced as before.
+ * #228: manager tables (`v` indices into `vr`) are selected from the latest published snapshot `cs`, or kickoff `model.cs`.
+ * AI sides keep their score/minute policy. Stance is part of the cache key; no future manager command is read.
  */
 var MARGIN = 0.06;
 var MIN_ODDS = 1.01;
@@ -62,6 +64,27 @@ function zeros(n) {
 /** #219: model with game states? */
 function staged(model) {
   return !!(model && model.r && model.k && model.at);
+}
+
+/**
+ * #228: select only stances known at this published snapshot. AI sides retain the model's score/minute policy; a manager's
+ * current choice is held until another coaching row is published. Old snapshots fall back to kickoff. Old models without
+ * variant tables keep their original prices (drain in-flight matches before deploying for complete #228 coverage).
+ * Selected wrappers are non-enumerable runtime cache entries, never persisted or used as hidden match state.
+ */
+function publishedModel(model, st) {
+  if (!model || !model.v) return model;
+  var cs = (st && st.cs) || [];
+  var valid = function (s) { return s === "balanced" || s === "attack" || s === "defend"; };
+  var h = !model.ai[0] && valid(cs[0]) ? cs[0] : model.cs[0];
+  var a = !model.ai[1] && valid(cs[1]) ? cs[1] : model.cs[1];
+  var key = h + ":" + a;
+  if (!Object.prototype.hasOwnProperty.call(model.v, key)) return model;
+  if (!model.__stances) Object.defineProperty(model, "__stances", { value: {}, enumerable: false });
+  if (!model.__stances[key]) model.__stances[key] = {
+    lh: model.lh, la: model.la, at: model.at, k: model.k, r: model.vr[model.v[key]], csKey: key,
+  };
+  return model.__stances[key];
 }
 
 /**
@@ -146,6 +169,7 @@ function poisTail(lambda, n) {
  * use the fast paths.
  */
 function stagedDist(model, st, minute, noDist) {
+  model = publishedModel(model, st);
   if (noDist) return { dist: {}, qualifyHome: fastQualify(model, st, minute) };
   var sc = (st && st.sc) || [0, 0];
   var ph = (st && st.ph) || "pre";
@@ -200,6 +224,7 @@ function stagedDist(model, st, minute, noDist) {
 
 /** #219 REFERENCE next goal: the span's first goal (Poisson), then the remaining minutes at the current score. */
 function stagedNext(model, st, minute) {
+  model = publishedModel(model, st);
   var ph = (st && st.ph) || "pre";
   var red = redMul(st);
   var fm = firstMinute(ph, minute);
@@ -253,7 +278,7 @@ function cachePut(kind, key, val) {
 }
 
 function modelKey(model) {
-  return JSON.stringify([model.lh, model.la, model.at, model.k, model.r]);
+  return JSON.stringify([model.lh, model.la, model.at, model.k, model.r, model.csKey]);
 }
 
 /** Rates H[k * 5 + c], A[k * 5 + c] for the walked minutes (chase..120), and cumulative span rates cH[k], cA[k] (minutes < k). */
@@ -542,6 +567,7 @@ function fastNext(model, st, minute) {
  * match goes through finalDist / nextGoal exactly as before.
  */
 function marketProbs(model, st, minute) {
+  model = publishedModel(model, st);
   var ph = (st && st.ph) || "pre";
   if (staged(model) && ph !== "finished" && ph !== "shootout") {
     var cx = ctxFor(model, st);
@@ -621,6 +647,7 @@ function shootoutHome(so) {
  * @returns { dist: { "h-a": p }, qualifyHome: p }
  */
 function finalDist(model, st, minute, noDist) {
+  model = publishedModel(model, st);
   var sc = (st && st.sc) || [0, 0];
   var ph = (st && st.ph) || "pre";
   var dist = {};
@@ -692,6 +719,7 @@ function finalDist(model, st, minute, noDist) {
 
 /** Probabilities for the next goal (excl. shootouts). */
 function nextGoal(model, st, minute) {
+  model = publishedModel(model, st);
   var ph = (st && st.ph) || "pre";
   if (ph === "finished" || ph === "shootout") return { home: 0, away: 0, none: 1 };
   if (staged(model)) return fastNext(model, st, minute);

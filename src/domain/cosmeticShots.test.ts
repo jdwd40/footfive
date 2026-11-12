@@ -48,12 +48,13 @@ const { defaultStarters } = lib("tournament.js");
  * unchanged. See docs/balance-219.md.
  * Issue #229 changes published danger only: full 9af045ea… → 9c4f9440…; outcome pin and step-state pin unchanged.
  * See docs/balance-229.md.
+ * Issue #228 adds the current published stance (`cs`) only: full 9c4f9440… → 5f7b253e…; outcome and step-state pins unchanged.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
   pin: "daf66a03be69ba61ef446c362bb09a04681015b6681ccf064f401765de6fb9a8",
   /** Every field of every event plus the whole final state. */
-  full: "9c4f9440b1bb27a474179a0a81f9ec1616f945238c72a77d1e130f2763872b72",
+  full: "5f7b253e8cd2e79abf40a57eb88ddfe803cf7fffee6243d048ab63accb726d7f",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
   steps: "ec15ee3cdb841300b010e19d4f0cab9f108107e3fa644f2ae5f560b36bd7845f",
 };
