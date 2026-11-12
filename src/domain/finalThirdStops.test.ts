@@ -58,6 +58,7 @@ describe("failed attacks that reach the final third (issue #218)", () => {
       // The turnover is met where the progression left it (a cross: in the box it was delivered to).
       if (prog.t === "cross") expect(along(atk, e.from![0])).toBeGreaterThanOrEqual(84);
       else expect(e.from).toEqual(prog.ball);
+      if (e.stop === "claim") expect(along(atk, e.ball![0]), `claim #${e.seq} inside the area`).toBeGreaterThanOrEqual(86);
       if (e.stop === "claim") expect(e.p).toBe(matches.find((m) => m.events.includes(e))!.lineups[e.side as Side].find((p) => p.role === "gk")!.name);
       kinds.add(`${prog.t}:${e.stop}`);
     }

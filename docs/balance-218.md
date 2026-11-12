@@ -10,13 +10,19 @@ changes is how half of the failed attacks are narrated:
   or through ball (interception), into x 74–82. The defending side then wins the ball
   with the same event type (`tackle` / `interception`), carrying a new
   `stop` field:
-  - `tackle`: a last-ditch tackle. Used after a dribble, and after 60% of tackle-outcome
-    through balls. The defender slides in just past the progression spot (x ≤ 84).
-  - `claim`: the keeper comes off his line. Used after half of the interception-outcome
-    crosses and through balls. He catches a cross in the box, or gathers a through ball
-    that runs on (x ≤ 92).
+  The stop depends only on the outcome, whatever the progression kind:
+  - A tackle outcome (dribble or through ball, 50/50) gives `tackle` 60% of the time and
+    `clear` 40%. So 40% of these dribbles end in a clearance, too.
+  - An interception outcome (cross 2/3, through ball 1/3) gives `claim` 50% and
+    `clear` 50%.
+
+  The three stops:
+  - `tackle`: a last-ditch tackle. The defender slides in just past the progression spot
+    (x ≤ 84).
+  - `claim`: the keeper comes off his line and gathers it inside his area, at x 86–92 (the
+    box starts at x 85). A cross carries on a few yards into his hands; a through ball
+    runs on to him.
   - `clear`: a defender heads or hacks it clear to a team-mate in midfield (x 42–56).
-    Used for the rest.
 
   The text is the matching commentary, for example "C. Amber comes for the cross and
   claims it" or "Z. Cyan gets in front of R. Chrome and heads it away".
@@ -107,9 +113,17 @@ Seed robustness: 4,800 matches each, the same 240 pairings, other seed prefixes.
 | pooled (14,400) | | | | | +2.2% → +2.3% |
 
 The outcome rates per attack are unchanged, so the goal shifts (−0.03 to +0.04) are
-stream noise. On the `zz` seeds, model vs simulation is +3.2%, just outside ±3%. That
-comes from those 4,800 matches scoring 0.02 goals/90 less, not from the model. Over all
-14,400 matches it is +2.3%, against +2.2% before. `goalRates` needed no recalibration.
+stream noise.
+
+Odds-model margin: model vs simulation is +1.8% (`cal`), +1.9% (`alt`), +3.2% (`zz`) and
++2.3% pooled over 14,400 matches (#217: +2.2% pooled). The standard error of one
+4,800-match figure is about 0.9% (goals per 90 have a per-match SD of about 1.8 around
+3.1). So `zz`'s +3.2%, just outside ±3%, is within about one SE of the pooled +2.3%. It
+comes from those matches scoring 0.02 goals/90 less, not from the model, which is
+unchanged. `goalRates` needed no recalibration.
+
+These figures were re-run after the review fix below, which keeps through-ball claims
+inside the area. They are unchanged, because that fix moves ball positions only.
 
 ### Live view: `harness/view-stats.mjs --matches 200`, 60 fps, 100 ms samples
 
@@ -155,15 +169,24 @@ Seeds, timing, projections and strict equality assertions are unchanged.
 | Pin | Before (#217) | After |
 |---|---|---|
 | 200-seed tuple/final (`engine.test.ts`, `cosmeticShots.test.ts` `pin`) | `32359e3717fd564731f85cbcc81eb8911f93280cc21c1eddc903a4eeb6b336df` | `8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81` |
-| Full real payload/final (`cosmeticShots.test.ts` `full`) | `969d52256f8d9f8dfb3d4ec2e71e6b8ea654425f33e350095a9d434d5e3a2fe1` | `1cfad7d3427d2586a43d768014ec3de2329aeadd364710a3e122495c13afe964` |
-| Every persisted step (`cosmeticShots.test.ts` `steps`) | `c0dceaf40a4b8ad414b96b90ef66b3e1a82b3ce324bd6db94822fe6c5dce30c1` | `0cf460db3b719c2be80d6178e9b9c837e659b0fc47143adeb52267f3aedd31ea` |
+| Full real payload/final (`cosmeticShots.test.ts` `full`) | `969d52256f8d9f8dfb3d4ec2e71e6b8ea654425f33e350095a9d434d5e3a2fe1` | `4143b324ba836466981ea53fc864594729bb070b14c041904bb6176c7a76f7d7` |
+| Every persisted step (`cosmeticShots.test.ts` `steps`) | `c0dceaf40a4b8ad414b96b90ef66b3e1a82b3ce324bd6db94822fe6c5dce30c1` | `b874c167e744da1de29debf440822a180a1d219507e90bf08f547e4433b2af22` |
 | 200-seed outcome summary (`commentary.test.ts`) | `0e9d017182972a3d21829ee2bee2406dc545385504547adb32fae91b9a602677` | `b6e1cb087bf209214928285e4ebfa135bc2a00a01725bce40a14d4f828a293f5` |
 
 | Manual balanced seed (`tacticalBalance.test.ts`) | Before score / RNG / events | After score / RNG / events | After event SHA-256 |
 |---|---|---|---|
 | 11 | [4, 1] / 2329 / 425 | [2, 1] / 2262 / 400 | `c646ed45d35a15328aae43a4b7f3b1007150f8e64e851f307cda32b208adc68c` |
 | 12 | [1, 0] / 2186 / 389 | [1, 0] / 2240 / 391 | `8a381dee5e969e9fc95f8e7bfe84fc3b5e7e6f23b7c50d4a9380e3215a749455` |
-| 13 | [0, 3] / 2325 / 417 | [1, 2] / 2488 / 453 | `3254f936fda617155618c0bde31ac6e5af3125529f101aa15940777a386167b0` |
+| 13 | [0, 3] / 2325 / 417 | [1, 2] / 2488 / 453 | `025fed4777737d7ed1d67a77a1b1c10bd8c5dc8327c05ace5cc78483ed244d98` |
+
+Review fix: a through-ball claim used to end at `min(x + 6..10, 92)`, so about 30% of
+them were gathered outside the area. It now ends at x 86–92, still with one draw, so the
+RNG stream and every outcome are unchanged.
+- Unchanged: the tuple/final `pin`, the commentary outcome summary, and every score, RNG
+  count and event count.
+- Changed (ball positions only): `full` (interim `1cfad7d3…`) and `steps` (interim
+  `0cf460db…`), and the event hash of manual seed 13 (interim `3254f936…`). The table
+  above shows the final values.
 
 Other test changes:
 - `cosmeticShots.test.ts`, "spectacle stays moderate": these matches run at the legacy 8 s

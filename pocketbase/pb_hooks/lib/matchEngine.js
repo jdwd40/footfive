@@ -782,8 +782,9 @@ function deepTurnover(st, out, ctx, side, outcome, chain, f, last, x, y, ball) {
   var end;
   var text;
   if (stop === "claim") {
-    // He comes off his line and gathers it a few yards on: the cross carrying on, the through ball running through.
-    end = pos(side, Math.min(mx + (kind === "cross" ? 2 + rnd(st) * 3 : 6 + rnd(st) * 4), 92), my + (32 - my) * 0.3);
+    // He comes off his line and gathers it inside his area (x 86–92; the box starts at 85): the cross carrying on a few yards,
+    // the through ball running through to him. One draw either way.
+    end = pos(side, kind === "cross" ? Math.min(mx + 2 + rnd(st) * 3, 92) : 86 + rnd(st) * 6, my + (32 - my) * 0.3);
     text =
       kind === "cross"
         ? pick(st, [who.name + " comes for the cross and claims it", "Safe hands — " + who.name + " plucks it out of the air", who.name + " rises above " + victim.name + " to catch it"])

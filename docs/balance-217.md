@@ -23,8 +23,14 @@ Baseline: main b4b7467 (engine and balance files unchanged since 72e459c). Both 
 
 ### Harness (production pace, all 240 pairings, 4,800 matches)
 
-Correction (#218): these figures can now be reproduced in the repo with
-`node scripts/engine-calibrate.mjs 4800 --pairs all` (`--prefix alt` / `zz` for the seed rows).
+Correction (#218): `node scripts/engine-calibrate.mjs 4800 --pairs all` now reproduces
+these figures in the repo: goals per match and per 90, real shots, the mean longest shot
+gap, the chance gap, final-third entries, `pairModel` goals/90 and model vs simulation.
+It also reproduces penalties and extra-time share. Use `--prefix alt` or `zz` for the
+seed rows.
+
+The p90/max and edge-inclusive gaps, the simulated goals/90 line, cosmetic tries and the
+trailing-side rates still come only from the external harness.
 
 `node harness/engine-stats.mjs --root <root> --matches 4800 --workers 3`. Matches
 run at 6 s minutes. Match `i` is seeded `hashSeed("cal" + i)`, and the fixtures

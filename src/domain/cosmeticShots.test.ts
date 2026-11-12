@@ -41,14 +41,16 @@ const { defaultStarters } = lib("tournament.js");
  * Issue #218 re-pins for final-third turnovers (half the failed attacks now draw a progression and a stop): pin 32359e37… →
  * 8bd5c427…, full 969d5225… → 1cfad7d3…, steps c0dceaf4… → 0cf460db…. Same inputs, pace, projection and assertions; cosmetic
  * generation/RNG unchanged. See docs/balance-218.md.
+ * #218 review: a through-ball keeper claim is now gathered inside the area (x 86–92, same single draw), which moves ball
+ * positions only: full 1cfad7d3… → 4143b324…, steps 0cf460db… → b874c167…; pin unchanged. See docs/balance-218.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
   pin: "8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81",
   /** Every field of every event plus the whole final state. */
-  full: "1cfad7d3427d2586a43d768014ec3de2329aeadd364710a3e122495c13afe964",
+  full: "4143b324ba836466981ea53fc864594729bb070b14c041904bb6176c7a76f7d7",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "0cf460db3b719c2be80d6178e9b9c837e659b0fc47143adeb52267f3aedd31ea",
+  steps: "b874c167e744da1de29debf440822a180a1d219507e90bf08f547e4433b2af22",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
