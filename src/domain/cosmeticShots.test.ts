@@ -120,7 +120,7 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
       expect(JSON.stringify(split), `seed ${seed}`).toBe(JSON.stringify(events));
     }
     expect(steps.digest("hex"), "state after every step: stats, score, ball, possession, counter, RNG, nextAt, wear").toBe(ORIGINAL.steps);
-   }, 20_000); // 200 matches stepped and reloaded minute by minute: ~3 s alone, past the 5 s default under full-suite load
+  }, 20_000); // 200 matches stepped and reloaded minute by minute: ~3 s alone, past the 5 s default under full-suite load
 
   it("an old saved state (legacy timing, no new fields) resumes with the identical stream, cosmetics included", () => {
     expect(Object.keys(match(1000))).toEqual(["v", "fx", "seed", "rc", "seq", "timing", "teams", "phase", "minute", "nextAt", "score", "so", "stats", "possMin", "ball", "bs", "counter", "pending", "danger", "winner", "by", "finishedAt"]);

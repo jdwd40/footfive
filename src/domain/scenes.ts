@@ -805,11 +805,6 @@ function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnTyp
 }
 
 /**
- * Sample keyframes at t ∈ [0,1]. #106: motion only slows where it really stops — into a hold (repeated keyframe) or the
- * path's end — and only builds up out of a hold; through a moving keyframe it keeps its speed, so nobody pauses before a pass,
- * shot or run. A path builds up from its first keyframe, where the previous scene left everyone.
- */
-/**
  * #215: a cosmetic half-chance's answer. `e.side` defends, `from` is where the delivery left the ball (the cross's drop, the heavy
  * ball's spot, the runner) and `ball` is where the defending side ends up with it: the "own" actor has it from three quarters of the
  * way through. Headed clear: a defender meets the cross first and heads it out to a team-mate. Too heavy: it runs on past the runner
@@ -874,6 +869,11 @@ function clearanceScene(e: MatchEvent, base: ReturnType<typeof head>, from: Pt, 
   };
 }
 
+/**
+ * Sample keyframes at t ∈ [0,1]. #106: motion only slows where it really stops — into a hold (repeated keyframe) or the
+ * path's end — and only builds up out of a hold; through a moving keyframe it keeps its speed, so nobody pauses before a pass,
+ * shot or run. A path builds up from its first keyframe, where the previous scene left everyone.
+ */
 export function sample(path: Pt[], t: number): Pt {
   if (path.length === 1) return path[0];
   const seg = path.length - 1;
