@@ -449,6 +449,7 @@ function snapshot(st, clk) {
     pos: pos,
     x: [statArr(st.stats.home), statArr(st.stats.away)],
     d: st.danger ? 1 : 0,
+    cs: [st.teams.home.stance, st.teams.away.stance], // #228: only stances already applied at this published row
     win: st.winner,
     by: st.by,
   };
@@ -535,46 +536,66 @@ function aiStance(st, side) {
 var MODEL_MINUTES = [0, 60, 120]; // linear interpolation between them is within 0.2% of the per-minute rates
 
 /**
- * #219: the kickoff odds model. `lh`/`la` are goalRates at the teams' kickoff stances and fitness (as before; pre-#219
- * consumers and the round-first market read only these). `r` holds per-minute [home, away] rates for every game state the AI
- * policy and urgency produce, at each of the minutes in `k` (players tire, which narrows the gap between strong and weak
- * sides as the match goes on), flattened as [h, a] per minute of `k`; `at` gives the minutes the states start. odds.js walks
- * the remaining minutes through them. A side that is not AI-run keeps its kickoff stance in every state (its manager's later
- * choices are not known), but urgency still applies. Rates are rounded to 1e-6 as pairModel always did.
+ * Kickoff odds model. The six score/urgency states retain #219's AI policy and wear sampling.
+ * #228: manager-run sides also get every possible current stance index (`v`) into deduplicated tables (`vr`); public
+ * snapshots select the table in odds.js.
+ * No future manager command enters the model. `cs` is the kickoff fallback and `ai` distinguishes automatic stance policy.
  */
 function inPlayModel(st) {
   var H = st.teams.home;
   var A = st.teams.away;
-  var r6 = function (x) {
-    return Math.round(x * 1e6) / 1e6;
-  };
+  var r6 = function (x) { return Math.round(x * 1e6) / 1e6; };
   var save = { home: meanSave(st, "home"), away: meanSave(st, "away") };
   var states = {
-    n: ["kick", "kick", false, false], // no urgency, kickoff stances
-    hT: ["attack", "balanced", true, false], // home trailing late (by 2+, or by 1 before `protect`)
-    hT1: ["attack", "defend", true, false], // home trailing by 1 from `protect`: away sits deep
+    n: ["kick", "kick", false, false],
+    hT: ["attack", "balanced", true, false],
+    hT1: ["attack", "defend", true, false],
     aT: ["balanced", "attack", false, true],
     aT1: ["defend", "attack", false, true],
-    L: ["attack", "attack", false, false], // level from `settle` (extra time)
+    L: ["attack", "attack", false, false],
   };
-  var r = {};
-  for (var key in states) r[key] = [];
-  for (var i = 0; i < MODEL_MINUTES.length; i++) {
-    var S = wornStrengths(st, MODEL_MINUTES[i]);
-    for (var k2 in states) {
-      var d = states[k2];
-      var stance = d[0] === "kick" ? { home: H.stance, away: A.stance } : { home: H.ai ? d[0] : H.stance, away: A.ai ? d[1] : A.stance };
-      var g = ratesFrom(S, save, stance, { home: d[2], away: d[3] });
-      r[k2].push(r6(g.home), r6(g.away));
+  var strengths = [];
+  for (var i = 0; i < MODEL_MINUTES.length; i++) strengths.push(wornStrengths(st, MODEL_MINUTES[i]));
+  function table(home, away) {
+    var r = {};
+    for (var key in states) r[key] = [];
+    for (var j = 0; j < MODEL_MINUTES.length; j++) {
+      for (var key2 in states) {
+        var d = states[key2];
+        var stance = d[0] === "kick" ? { home: home, away: away } : { home: H.ai ? d[0] : home, away: A.ai ? d[1] : away };
+        var g = ratesFrom(strengths[j], save, stance, { home: d[2], away: d[3] });
+        r[key2].push(r6(g.home), r6(g.away));
+      }
+    }
+    return r;
+  }
+  var r = table(H.stance, A.stance);
+  var model = {
+    lh: r.n[0], la: r.n[1],
+    at: { chase: AI.chase, protect: AI.protect, settle: AI.settle },
+    k: MODEL_MINUTES.slice(), r: r,
+  };
+  if (!H.ai || !A.ai) {
+    model.cs = [H.stance, A.stance];
+    model.ai = [H.ai, A.ai];
+    model.v = {};
+    model.vr = [];
+    var unique = {};
+    var hs = H.ai ? [H.stance] : ["balanced", "attack", "defend"];
+    var as = A.ai ? [A.stance] : ["balanced", "attack", "defend"];
+    for (var h = 0; h < hs.length; h++) for (var a = 0; a < as.length; a++) {
+      var key3 = hs[h] + ":" + as[a];
+      var vr = hs[h] === H.stance && as[a] === A.stance ? r : table(hs[h], as[a]);
+      // Only tempo sums affect these rates; equal tables share one JSON payload (nine manual combinations need five).
+      var encoded = JSON.stringify(vr);
+      if (!Object.prototype.hasOwnProperty.call(unique, encoded)) {
+        unique[encoded] = model.vr.length;
+        model.vr.push(vr);
+      }
+      model.v[key3] = unique[encoded];
     }
   }
-  return {
-    lh: r.n[0],
-    la: r.n[1],
-    at: { chase: AI.chase, protect: AI.protect, settle: AI.settle }, // urgency starts with the chase (balance.js urgencyMinute)
-    k: MODEL_MINUTES.slice(),
-    r: r,
-  };
+  return model;
 }
 
 function wear(st) {

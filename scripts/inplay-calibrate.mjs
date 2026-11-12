@@ -1,5 +1,5 @@
 // In-play odds calibration (#219): do the prices the app shows during a match match what then happens?
-// Usage: node scripts/inplay-calibrate.mjs [matches=4800] [--prefix cal[,alt,zz]] [--minutes 60,75,85] [--root DIR] [--legacy] [--json]
+// Usage: node scripts/inplay-calibrate.mjs [matches=4800] [--prefix cal[,alt,zz]] [--minutes 60,75,85] [--root DIR] [--legacy] [--json] [--manager-policy ai-mirror|always-attack|defend-then-attack] [--manager-side home|away|both]
 // (a comma-separated --prefix pools that many sets of `matches`, e.g. 3 × 4,800 = 14,400 matches; about 2 minutes per 4,800)
 //
 // Fixtures are engine-calibrate's `--pairs all` set: match i is seeded hashSeed(prefix + i), the 240 ordered pairings of the
@@ -10,10 +10,11 @@
 // - if markets are suspended then (st.d: an attack, shot or penalty in progress), the first later event that reopens them,
 //   at its own clock minute. That is the first price a bettor could take. Matches already over are skipped.
 // Prices come from the real code path: markets.fixtureMarkets with the kickoff model worldService.pairModel builds
-// (matchEngine.inPlayModel; a tree without it gets the legacy { lh, la } goalRates model). The probability behind each
-// selection is read from odds.finalDist / odds.nextGoal, the functions fixtureMarkets prices from, and every offered price
-// is checked against it (okP), so a mismatch fails the run. `--legacy` prices the same matches with the constant-rate
-// model ({ lh, la } only): what a match in flight at the #219 deploy gets. `--root` runs another tree (e.g. the #218 head).
+// (matchEngine.inPlayModel; a tree without it gets the legacy { lh, la } goalRates model). Every offered price is checked
+// exactly against odds.marketProbs and okP; a catalogue mismatch aborts. Probabilities are also compared independently with
+// odds.finalDist / odds.nextGoal at a 1e-7 absolute target. Reference violations are reported and cause exit 1 after finishing
+// the fixed sample. ROI always uses actual offered prices. `--legacy` prices the same matches with the constant-rate model
+// ({ lh, la } only): what a match in flight at the #219 deploy gets. `--root` runs another tree (e.g. the #218 head).
 //
 // Buckets: snapshot minute × score state from the leader's side (level, lead by 1, lead by 2+). For each market selection
 // the table compares the mean model probability with the observed frequency (pp = percentage points; se = binomial standard
@@ -24,9 +25,15 @@
 // underdog's chance to qualify <15%, 15–25%, 25–50%, × its score state: winner and next goal); "pre-match" (the winner price
 // before kick-off by the underdog's chance, <15% … 45–50%, checked against the offered catalogue too). The summary also gives
 // the underdog's pre-match ROI for the <15% class and the in-play strength cells' worst ROI.
+// #228 manager scenarios hold the published stance until the next policy command. Policies are not passed to odds:
+// ai-mirror uses the score at the start of each minute (70/78/100 thresholds), always-attack starts balanced and commands
+// Attack for minute 1, defend-then-attack starts Defend and commands Attack for minute 1. --manager-side defaults to home;
+// both exercises two managers simultaneously. Commands use the engine's queueStance boundary; they do not alter engine rules.
+// ROI SE uses whole-match clusters; exact (offered) cells retain every offered score (+goals from the leader's side).
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { snapshotAtMinute, openPublishedSnapshot } from "./lib/published-snapshot.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -39,6 +46,11 @@ const MINUTES = flag("minutes", "60,75,85").split(",").map(Number);
 const ROOT = path.resolve(flag("root", path.join(path.dirname(fileURLToPath(import.meta.url)), "..")));
 const LEGACY = args.includes("--legacy");
 const JSON_OUT = args.includes("--json");
+const MANAGER_POLICY = flag("manager-policy", null);
+const MANAGER_SIDE = flag("manager-side", "home");
+if (MANAGER_POLICY && !["ai-mirror", "always-attack", "defend-then-attack"].includes(MANAGER_POLICY)) throw new Error("Unknown --manager-policy");
+if (!["home", "away", "both"].includes(MANAGER_SIDE)) throw new Error("--manager-side must be home, away or both");
+const managerSides = !MANAGER_POLICY ? [] : MANAGER_SIDE === "both" ? ["home", "away"] : [MANAGER_SIDE];
 const require = createRequire(path.join(ROOT, "package.json"));
 const lib = (f) => require(path.join(ROOT, "pocketbase/pb_hooks/lib", f));
 const eng = lib("matchEngine.js");
@@ -57,67 +69,88 @@ const pairModel = (h, a) => {
   const r = eng.goalRates(st);
   return { lh: Math.round(r.home * 1e6) / 1e6, la: Math.round(r.away * 1e6) / 1e6 };
 };
+const modelCache = new Map();
 const GOALS = new Set(["goal", "penalty_goal"]);
-
-/** Index of the event whose published state the app shows when the clock reaches minute M, and the time. */
-function snapshotAt(ev, M) {
-  for (let i = 0; i < ev.length; i++) {
-    const e = ev[i];
-    const c = e.st && e.st.clk;
-    if (!c) continue;
-    if (c.s >= M * 60) return { i, t: e.at }; // published at or after M:00 (a stopped clock, or the minute's first event)
-    const nextAt = i + 1 < ev.length ? ev[i + 1].at : Infinity;
-    if (c.run && odds.clockMinute(c, e.at, nextAt, MINUTE_MS) >= M) return { i, t: e.at + ((M * 60 - c.s) / 60) * MINUTE_MS };
+function play(st) {
+  if (!MANAGER_POLICY) return eng.advanceTo(st, Infinity);
+  const ev = [];
+  let steps = 0;
+  while (st.phase !== "finished") {
+    if (++steps > 1000) throw new Error("Manager scenario failed to finish");
+    for (const side of managerSides) {
+      const mine = st.score[side === "home" ? 0 : 1], theirs = st.score[side === "home" ? 1 : 0];
+      const minute = st.minute + 1;
+      const stance = MANAGER_POLICY !== "ai-mirror" ? "attack"
+        : minute >= 70 && mine < theirs ? "attack"
+          : minute >= 100 && mine === theirs ? "attack"
+            : minute >= 78 && mine === theirs + 1 ? "defend" : "balanced";
+      if (st.teams[side].stance !== stance) eng.queueStance(st, side, stance);
+    }
+    ev.push(...eng.advanceTo(st, st.nextAt));
   }
-  return null;
+  return ev;
 }
 
-const buckets = new Map(); // key -> { n, p, hit, ret, retN }
+// Shared-timestamp rows are canonicalized to the final published sequence before pricing, as lastPublished does.
+const snapshotAt = (ev, minute) => snapshotAtMinute(ev, minute, odds.clockMinute, MINUTE_MS);
+
+const buckets = new Map(); // key -> probability sums and offered payout sums
+let matchReturns; // one cluster per simulated match, including multiple selections in an exact-score cell
 const add = (key, p, hit, o) => {
   let b = buckets.get(key);
-  if (!b) buckets.set(key, (b = { n: 0, p: 0, hit: 0, ret: 0, retN: 0 }));
+  if (!b) buckets.set(key, (b = { n: 0, p: 0, hit: 0, ret: 0, retN: 0, clusterNN: 0, clusterRR: 0, clusterNR: 0 }));
   b.n++;
   b.p += p;
   b.hit += hit ? 1 : 0;
   if (o) {
     b.retN++;
-    b.ret += hit ? o : 0;
+    const payout = hit ? o : 0;
+    b.ret += payout;
+    const r = matchReturns.get(key) || { n: 0, ret: 0 };
+    r.n++;
+    r.ret += payout;
+    matchReturns.set(key, r);
   }
 };
-let snaps = 0, skippedSuspended = 0, skippedOver = 0, priceChecks = 0, roundingBoundary = 0;
+let snaps = 0, skippedSuspended = 0, skippedOver = 0, priceChecks = 0, roundingBoundary = 0, maxReferenceProbabilityDelta = 0, maxReferenceRelativeDelta = 0, maxOfferedReferenceRelativeDelta = 0, zeroReferencePositiveFastCount = 0;
+const referenceViolations = [];
+let referenceViolationCount = 0;
 const favNext = new Map(); // minute -> { n, ret } for "next goal: the pre-match favourite"
 const favNextFrom70 = { n: 0, ret: 0 };
 
 for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
   const [a, b] = pairing(i);
+  matchReturns = new Map();
   const H = team(a), A = team(b);
-  const model = pairModel(H, A);
+  for (const side of managerSides) {
+    const t = side === "home" ? H : A;
+    t.ai = false;
+    t.stance = MANAGER_POLICY === "defend-then-attack" ? "defend" : "balanced";
+  }
+  const modelKey = a.slug + ":" + b.slug;
+  if (!modelCache.has(modelKey)) modelCache.set(modelKey, pairModel(H, A));
+  const model = modelCache.get(modelKey);
   const st = eng.createMatch({ fixtureId: "c" + i, seed: eng.hashSeed(PREFIX + i), kickoffAt: 0, timing: eng.buildTiming(MINUTE_MS, 1), home: H, away: A });
-  const ev = eng.advanceTo(st, Infinity).filter((e) => !e.cos); // cosmetic rows carry the last real snapshot: nothing to price
+  const ev = play(st).filter((e) => !e.cos); // cosmetic rows carry the last real snapshot: nothing to price
   const final = { sh: st.score[0], sa: st.score[1], winner: st.winner };
   const q0 = odds.pairQualify(model);
   const fav = q0 >= 0.5 ? "home" : "away";
   const dogQ = Math.min(q0, 1 - q0); // the pre-match underdog's chance to qualify
   const strength = dogQ < 0.15 ? "dog<15%" : dogQ < 0.25 ? "dog 15-25%" : "dog 25-50%";
   const fx = { id: "c" + i, status: "live", kickoffAt: 0, model, home: { id: "h", abbr: H.abbr, name: H.name }, away: { id: "a", abbr: A.abbr, name: A.name } };
-  const sample = (M, fromIdx, t0, record) => {
-    let idx = fromIdx;
-    let t = t0;
-    let skipped = false;
-    while (idx < ev.length && ev[idx].st.d) {
-      idx++;
-      skipped = true;
-      if (idx < ev.length) t = ev[idx].at;
-    }
-    if (idx >= ev.length) return null;
+  const sample = (M, t0, record) => {
+    const pub = openPublishedSnapshot(ev, t0);
+    if (!pub) return null;
+    const { i: idx, t } = pub;
     const e = ev[idx];
     if (e.st.ph === "finished" || e.st.ph === "shootout") return null;
-    if (skipped) skippedSuspended++;
+    if (pub.moved) skippedSuspended++;
     const minute = Math.floor(odds.clockMinute(e.st.clk, e.at, t, MINUTE_MS));
     const cat = mkt.fixtureMarkets(fx, e.st, minute, t);
     if (cat.state.closed) throw new Error(`match ${i} at ${M}': markets closed (${cat.state.closed})`);
     const fd = odds.finalDist(model, e.st, minute);
     const ng = odds.nextGoal(model, e.st, minute);
+    const fast = odds.marketProbs(model, e.st, minute);
     const ngNext = ev.find((x, k) => k > idx && GOALS.has(x.t));
     const nextSide = ngNext ? ngNext.side : "none";
     const sc = e.st.sc;
@@ -132,25 +165,33 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
       const s = m && m.sel.find((x) => x.id === id);
       return s ? s.odds : null;
     };
-    // The catalogue prices from the fast paths, the probabilities here from the reference walk; they agree within 1e-9, so a
-    // price may differ only where p sits on a rounding boundary of the 2-decimal price.
-    const check = (o, p) => {
+    // Verify the actual catalogue exactly against its fast-path probability first. Compare that probability with the
+    // independent reference walk separately against a 1e-7 absolute target. Extreme-score R=8 tail violations are
+    // reported and cause a nonzero exit after the full sample. ROI always uses actual offered odds.
+    const check = (o, p, fastP, label = "selection") => {
       priceChecks++;
-      if (o === mkt.okP(p, true)) return;
-      if (o === mkt.okP(p + 1e-9, true) || o === mkt.okP(p - 1e-9, true)) {
-        roundingBoundary++;
-        return;
+      if (o !== mkt.okP(fastP, true)) throw new Error(`match ${i} at ${M}' ${label}: catalogue/fast price mismatch`);
+      const delta = Math.abs(fastP - p);
+      maxReferenceProbabilityDelta = Math.max(maxReferenceProbabilityDelta, delta);
+      const relativeDelta = p > 0 ? delta / p : null;
+      if (relativeDelta !== null) {
+        maxReferenceRelativeDelta = Math.max(maxReferenceRelativeDelta, relativeDelta);
+        if (o) maxOfferedReferenceRelativeDelta = Math.max(maxOfferedReferenceRelativeDelta, relativeDelta);
+      } else if (fastP > 0) zeroReferencePositiveFastCount++;
+      if (delta > 1e-7) {
+        referenceViolationCount++;
+        if (referenceViolations.length < 20) referenceViolations.push({ prefix: PREFIX, match: i, snapshot: M, minute, selection: label, delta, referenceProbability: p, fastProbability: fastP, relativeDelta, offered: o, sc: e.st.sc, cs: e.st.cs });
       }
-      throw new Error(`match ${i} at ${M}': offered ${o}, model ${mkt.okP(p, true)}`);
+      if (o !== mkt.okP(p, true)) roundingBoundary++;
     };
     const q = { home: fd.qualifyHome, away: 1 - fd.qualifyHome };
     const B = `${M}' ${lead}`;
     for (const side of ["home", "away"]) {
-      check(sel("winner", side), q[side]);
+      check(sel("winner", side), q[side], side === "home" ? fast.qualifyHome : 1 - fast.qualifyHome, "winner " + side);
       add(`${B}|winner|${role(side)}`, q[side], final.winner === side, sel("winner", side));
     }
     for (const id of ["home", "away", "none"]) {
-      check(sel("next_goal", id), ng[id]);
+      check(sel("next_goal", id), ng[id], fast.next[id], "next_goal " + id);
       add(`${B}|next_goal|${role(id)}`, ng[id], nextSide === id, sel("next_goal", id));
     }
     const margin = (side, n) => Object.entries(fd.dist).reduce((s, [k, p]) => {
@@ -160,7 +201,7 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
     for (const side of [L, T]) {
       for (const n of [1, 2, 3]) {
         const p = margin(side, n);
-        check(sel("margin", side + n), p);
+        check(sel("margin", side + n), p, fast.margin[side + n], "margin " + side + n);
         const won = (side === "home" ? final.sh - final.sa : final.sa - final.sh) === n;
         add(`${B}|margin|${role(side)} by ${n}`, p, won, sel("margin", side + n));
       }
@@ -176,7 +217,16 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
       const g = gl + gt <= 2 ? `+${gl}-${gt}` : "other";
       groups[g] = (groups[g] || 0) + p;
     }
-    for (const s of cat.markets.find((m) => m.key === "exact").sel) check(s.odds, fd.dist[s.id] || 0);
+    for (const s of cat.markets.find((m) => m.key === "exact").sel) {
+      const p = fd.dist[s.id] || 0;
+      check(s.odds, p, fast.exact[s.id] || 0, "exact " + s.id);
+      if (MANAGER_POLICY) {
+        const [x, y] = s.id.split("-").map(Number);
+        const gl = L === "home" ? x - sc[0] : y - sc[1];
+        const gt = L === "home" ? y - sc[1] : x - sc[0];
+        add(`${B}|exact (offered)|+${gl}-${gt}`, p, final.sh === x && final.sa === y, s.odds);
+      }
+    }
     const gotGroup = gotL + gotT <= 2 ? `+${gotL}-${gotT}` : "other";
     for (const g of ["+0-0", "+1-0", "+0-1", "+1-1", "+2-0", "+0-2", "other"]) add(`${B}|exact|${g}`, groups[g] || 0, gotGroup === g, null);
     // The same markets from the pre-match favourite's side (fav = higher pairQualify), by its score state.
@@ -219,7 +269,7 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
       skippedOver++;
       continue;
     }
-    sample(M, s.i, s.t, (o, won) => {
+    sample(M, s.t, (o, won) => {
       const r = favNext.get(M) || { n: 0, ret: 0 };
       r.n++;
       r.ret += won ? o : 0;
@@ -230,12 +280,10 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
   for (let M = 70; M < 90; M++) {
     const s = snapshotAt(ev, M);
     if (!s || ev[s.i].st.ph === "finished") continue;
-    const idx = s.i;
-    let k = idx;
-    while (k < ev.length && ev[k].st.d) k++;
-    if (k >= ev.length || ev[k].st.ph === "finished") continue;
+    const pub = openPublishedSnapshot(ev, s.t);
+    if (!pub || ev[pub.i].st.ph === "finished" || ev[pub.i].st.ph === "shootout") continue;
+    const { i: k, t } = pub;
     const e = ev[k];
-    const t = k === idx ? s.t : e.at;
     const minute = Math.floor(odds.clockMinute(e.st.clk, e.at, t, MINUTE_MS));
     const o = mkt.okP(odds.nextGoal(model, e.st, minute)[fav], true); // the next-goal price fixtureMarkets offers (checked above)
     if (!o) continue;
@@ -243,6 +291,13 @@ for (const PREFIX of PREFIXES) for (let i = 0; i < N; i++) {
     favNextFrom70.n++;
     favNextFrom70.ret += g && g.side === fav ? o : 0;
   }
+  for (const [key, r] of matchReturns) {
+    const b = buckets.get(key);
+    b.clusterNN += r.n * r.n;
+    b.clusterRR += r.ret * r.ret;
+    b.clusterNR += r.n * r.ret;
+  }
+  if ((i + 1) % 2400 === 0) process.stderr.write(`${MANAGER_POLICY || "AI"}/${MANAGER_SIDE} ${PREFIX}: ${i + 1}/${N}\n`);
 }
 
 const rows = [...buckets.entries()].map(([key, b]) => {
@@ -250,7 +305,11 @@ const rows = [...buckets.entries()].map(([key, b]) => {
   const model = b.p / b.n;
   const obs = b.hit / b.n;
   const se = Math.sqrt(Math.max(obs * (1 - obs), 1e-4) / b.n);
-  return { bucket, market, selection, n: b.n, model: +(100 * model).toFixed(1), observed: +(100 * obs).toFixed(1), diffPp: +(100 * (model - obs)).toFixed(1), sePp: +(100 * se).toFixed(1), roi: b.retN ? +(b.ret / b.retN - 1).toFixed(3) : null, offered: b.retN };
+  const payoutMean = b.retN ? b.ret / b.retN : null;
+  const clusters = N * PREFIXES.length;
+  const roiSe = payoutMean === null ? null : Math.sqrt(Math.max(0,
+    (b.clusterRR - 2 * payoutMean * b.clusterNR + payoutMean * payoutMean * b.clusterNN) * clusters / Math.max(1, clusters - 1))) / b.retN;
+  return { bucket, market, selection, n: b.n, model: +(100 * model).toFixed(1), observed: +(100 * obs).toFixed(1), diffPp: +(100 * (model - obs)).toFixed(1), sePp: +(100 * se).toFixed(1), roi: b.retN ? +(b.ret / b.retN - 1).toFixed(3) : null, offered: b.retN, roiClusterSe: roiSe === null ? null : +roiSe.toFixed(5) };
 });
 const MIN_N = 200;
 const judged = rows.filter((r) => r.n >= MIN_N);
@@ -261,14 +320,26 @@ const summary = {
   model: eng.inPlayModel && !LEGACY ? "staged (inPlayModel)" : "legacy constant rate",
   matches: N * PREFIXES.length,
   prefix: PREFIXES.join(","),
+  managerPolicy: MANAGER_POLICY,
+  managerSides,
+  roiUncertainty: "whole-match cluster standard error (fractional ROI)",
   snapshots: snaps,
   snapshotsMovedPastSuspension: skippedSuspended,
   snapshotsAfterTheEnd: skippedOver,
   priceChecks,
   priceChecksOnARoundingBoundary: roundingBoundary,
+  maxReferenceProbabilityDelta,
+  maxReferenceRelativeDelta,
+  maxOfferedReferenceRelativeDelta,
+  zeroReferencePositiveFastCount,
+  relativeDeltaDefinition: "absolute delta / nonzero reference probability; offered maximum excludes withdrawn selections",
+  referenceProbabilityTolerance: 1e-7,
+  referenceViolationCount,
+  firstReferenceViolations: referenceViolations,
   cellsJudged: judged.length,
   minCell: MIN_N,
   cellsOutside3pp: outside.length,
+  positiveOfferedCells: rows.filter((r) => r.roi > 0).map((r) => ({ bucket: r.bucket, market: r.market, selection: r.selection, offered: r.offered, roi: r.roi, roiClusterSe: r.roiClusterSe })),
   worst: worst.bucket ? `${worst.bucket} ${worst.market} ${worst.selection}: model ${worst.model}% vs ${worst.observed}% (n ${worst.n}, se ${worst.sePp})` : null,
   nextGoalFavourite: Object.fromEntries([...favNext.entries()].map(([m, r]) => [m + "'", { n: r.n, roi: +(r.ret / r.n - 1).toFixed(3) }])),
   nextGoalFavouriteFrom70: { n: favNextFrom70.n, roi: +(favNextFrom70.ret / Math.max(1, favNextFrom70.n) - 1).toFixed(3) },
@@ -277,7 +348,10 @@ const summary = {
 if (JSON_OUT) console.log(JSON.stringify({ summary, rows }, null, 1));
 else {
   console.log(JSON.stringify(summary, null, 1));
-  console.log("\n| Minute, score | Market | Selection | n | Model % | Observed % | Diff pp | SE pp | ROI |");
-  console.log("|---|---|---|---:|---:|---:|---:|---:|---:|");
-  for (const r of rows) console.log(`| ${r.bucket} | ${r.market} | ${r.selection} | ${r.n} | ${r.model} | ${r.observed} | ${r.diffPp > 0 ? "+" : ""}${r.diffPp}${r.n >= MIN_N && Math.abs(r.diffPp) > 3 ? " **" : ""} | ${r.sePp} | ${r.roi === null ? "" : (r.roi * 100).toFixed(1) + "%"} |`);
+  console.log("\n| Minute, score | Market | Selection | n | Model % | Observed % | Diff pp | SE pp | ROI | ROI SE pp |");
+  console.log("|---|---|---|---:|---:|---:|---:|---:|---:|---:|");
+  for (const r of rows) console.log(`| ${r.bucket} | ${r.market} | ${r.selection} | ${r.n} | ${r.model} | ${r.observed} | ${r.diffPp > 0 ? "+" : ""}${r.diffPp}${r.n >= MIN_N && Math.abs(r.diffPp) > 3 ? " **" : ""} | ${r.sePp} | ${r.roi === null ? "" : (r.roi * 100).toFixed(1) + "%"} | ${r.roiClusterSe === null ? "" : (r.roiClusterSe * 100).toFixed(2)} |`);
 }
+
+// Finish the fixed sample before failing the reference gate, so numerical limitations do not hide ROI evidence.
+if (referenceViolationCount) process.exitCode = 1;
