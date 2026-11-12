@@ -272,23 +272,35 @@ function homePossession(st, counter, urg) {
   return clamp(p, 0.25, 0.75);
 }
 
-/** #219: the expected attack rating of `side`'s shooter, picked as attacker() picks him (weight attack + 10). Was a fixed 72. */
-function shooterAttack(st, side) {
-  var list = outfield(st, side);
-  var w = 0;
-  var sum = 0;
-  for (var i = 0; i < list.length; i++) {
-    var a = list[i].attack || 50;
-    w += a + 10;
-    sum += a * (a + 10);
-  }
-  return w ? sum / w : 72;
+/**
+ * #219: the save chances `defSide`'s keeper has against the other side's shooters, weighted as attacker() picks them (attack
+ * + 10): [{ w, s }]. The odds model averages over them; a single save chance at the mean shooter would ignore saveChance's
+ * clamps, which bind for a weak keeper against strong shooters and a strong keeper against weak ones (#219 review F1).
+ */
+function saveMix(st, defSide) {
+  var list = outfield(st, OTHER[defSide]);
+  var tot = 0;
+  var out = [];
+  for (var i = 0; i < list.length; i++) tot += (list[i].attack || 50) + 10;
+  for (var j = 0; j < list.length; j++) out.push({ w: ((list[j].attack || 50) + 10) / tot, s: saveChance(st, list[j], defSide) });
+  return out;
 }
 
-/** homePossession from `me`'s side, computed in the same order, so goalRates is mirror-exact. */
-function possession(st, me, counter, urg) {
-  var a = strength(st, me);
-  var b = strength(st, OTHER[me]);
+/**
+ * The mean of saveMix's save chances. An attack's chances (attackFlat) are linear in the save chance over saveChance's whole range
+ * (0.3–0.8: their own clamps never bind there), so at this mean they equal the average over the shooters.
+ */
+function meanSave(st, defSide) {
+  var mix = saveMix(st, defSide);
+  var s = 0;
+  for (var i = 0; i < mix.length; i++) s += mix[i].w * mix[i].s;
+  return s;
+}
+
+/** homePossession from `me`'s side, from the strengths `S` ({ home, away }), so goalRates is mirror-exact. */
+function possessionFrom(S, me, counter, urg) {
+  var a = S[me];
+  var b = S[OTHER[me]];
   var p = 0.5 + ((a.atk + a.def) / 2 - (b.atk + b.def) / 2) * M.possK;
   if (counter === me) p += 0.15;
   if (counter === OTHER[me]) p -= 0.15;
@@ -297,90 +309,112 @@ function possession(st, me, counter, urg) {
   return clamp(p, 0.25, 0.75);
 }
 
-/** #219: chance that a rebound (second) shot scores, and that it leaves the ball with the defenders for a counter. */
-function reboundModel(c, save) {
-  var on = (1 - M.blockRate) * c.pOn * M.reboundOn;
-  var sv = clamp(save - M.reboundSaveDrop, 0.2, 0.8);
-  return { goal: on * (1 - sv), counter: on * sv * 0.3 };
-}
-
 /**
- * One attack's chances of a goal and of handing the defenders a counter (st.counter), as attack() plays it: a penalty, a shot
- * (blocked, on target, wide or the woodwork; a long shot is saved more often) with its #219 rebound off a parried save or a
- * block, or a tackle / interception.
+ * #219: both sides' strengths after `k` more minutes of wear (energy and condition drain, as wear() applies them each
+ * minute), without touching the match state. k = 0: the strengths now.
  */
-function attackModel(c, save, ctr) {
-  var sv = clamp(save + (ctr ? 0 : M.longShotRate * M.longShotSaveBonus), 0, 0.95); // a counter never shoots from range
-  var rb = reboundModel(c, save);
-  var on = (1 - M.blockRate) * c.pOn;
-  var rebShots = on * sv * M.reboundSave + M.blockRate * M.reboundBlock;
-  var shotGoal = on * (1 - sv) + rebShots * rb.goal;
-  var shotCounter = on * sv * (1 - M.reboundSave) * 0.3 + rebShots * rb.counter;
-  return {
-    goal: c.pPen * M.penScore + (1 - c.pPen) * c.pShot * shotGoal,
-    counter: c.pPen * (1 - M.penScore) + (1 - c.pPen) * ((1 - c.pShot) + c.pShot * shotCounter),
-  };
+function wornStrengths(st, k) {
+  var out = {};
+  ["home", "away"].forEach(function (side) {
+    var t = st.teams[side];
+    var list = active(st, side).map(function (p) {
+      var q = {};
+      for (var key in p) q[key] = p[key];
+      if (k > 0) {
+        var im = BALANCE.intensity[p.intensity] || BALANCE.intensity.balanced;
+        q.energy = clamp(p.energy - k * BALANCE.energyDrainPerMinute * (im.energyUse || 1), 0, 100);
+        q.condition = clamp(p.condition - k * BALANCE.conditionWearPerMinute * (im.condition || 1), 0, 100);
+      }
+      return q;
+    });
+    var eff = effectiveTeamStrength(list, { grade: t.grade, overclock: t.oc });
+    var numbers = Math.pow(Math.max(list.length, 1) / 5, 0.8);
+    out[side] = { atk: eff.attack * numbers, def: eff.defence * numbers };
+  });
+  return out;
 }
 
 /**
  * Expected goals per match minute for each side — the odds model uses this. `sit` (#219, optional): { stance: { home, away },
- * urg: { home, away } } plays the match in that game state (the stances the teams would take, who is trailing late);
- * without it, the teams' current stances and no urgency. Counters are a Markov chain over the flag a minute starts with
- * (st.counter: none / home / away), solved for its stationary mix (sideRate), so possession swings, counter-attacks and the counter risk
- * of a committed side are all priced in. A minute holds at most one attack, so these are also per-minute goal probabilities.
+ * urg: { home, away }, minute } plays the match in that game state (the stances the teams would take, who is trailing late)
+ * after `minute` more minutes of wear; without it, the teams' current stances, no urgency and no further wear. Counters are a
+ * Markov chain over the flag a minute starts with (st.counter: none / home / away), solved exactly for its stationary mix
+ * (sideRate), so possession swings, counter-attacks and the counter risk of a committed side are all priced in. A minute holds
+ * at most one attack, so these are also per-minute goal probabilities.
  */
 function goalRates(st, sit) {
-  var saved = { home: st.teams.home.stance, away: st.teams.away.stance };
-  if (sit && sit.stance) {
-    st.teams.home.stance = sit.stance.home;
-    st.teams.away.stance = sit.stance.away;
-  }
-  var urg = (sit && sit.urg) || { home: false, away: false };
-  var per = {};
-  ["home", "away"].forEach(function (side) {
-    var c = chanceModel(st, side, urg[side]);
-    var save = saveChance(st, { attack: shooterAttack(st, side) }, OTHER[side]);
-    var n = attackModel(c, save);
-    var k = attackModel(counterModel(c), save, true);
-    var plain = { goal: c.pSeq * n.goal, counter: c.pSeq * n.counter + (1 - c.pSeq) * 0.4 }; // midfield(): a tackle 40% of the time
-    var kc = counterChance(urg[OTHER[side]]);
-    per[side] = {
-      plain: plain,
-      ctr: { goal: kc * k.goal + (1 - kc) * plain.goal, counter: kc * k.counter + (1 - kc) * plain.counter },
-    };
-  });
-  st.teams.home.stance = saved.home;
-  st.teams.away.stance = saved.away;
-  return { home: sideRate(st, "home", per, urg), away: sideRate(st, "away", per, urg) };
+  var S = wornStrengths(st, (sit && sit.minute) || 0);
+  var save = { home: meanSave(st, "home"), away: meanSave(st, "away") };
+  var stance = (sit && sit.stance) || { home: st.teams.home.stance, away: st.teams.away.stance };
+  return ratesFrom(S, save, stance, (sit && sit.urg) || { home: false, away: false });
+}
+
+/**
+ * One attack's chances, as attack() plays it (flat: the odds model runs this in PocketBase's VM, where objects and calls
+ * are costly): P(goal) into out[o], P(the defenders win it and can counter) into out[o + 1].
+ */
+function attackFlat(pShot, pOn, pPen, save, ctr, out, o) {
+  var sv = clamp(save + (ctr ? 0 : M.longShotRate * M.longShotSaveBonus), 0, 0.95);
+  var rbOn = (1 - M.blockRate) * pOn * M.reboundOn;
+  var rbSv = clamp(save - M.reboundSaveDrop, 0.2, 0.8);
+  var on = (1 - M.blockRate) * pOn;
+  var rebShots = on * sv * M.reboundSave + M.blockRate * M.reboundBlock;
+  var shotGoal = on * (1 - sv) + rebShots * (rbOn * (1 - rbSv));
+  var shotCounter = on * sv * (1 - M.reboundSave) * 0.3 + rebShots * (rbOn * rbSv * 0.3);
+  out[o] = pPen * M.penScore + (1 - pPen) * pShot * shotGoal;
+  out[o + 1] = pPen * (1 - M.penScore) + (1 - pPen) * (1 - pShot + pShot * shotCounter);
+}
+
+/**
+ * Per-minute figures for `side` in possession: [plain goal, plain counter-to-them, goal and counter when it won the ball
+ * last minute]. A plain minute is an attack (pSeq) or midfield (a tackle 40% of the time); a minute after winning the ball
+ * breaks with counterChance, else plays as a plain one.
+ */
+function sideFigures(S, side, tp, urg, save) {
+  var e = S[side].atk - S[OTHER[side]].def + M.edgeOffset + tp;
+  var pSeq = clamp(M.seqBase * Math.exp(M.seqK * e), 0.08, 0.6) * (urg[side] ? M.urgencySeq : 1);
+  var pShot = clamp(M.shotBase * Math.exp(M.shotK * e), 0.2, 0.85);
+  var pOn = clamp(M.onTargetBase * Math.exp(M.onTargetK * e), 0.25, 0.75);
+  var pPen = clamp(M.penBase + M.penK * Math.max(0, e), 0, 0.05);
+  var f = [0, 0, 0, 0];
+  attackFlat(pShot, pOn, pPen, save, false, f, 0);
+  attackFlat(clamp(pShot * M.counterShot, 0.2, 0.9), pOn, pPen, save, true, f, 2);
+  var plainGoal = pSeq * f[0];
+  var plainCounter = pSeq * f[1] + (1 - pSeq) * 0.4;
+  var kc = counterChance(urg[OTHER[side]]);
+  return [plainGoal, plainCounter, kc * f[2] + (1 - kc) * plainGoal, kc * f[3] + (1 - kc) * plainCounter];
+}
+
+/** goalRates from cached strengths `S` and each keeper's mean save chance (`save[side]`: meanSave against the other side's shooters). */
+function ratesFrom(S, save, stance, urg) {
+  var tp = coachingMod(stance.home).tempo + coachingMod(stance.away).tempo;
+  var fh = sideFigures(S, "home", tp, urg, save.away);
+  var fa = sideFigures(S, "away", tp, urg, save.home);
+  return { home: sideRate(S, "home", fh, fa, urg), away: sideRate(S, "away", fa, fh, urg) };
 }
 
 /**
  * goalRates' counter chain from `me`'s side (so identical teams get bit-identical rates): the flag a minute starts with is
- * none, mine (I won the ball last minute) or theirs; solve for its stationary mix and sum my goals.
+ * none (0), mine (1: I won the ball last minute) or theirs (2). Its stationary mix is solved in closed form (the Markov chain
+ * tree theorem for three states) and my goals summed over it. `fm` / `ft`: sideFigures for me and them.
  */
-function sideRate(st, me, per, urg) {
+function sideRate(S, me, fm, ft, urg) {
   var them = OTHER[me];
-  var flags = [null, me, them];
-  var mine = flags.map(function (f) {
-    return possession(st, me, f, urg);
-  });
-  var pi = [1, 0, 0];
-  for (var it = 0; it < 200; it++) {
-    var nx = [0, 0, 0];
-    for (var i = 0; i < 3; i++) {
-      var a = flags[i] === me ? per[me].ctr : per[me].plain;
-      var b = flags[i] === them ? per[them].ctr : per[them].plain;
-      var toThem = mine[i] * a.counter; // I lose it
-      var toMe = (1 - mine[i]) * b.counter;
-      nx[0] += pi[i] * (1 - toThem - toMe);
-      nx[1] += pi[i] * toMe;
-      nx[2] += pi[i] * toThem;
-    }
-    pi = nx;
-  }
-  var out = 0;
-  for (var j = 0; j < 3; j++) out += pi[j] * mine[j] * (flags[j] === me ? per[me].ctr : per[me].plain).goal;
-  return out;
+  var m0 = possessionFrom(S, me, null, urg);
+  var m1 = possessionFrom(S, me, me, urg);
+  var m2 = possessionFrom(S, me, them, urg);
+  // From each flag: I lose it (to them), or they lose it (to me).
+  var toThem0 = m0 * fm[1], toMe0 = (1 - m0) * ft[1];
+  var toThem1 = m1 * fm[3], toMe1 = (1 - m1) * ft[1];
+  var toThem2 = m2 * fm[1], toMe2 = (1 - m2) * ft[3];
+  var T01 = toMe0, T02 = toThem0;
+  var T10 = 1 - toMe1 - toThem1, T12 = toThem1;
+  var T20 = 1 - toMe2 - toThem2, T21 = toMe2;
+  var w0 = T10 * T20 + T12 * T20 + T21 * T10;
+  var w1 = T01 * T21 + T02 * T21 + T20 * T01;
+  var w2 = T02 * T12 + T01 * T12 + T10 * T02;
+  var tot = w0 + w1 + w2;
+  return (w0 / tot) * m0 * fm[0] + (w1 / tot) * m1 * fm[2] + (w2 / tot) * m2 * fm[0];
 }
 
 // ---------------------------------------------------------------- emission
@@ -497,12 +531,16 @@ function aiStance(st, side) {
   return aiStanceFor(st.minute + 1, mine, theirs); // called before the minute starts
 }
 
+/** #219: minutes at which inPlayModel samples the rates (wear grows with the minute); odds.js interpolates between them. */
+var MODEL_MINUTES = [0, 60, 120]; // linear interpolation between them is within 0.2% of the per-minute rates
+
 /**
- * #219: the kickoff odds model. `lh`/`la` are goalRates at the teams' kickoff stances (as before; pre-#219 consumers and the
- * round-first market read only these). `s` holds the per-minute rates in each late game state the AI policy and urgency
- * produce, [home, away], with the minutes they start (`at`): odds.js walks the remaining minutes through them. A side that
- * is not AI-run keeps its kickoff stance in every state (its manager's later choices are not known), but urgency still
- * applies. Rates are rounded to 1e-6 as pairModel always did.
+ * #219: the kickoff odds model. `lh`/`la` are goalRates at the teams' kickoff stances and fitness (as before; pre-#219
+ * consumers and the round-first market read only these). `r` holds per-minute [home, away] rates for every game state the AI
+ * policy and urgency produce, at each of the minutes in `k` (players tire, which narrows the gap between strong and weak
+ * sides as the match goes on), flattened as [h, a] per minute of `k`; `at` gives the minutes the states start. odds.js walks
+ * the remaining minutes through them. A side that is not AI-run keeps its kickoff stance in every state (its manager's later
+ * choices are not known), but urgency still applies. Rates are rounded to 1e-6 as pairModel always did.
  */
 function inPlayModel(st) {
   var H = st.teams.home;
@@ -510,22 +548,32 @@ function inPlayModel(st) {
   var r6 = function (x) {
     return Math.round(x * 1e6) / 1e6;
   };
-  var pair = function (hs, as, uh, ua) {
-    var r = goalRates(st, { stance: { home: H.ai ? hs : H.stance, away: A.ai ? as : A.stance }, urg: { home: uh, away: ua } });
-    return [r6(r.home), r6(r.away)];
+  var save = { home: meanSave(st, "home"), away: meanSave(st, "away") };
+  var states = {
+    n: ["kick", "kick", false, false], // no urgency, kickoff stances
+    hT: ["attack", "balanced", true, false], // home trailing late (by 2+, or by 1 before `protect`)
+    hT1: ["attack", "defend", true, false], // home trailing by 1 from `protect`: away sits deep
+    aT: ["balanced", "attack", false, true],
+    aT1: ["defend", "attack", false, true],
+    L: ["attack", "attack", false, false], // level from `settle` (extra time)
   };
-  var base = goalRates(st);
+  var r = {};
+  for (var key in states) r[key] = [];
+  for (var i = 0; i < MODEL_MINUTES.length; i++) {
+    var S = wornStrengths(st, MODEL_MINUTES[i]);
+    for (var k2 in states) {
+      var d = states[k2];
+      var stance = d[0] === "kick" ? { home: H.stance, away: A.stance } : { home: H.ai ? d[0] : H.stance, away: A.ai ? d[1] : A.stance };
+      var g = ratesFrom(S, save, stance, { home: d[2], away: d[3] });
+      r[k2].push(r6(g.home), r6(g.away));
+    }
+  }
   return {
-    lh: r6(base.home),
-    la: r6(base.away),
+    lh: r.n[0],
+    la: r.n[1],
     at: { chase: AI.chase, protect: AI.protect, settle: AI.settle }, // urgency starts with the chase (balance.js urgencyMinute)
-    s: {
-      hT: pair("attack", "balanced", true, false), // home trailing late (by 2+, or by 1 before `protect`)
-      hT1: pair("attack", "defend", true, false), // home trailing by 1 from `protect`: away sits deep
-      aT: pair("balanced", "attack", false, true),
-      aT1: pair("defend", "attack", false, true),
-      L: pair("attack", "attack", false, false), // level from `settle` (extra time)
-    },
+    k: MODEL_MINUTES.slice(),
+    r: r,
   };
 }
 
@@ -586,8 +634,10 @@ function playMinute(st, out) {
   else if (rnd(st) < c.pSeq) attack(st, out, ctx, side, c);
   else midfield(st, out, ctx, side);
 
-  // #219: a rebound can carry a move past the minute's end; the next minute waits for its last row's scene (0.1 of a minute),
-  // so nothing that follows is published on top of it. Minutes that end in time are unchanged.
+  // #219: when a minute's last row lands within 0.1 of a minute of its end (or past it), the next minute waits until 0.1 of a
+  // minute after that row, so nothing that follows is published on top of its scene. This applies to any minute that runs
+  // late, not only rebounds: a move whose result hold or bounce ends near the minute's end triggers it too. It fires in ~98% of
+  // matches with every #219 feature off, moving the final whistle by 1.2 s on average (max 4.3 s; #219 review). Timing only.
   var minAt = st.lastAt + Math.round(0.1 * ctx.dur);
   if (out.length > first && minAt > ctx.t0 + ctx.dur + ctx.pause) ctx.pause = minAt - ctx.t0 - ctx.dur;
 

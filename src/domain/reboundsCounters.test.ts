@@ -208,26 +208,76 @@ describe("in-play odds with game states (issue #219)", () => {
     expect(model.lh).toBe(Math.round(r.home * 1e6) / 1e6);
     expect(model.la).toBe(Math.round(r.away * 1e6) / 1e6);
     expect(model.at).toEqual({ chase: BALANCE.match.urgencyMinute, protect: 78, settle: 100 });
-    expect(Object.keys(model.s).sort()).toEqual(["L", "aT", "aT1", "hT", "hT1"]);
-    expect(model.s.hT[0]).toBeGreaterThan(model.lh * 1.1); // home chasing
-    expect(model.s.aT[1]).toBeGreaterThan(model.la * 1.1);
-    expect(model.s.hT[1]).toBeGreaterThan(model.la); // ...and more open at the back (tempo, counters)
-    expect(model.s.hT1[1]).toBeLessThan(model.s.hT[1]); // a side protecting a one-goal lead sits deep
-    expect(odds.stageRates(model, 69, -1)).toEqual([model.lh, model.la]);
-    expect(odds.stageRates(model, 70, -1)).toBe(model.s.hT);
-    expect(odds.stageRates(model, 78, -1)).toBe(model.s.hT1);
-    expect(odds.stageRates(model, 78, -2)).toBe(model.s.hT);
-    expect(odds.stageRates(model, 100, 0)).toBe(model.s.L);
-    expect(odds.stageRates(model, 99, 0)).toEqual([model.lh, model.la]);
+    expect(model.k).toEqual([0, 60, 120]);
+    expect(Object.keys(model.r).sort()).toEqual(["L", "aT", "aT1", "hT", "hT1", "n"]);
+    for (const key of Object.keys(model.r)) expect(model.r[key]).toHaveLength(6); // [h, a] at each sample minute
+    expect([model.r.n[0], model.r.n[1]]).toEqual([model.lh, model.la]);
+    const at = (key: string, k: number) => odds.stageRates(model, k, key === "hT" ? -2 : key === "hT1" ? -1 : key === "aT" ? 2 : key === "aT1" ? 1 : 0);
+    expect(at("hT", 75)[0]).toBeGreaterThan(at("n", 75)[0] * 1.1); // home chasing
+    expect(at("aT", 75)[1]).toBeGreaterThan(at("n", 75)[1] * 1.1);
+    expect(at("hT", 75)[1]).toBeGreaterThan(at("n", 75)[1]); // ...and more open at the back (tempo, counters)
+    expect(at("hT1", 80)[1]).toBeLessThan(at("hT", 80)[1]); // a side protecting a one-goal lead sits deep
+    expect(odds.stageRates(model, 69, -1)).toEqual(odds.stageRates(model, 69, 0)); // before the chase the score does not matter
+    expect(odds.stageRates(model, 70, -1)).not.toEqual(odds.stageRates(model, 70, 0));
+    expect(odds.stageRates(model, 100, 0)).not.toEqual(odds.stageRates(model, 99, 0)); // level from 100′: both attack
+    // Players tire: the gap between the sides narrows as the match goes on (interpolated between the sample minutes).
+    const gap = (k: number) => odds.stageRates(model, k, 0)[0] / odds.stageRates(model, k, 0)[1];
+    expect(gap(1)).toBeGreaterThan(1);
+    expect(gap(90)).toBeLessThan(gap(1));
+    const e60 = eng.goalRates(eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: team(a), away: team(b) }), { minute: 60 });
+    expect(odds.stageRates(model, 60, 0)).toEqual([Math.round(e60.home * 1e6) / 1e6, Math.round(e60.away * 1e6) / 1e6]);
+  });
+
+  it("prices fast exactly as the reference walk: every market probability within 1e-9, cached or not, red cards included", () => {
+    let checked = 0;
+    for (const [h, aw] of [[0, 15], [2, 9], [7, 8], [12, 3], [15, 0]]) {
+      const m = eng.inPlayModel(eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: team(TEAMS[h]), away: team(TEAMS[aw]) }));
+      for (const [sc, min, ph, reds] of [
+        [[0, 0], 0, "pre", [0, 0]], [[0, 0], 30, "first_half", [0, 0]], [[1, 0], 45, "half_time", [0, 0]], [[0, 2], 60, "second_half", [0, 1]],
+        [[1, 1], 69, "second_half", [0, 0]], [[1, 1], 75, "second_half", [1, 0]], [[2, 1], 80, "second_half", [0, 0]], [[3, 3], 89, "second_half", [0, 0]],
+        [[1, 1], 90, "second_half", [0, 0]], [[1, 1], 90, "et_break", [0, 0]], [[2, 2], 99, "extra_time_1", [0, 0]], [[2, 3], 104, "extra_time_2", [1, 1]], [[4, 0], 85, "second_half", [0, 0]],
+      ] as [number[], number, string, number[]][]) {
+        const st = { sc, ph, x: [[0, 0, 0, 0, 0, 0, reds[0]], [0, 0, 0, 0, 0, 0, reds[1]]], d: 0, so: null };
+        for (const cached of [false, true]) {
+          if (!cached) odds._clearCache();
+          const ref = odds._ref.dist(m, st, min);
+          const rn = odds._ref.next(m, st, min);
+          const mp = odds.marketProbs(m, st, min);
+          const tag = `${h}v${aw} ${sc} ${min}' ${ph} reds ${reds}${cached ? " cached" : ""}`;
+          expect(Math.abs(mp.qualifyHome - ref.qualifyHome), tag).toBeLessThan(1e-9);
+          expect(Math.abs(odds.finalDist(m, st, min, true).qualifyHome - ref.qualifyHome), tag).toBeLessThan(1e-9);
+          for (let i = 0; i <= 5; i++)
+            for (let j = 0; j <= 5; j++) {
+              const k = `${sc[0] + i}-${sc[1] + j}`;
+              expect(Math.abs((mp.exact[k] ?? 0) - (ref.dist[k] ?? 0)), `${tag} exact ${k}`).toBeLessThan(1e-9);
+            }
+          for (const side of ["home", "away"])
+            for (let n = 1; n <= 3; n++) {
+              let p = 0;
+              for (const k in ref.dist) {
+                const [x, y] = k.split("-").map(Number);
+                if ((side === "home" ? x - y : y - x) === n) p += ref.dist[k];
+              }
+              expect(Math.abs(mp.margin[side + n] - p), `${tag} margin ${side}${n}`).toBeLessThan(1e-9);
+            }
+          for (const s2 of ["home", "away", "none"]) expect(Math.abs(mp.next[s2] - rn[s2]), `${tag} next ${s2}`).toBeLessThan(1e-9);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(130);
   });
 
   it("a side its manager runs keeps its kickoff stance in every game state; urgency still applies", () => {
     const managed = { ...team(a, false), stance: "defend" };
     const m = eng.inPlayModel(eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: managed, away: team(b) }));
     const st = eng.createMatch({ fixtureId: "m", seed: 1, kickoffAt: 0, home: managed, away: team(b) });
-    const r = eng.goalRates(st, { stance: { home: "defend", away: "balanced" }, urg: { home: true, away: false } });
-    expect(m.s.hT).toEqual([Math.round(r.home * 1e6) / 1e6, Math.round(r.away * 1e6) / 1e6]);
-    expect(st.teams.home.stance).toBe("defend"); // goalRates restores the stances it tried
+    const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+    for (const [i, minute] of [[0, 0], [1, 60], [2, 120]]) {
+      const r = eng.goalRates(st, { stance: { home: "defend", away: "balanced" }, urg: { home: true, away: false }, minute });
+      expect([m.r.hT[2 * i], m.r.hT[2 * i + 1]]).toEqual([r6(r.home), r6(r.away)]);
+    }
+    expect(st.teams.home.stance).toBe("defend"); // goalRates never changes the match state
   });
 
   it("prices a coherent distribution from any state, and the cheap qualify walk agrees with the full one", () => {
