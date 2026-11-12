@@ -3,7 +3,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Pitch from "./Pitch";
 import { sampleN, sceneFor, touchStyle, type Pt, type Scene } from "../domain/scenes";
 import { frameAt, reveal, settle, smooth, type Frame, type Lineups } from "../domain/sim";
@@ -34,7 +34,10 @@ const fxNode = (name: string) => screen.getByTestId("move-fx").querySelector(`[d
 const shown = (name: string) => fxNode(name).getAttribute("display") !== "none";
 const keeperNode = (side: Side) => [...document.querySelectorAll('[data-testid="player"]')].find((n) => n.getAttribute("data-side") === side && n.hasAttribute("data-gk"))!;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("Pitch move effects (#205)", () => {
   it("draws a pass line, a through ball's space and sprint, and a cross arc on the same four nodes, hidden when there is no move", () => {
@@ -148,6 +151,49 @@ function tells() {
 }
 
 describe("Pitch result scenes through the reveal gate (#205)", () => {
+  it.each(["home", "away"] as Side[])("%s: a claimed save is drawn where a plain save is until revealed, then he eases off his line with the ball", (side) => {
+    const def: Side = side === "home" ? "away" : "home";
+    const spot = mirror(side, [88, 32]); // close and central: a claim
+    const shot = sceneFor(ev("shot", side, 11, { p: NAMES[side][2], ball: spot }), spot, 6000)!;
+    const res = sceneFor(ev("save", def, 12, { p: NAMES[def][0], p2: NAMES[side][2], from: spot, target: mirror(side, [100, 30]), ball: mirror(side, [96, 30]) }), shot.ball[shot.ball.length - 1], 6000, undefined, sampleN(shot.ballHeight, 1))!;
+    expect(res.keeper).toMatchObject({ pose: "claim" });
+    const clock = { now: 1000 };
+    vi.spyOn(performance, "now").mockImplementation(() => clock.now);
+    const { rerender } = render(<Pitch frame={null} home={home} away={away} revealed />);
+    let drawn: Frame | null = null;
+    for (let ms = 0; ms <= shot.ms; ms += 32) drawn = smooth(drawn, frameAt(shot, ms / shot.ms, LINEUPS), 32);
+    const startBall = drawn!.ball;
+    let reached = false;
+    let before = 0;
+    let offAtEnd = 0;
+    const at = (n: Element) => n.getAttribute("transform")!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!.slice(1).map(Number);
+    for (let ms = 0; ms <= res.ms * 1.3; ms += 32) {
+      clock.now += 32;
+      const p = ms / res.ms;
+      const frame = settle(res, p, smooth(drawn, frameAt(res, p, LINEUPS, undefined, 0, startBall), 32), reached);
+      const gate = reveal(res, p, frame.ball, reached);
+      reached = gate.reached;
+      drawn = frame;
+      rerender(<Pitch frame={frame} home={home} away={away} revealed={gate.revealed} />);
+      const gk = frame.players.find((q) => q.gk && q.side === def)!;
+      const [tx, ty] = at(keeperNode(def));
+      const ball = document.querySelector('circle[stroke="#111"]')!;
+      if (!gate.revealed) {
+        // exactly the frame's own spot: the save scene's path, which is a plain save's (no claim offset), and the ball where the frame has it
+        expect([tx, ty]).toEqual([gk.x, gk.y]);
+        expect(Number(ball.getAttribute("cx"))).toBe(frame.ball[0]);
+        before++;
+      } else {
+        offAtEnd = (tx - gk.x) * (def === "home" ? 1 : -1);
+        expect(offAtEnd).toBeGreaterThanOrEqual(0); // only ever off his line, towards the play
+        expect(offAtEnd).toBeLessThanOrEqual(2.5 + 1e-9);
+        if (Math.hypot(gk.x - frame.ball[0], gk.y - frame.ball[1]) <= 2.5) expect(Number(ball.getAttribute("cx")) - frame.ball[0]).toBeCloseTo(tx - gk.x, 6); // with the ball
+      }
+    }
+    expect(before).toBeGreaterThan(5);
+    expect(offAtEnd).toBeCloseTo(2.5, 6); // eased all the way out within the scene
+  });
+
   // MatchPage's loop: target frame, smoothing, settle, then reveal() decides `revealed` (the same verdict that holds the caption and
   // feed back: `holding`/`liveRevealed`). Up to that tick the keeper and the effects must not tell one outcome from another.
   const cases = (["home", "away"] as Side[]).flatMap((side) => (["ground", "long"] as const).map((kind) => ({ side, kind })));

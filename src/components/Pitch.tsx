@@ -157,6 +157,23 @@ const Field = memo(function Field() {
 });
 
 /** Where the drawn ball was about TRAIL_MS ago, from this component's own recent samples (presentation only). */
+/** #205: a claim's come-off-the-line offset (pitch units), eased in over CLAIM_EASE_MS of real time from the first frame it is drawn
+ * (the reveal), so he steps out rather than jumps. `frame` is null while the result is held back. */
+const CLAIM_EASE_MS = 220;
+function useClaimStep(frame: Frame | null): [number, number] | null {
+  const since = useRef<{ seq: number; at: number } | null>(null);
+  const step = frame?.keeper?.pose === "claim" && frame.keeper.k >= 0.2 ? frame.keeper.step : undefined;
+  if (!frame || !step) {
+    since.current = null; // the next claim (or a replay of this one) steps out afresh
+    return null;
+  }
+  const now = performance.now();
+  if (since.current?.seq !== frame.seq) since.current = { seq: frame.seq, at: now };
+  const f = Math.min(1, (now - since.current.at) / CLAIM_EASE_MS);
+  const e = f * (2 - f);
+  return [step[0] * e, step[1] * e];
+}
+
 function useTrail(pos: [number, number] | null) {
   const hist = useRef<Sample[]>([]);
   const h = hist.current;
@@ -227,7 +244,15 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   const x = (v: number) => flip ? W - v : v;
   // #203: no camera zoom. The view is always the whole pitch (symmetric about x = 50, so the end switch needs no projection).
   const viewBox = FULL_CAM;
-  const ball = [x(frame?.ball[0] ?? 50), frame?.ball[1] ?? 32];
+  // #205: a scene with a result (save, goal, miss, woodwork, block, penalty...) draws no move effect and no keeper pose until that result
+  // is revealed to the viewer: up to then the keeper stands as he would for any outcome, and the dive, claim or beaten dive snaps in at
+  // the reveal. Open-play scenes (no result) are never held.
+  const held = !!frame?.flash && !revealed;
+  const step = useClaimStep(held ? null : frame);
+  const claimKeeper = step ? frame!.players.find((p) => p.gk && p.side === frame!.keeper!.side) : undefined;
+  // He comes off his line with the ball: it moves with him when it is in his hands (the frame's own positions are untouched).
+  const withBall = !!claimKeeper && !!frame && Math.hypot(claimKeeper.x - frame.ball[0], claimKeeper.y - frame.ball[1]) <= 2.5;
+  const ball = [x((frame?.ball[0] ?? 50) + (withBall ? step![0] : 0)), (frame?.ball[1] ?? 32) + (withBall ? step![1] : 0)];
   const lift = frame?.lift ?? 0;
   const ballR = BALL_R + lift * 0.45;
   const drawnBall: [number, number] = [ball[0], ball[1] - lift * LIFT_Y];
@@ -235,10 +260,6 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
   // The carrier: the scene's candidate, only while the drawn ball is actually at his feet (unchanged rule; ring and name share it).
   const carrier = frame?.players.find((p) => frame.carrier === p.side + ":" + p.no && lift < 0.05 && Math.hypot(p.x - frame.ball[0], p.y - frame.ball[1]) <= 1.6) ?? null;
   const flash = frame && revealed ? frame.flash : null;
-  // #205: a scene with a result (save, goal, miss, woodwork, block, penalty...) draws no move effect and no keeper pose until that result
-  // is revealed to the viewer: up to then the keeper stands as he would for any outcome, and the dive, claim or beaten dive snaps in at
-  // the reveal. Open-play scenes (no result) are never held.
-  const held = !!frame?.flash && !revealed;
   // Match goals (not shootout kicks): big banner once the ball is in (flash gate) and through the celebration.
   const goal = frame && frame.flash === "goal" && (frame.type === "celebration" || (flash && (frame.type === "goal" || frame.type === "penalty_goal"))) ? frame : null;
   // Shootout stakes, from the setup's kick flags (shootout_kick events don't carry win/must).
@@ -304,7 +325,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud }: Prop
           // A dive lays him out towards the ball (his collar along `dir`); a claim keeps him upright, arms up, coming off his line.
           const turn = pose?.pose === "dive" ? (Math.atan2(flip ? -pose.dir[0] : pose.dir[0], -pose.dir[1]) * 180) / Math.PI : 0;
           return (
-            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x)} ${p.y})`} data-testid="player" data-side={p.side} data-gk={p.gk || undefined} data-pose={pose?.pose}>
+            <g key={`${p.side}-${p.name}`} transform={`translate(${x(p.x + (p === claimKeeper ? step![0] : 0))} ${p.y + (p === claimKeeper ? step![1] : 0)})`} data-testid="player" data-side={p.side} data-gk={p.gk || undefined} data-pose={pose?.pose}>
               {/* keepers always carry this turn group (one fixed node each): the figure's own scale is CSS, so the turn sits outside it */}
               <Turn on={p.gk} deg={turn}>
               <g className="pitch-figure">

@@ -19,7 +19,7 @@ export type Fx = {
   sprint?: { key: string; to: Pt; alpha: number }; // speed lines behind this player (side:no), running towards `to`
   burst?: { at: Pt; alpha: number; r: number }; // woodwork: the frame rattles where it was hit
 };
-export type KeeperPose = { side: Side; pose: "dive" | "claim"; dir: Pt /* unit, pitch coords */; k: number /* 0..1 */ };
+export type KeeperPose = { side: Side; pose: "dive" | "claim"; dir: Pt /* unit, pitch coords */; k: number /* 0..1 */; step?: Pt /* a claim's come-off-the-line offset, applied by the drawing only once revealed */ };
 
 /** How long a pass line takes to fade (real ms of scene time: a fast-forward fades it as fast as it plays the pass). */
 export const PASS_FADE_MS = 650;
@@ -194,5 +194,5 @@ export function keeperPose(scene: Scene, t: number): KeeperPose | null {
   const [ux, uy] = len > 0.2 ? [dx / len, dy / len] : [fwd, 0];
   const [vx, vy] = m.pose === "dive" ? [ux + fwd * DIVE_FORWARD, uy] : [ux, uy];
   const n = Math.hypot(vx, vy) || 1;
-  return { side: gk.side, pose: m.pose, dir: [vx / n, vy / n], k };
+  return { side: gk.side, pose: m.pose, dir: [vx / n, vy / n], k, ...(m.step ? { step: m.step } : {}) };
 }

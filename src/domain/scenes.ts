@@ -47,13 +47,13 @@ export type Scene = {
 export type Move = "pass" | "through" | "cross" | "long";
 /** #205: the keeper's pose in a result scene: he stretches to `to` (`dive`) or comes for it (`claim`), easing in over `at[0]`→`at[1]`,
  * holding to `at[2]` and back on his feet by `at[3]` (scene progress). */
-export type KeeperMove = { pose: "dive" | "claim"; to: Pt; at: [number, number, number, number] };
+export type KeeperMove = { pose: "dive" | "claim"; to: Pt; at: [number, number, number, number]; step?: Pt /* a claim: comes this far off his line, with the ball, once revealed */ };
 /** #205: result scenes, the only ones that may carry a keeper dive or claim (the shot itself never does). */
 export const KEEPER_RESULTS = new Set(["goal", "save", "penalty_goal", "penalty_saved", "penalty_missed", "penalty_woodwork", "shootout_kick"]);
-/** #205: how much higher a long shot climbs after its launch, before it comes down to its impact. */
-const LONG_RISE = 1.35;
 /** #205: a save of a shot from this close (and central) is a claim off the line, not a dive. */
 const CLAIM_RANGE = 16;
+/** #205: how far a claiming keeper comes off his line with the ball, after the save is revealed. */
+export const CLAIM_STEP = 2.5;
 /** #205: a result after a long shot: the shot left the ball lifted (headers too) from further out than this. */
 const LONG_RANGE = 22;
 /** #104: a plain pass is a quick one-touch ball, a carry up the field before the release, or a hold-up (shield, then lay it on). */
@@ -203,8 +203,7 @@ function carryLift(s: Scene, lift: number) {
   const i = s.impact ? s.ball.findIndex((p) => p[0] === s.impact![0] && p[1] === s.impact![1]) : -1;
   const n = i > 0 ? i : 1;
   const own = s.ballHeight ?? s.ball.map(() => 0);
-  const rise = s.move === "long" ? Math.min(1, lift * LONG_RISE) : 0; // #205: a long strike is still rising after the shot, then dips to its impact
-  s.ballHeight = own.map((h, k) => (k < n ? Math.max(h, lift * (1 - k / n), k > 0 ? rise : 0) : h));
+  s.ballHeight = own.map((h, k) => (k < n ? Math.max(h, lift * (1 - k / n)) : h));
 }
 
 /** Is `p` part-way along a → b (strictly after a, before b, within 2.5 of the line)? */
@@ -561,22 +560,20 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       const target = (e.target as Pt) || [goalX(shooterSide), GOAL_Y];
       const shotFrom = (e.from as Pt) || prevBall;
       const gk = keeperSpot(side);
-      // #205: a shot saved from close in and central (every header off a cross is) is claimed: the keeper comes off his line for it
-      // and holds it. Anything else he dives for along his line (stands up to one at his body), then holds or parries and gathers.
-      // Decided from this event alone, so a result carried on from a lifted shot keeps its contact (#190).
-      const range = Math.abs(goalX(shooterSide) - shotFrom[0]);
-      const claim = range <= CLAIM_RANGE && Math.abs(shotFrom[1] - GOAL_Y) <= 8;
-      // Up to 5 off his line, always well short of the shot's launch (LAUNCH_REACH), so the ball carries straight on into his hands.
-      const out = Math.max(1, Math.min(5, range - Math.abs(goalX(shooterSide) - gk[0]) - LAUNCH_REACH - 1));
-      const catchPt: Pt = claim ? clampPt([gk[0] + toward(side, out), GOAL_Y + (target[1] - GOAL_Y) * 0.5 + (shotFrom[1] - GOAL_Y) * 0.15]) : [gk[0], target[1]];
-      const held = claim || jit(s, 6, 1) > 0; // catch and hold, or parry and gather: the keeper ends up with the ball either way
+      const catchPt: Pt = [gk[0], target[1]];
+      const held = jit(s, 6, 1) > 0; // catch and hold, or parry and gather: the keeper ends up with the ball either way
       const parry: Pt = held ? catchPt : clampPt([ball[0], ball[1] + (target[1] > GOAL_Y ? 6 : -6)]);
+      // #205: ball and keeper paths are exactly as before (no new cue ahead of the reveal); only the pose, drawn from the reveal, is new.
+      // A shot saved from close in and central (every header off a cross is) is claimed: once revealed he comes CLAIM_STEP off his line
+      // with it (`step`, eased in by the drawing). Anything else he dives for along his line (stands up to one at his body).
+      const claim = Math.abs(goalX(shooterSide) - shotFrom[0]) <= CLAIM_RANGE && Math.abs(shotFrom[1] - GOAL_Y) <= 8;
       const dives = !claim && Math.abs(catchPt[1] - gk[1]) >= 1.5;
+      const step: Pt = [toward(side, CLAIM_STEP), 0];
       return {
         ...base,
         ms: d(2600),
         ball: [shotFrom, lerp(shotFrom, catchPt, 0.85), catchPt, parry],
-        keeper: dives ? { pose: "dive", to: catchPt, at: [0.1, 0.42, 0.85, 1] } : { pose: "claim", to: catchPt, at: [0.08, 0.45, 0.9, 1.05] }, // drawn only from the reveal (~0.62–0.67): held past it
+        keeper: dives ? { pose: "dive", to: catchPt, at: [0.1, 0.42, 0.85, 1] } : { pose: "claim", to: [catchPt[0] + step[0], catchPt[1]], at: claim ? [0.08, 0.45, Infinity, Infinity] : [0.08, 0.45, 0.9, 1.05], ...(claim ? { step } : {}) }, // drawn only from the reveal (~0.62–0.67): held past it
         actors: [
           { id: "gk", side, keeper: true, label: short(e.p), path: [gk, lerp(gk, catchPt, 0.7), catchPt, parry] },
           { id: "s", side: shooterSide, label: short(e.p2), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(shooterSide, 3), shotFrom[1]]), clampPt([shotFrom[0] + toward(shooterSide, 4), shotFrom[1]])] },
@@ -610,12 +607,11 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       const out: Pt = e.t === "woodwork" ? (ball as Pt) : [goalX(side) + toward(side, 3), target[1] + (target[1] > GOAL_Y ? 3 : -3)];
       const gk = keeperSpot(other(side));
       const high = e.t === "miss" && !!(e as MatchEvent & { high?: number }).high;
-      const bar = e.t === "woodwork" && e.post === "bar"; // #205: off the crossbar it is in the air
       return {
         ...base,
         ms: d(2300),
         ball: [shotFrom, lerp(shotFrom, target, 0.6), target, out],
-        ballHeight: high ? [0, 0.5, 1, 1] : bar ? [0, 0.6, 1, 0.3] : undefined,
+        ballHeight: high ? [0, 0.5, 1, 1] : undefined,
         actors: [
           { id: "s", side, label: short(e.p), path: [shotFrom, shotFrom, clampPt([shotFrom[0] + toward(side, 2), shotFrom[1]]), clampPt([shotFrom[0] + toward(side, 2), shotFrom[1]])] },
           { id: "gk", side: other(side), keeper: true, path: [gk, [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.4], [gk[0], GOAL_Y + (target[1] - GOAL_Y) * 0.5], e.t === "woodwork" ? out : gk] }, // off the woodwork: the keeper gathers the rebound

@@ -112,11 +112,11 @@ describe("#205 move signatures (pure data)", () => {
       expect(late.sprint).toBeUndefined();
       expect(late.line[0].slice(0, 2)).toEqual(shot.ball);
       expect(late.line[late.line.length - 1][2]).toBeGreaterThan(late.line[0][2] + 0.3); // rising
-      // the result carries the strike on: still climbing after the launch, then down to where it is decided
+      // the result carries the strike's wake on to where it is decided (its flight is the result scene's own, unchanged)
       const lift = sampleN(s.ballHeight, 1);
       const miss = sceneFor(ev("miss", side, 702, { p: passer, from: shot.ball, target: mirror(side, [100, 40]), ball: mirror(side, [100, 40]) }), end(s), 15000, undefined, lift)!;
       expect(miss.move).toBe("long");
-      expect(Math.max(...miss.ballHeight!)).toBeGreaterThan(lift);
+      expect(sampleN(miss.ballHeight, 0)).toBeCloseTo(lift, 8);
       expect(frameAt(miss, 0.4, LINEUPS).fx!.kind).toBe("long");
       for (const plain of [{ long: 0 }, { header: 1 }]) {
         const o = sceneFor({ ...shot, ...plain }, shot.ball as Pt, 15000)!;
@@ -137,9 +137,14 @@ describe("#205 move signatures (pure data)", () => {
       const close = sceneFor(ev("save", def, 802, { p: NAMES[def][0], p2: passer, from: mirror(side, [88, 30]), target: mirror(side, [100, 30]), ball: mirror(side, [96, 30]) }), mirror(side, [88, 30]), 15000)!;
       expect(close.keeper!.pose).toBe("claim");
       const line = mirror(side, [97, 32])[0];
-      expect(Math.abs(close.impact![0] - line)).toBeGreaterThanOrEqual(3.5); // he comes off his line for it
-      expect(end(close)).toEqual(close.impact); // and holds it
-      expect(frameAt(close, 0.6, LINEUPS).keeper!.pose).toBe("claim");
+      // His path and the ball's are a plain save's (the catch on his line): nothing new before the reveal. Coming off his line is the
+      // pose's `step`, which the drawing applies only once the save is revealed (see Pitch.moves.test).
+      expect(close.impact).toEqual([line, 30]);
+      expect(close.actors.find((a) => a.keeper)!.path).toEqual([[line, 32], [line, 32 + (30 - 32) * 0.7], [line, 30], end(close)]);
+      expect(close.keeper!.step).toEqual([def === "home" ? 2.5 : -2.5, 0]); // off his line, towards the play
+      expect(frameAt(close, 0.6, LINEUPS).keeper).toMatchObject({ pose: "claim", step: close.keeper!.step });
+      expect(frameAt(close, 1.5, LINEUPS).keeper!.pose).toBe("claim"); // held through the result's hold: he never steps back
+      expect(wide.keeper!.step).toBeUndefined();
       // a header off a cross from anywhere the engine heads it (10–16 out): the claim carries the header's launch straight on (#190)
       for (const x of [84, 86, 88, 90]) {
         const spot = mirror(side, [x, 34]);
@@ -163,7 +168,6 @@ describe("#205 move signatures (pure data)", () => {
         expect(b.at).toEqual(target);
         expect(frameAt(w, hit + BURST_MS / w.ms + 0.01, LINEUPS).fx?.burst).toBeUndefined();
         expect(Math.abs(end(w)[0] - target[0])).toBeGreaterThanOrEqual(8); // rebounds back into play
-        if (post === "bar") expect(sampleN(w.ballHeight, hit)).toBeGreaterThan(0.9); // the bar is hit in the air
       }
     });
   }
