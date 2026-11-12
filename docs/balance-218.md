@@ -179,6 +179,12 @@ Other test changes:
     120-match set is unchanged, which keeps the other tests inside their timeouts.
 - `crossDelivery.test.ts`: the real-engine cross set keeps only crosses followed by
   their header. Crosses followed by a claim or clearance are covered in the new file.
+- Two component tests choose a seeded match as a precondition. The stream shift moved
+  them, so they are re-seeded with the same teams, pace and assertions:
+  - `Pitch.ends.test.tsx`: seed 1024 → 1031, which plays extra time and a shootout with
+    kicks from both sides, with the ball off-centre at every break;
+  - `Pitch.moves.test.tsx`: seed 4242 → 4243, which has crosses, through balls and a
+    long shot in its first 100 events.
 - New `finalThirdStops.test.ts` checks:
   - the share of stops and every kind of stop;
   - the progression range, and that the turnover is met where the progression left it;
