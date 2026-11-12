@@ -103,8 +103,7 @@ for (const scenario of cases) {
         const b = [Number(ball.getAttribute("cx")), Number(shadow.getAttribute("cy")) - 0.9];
         const players = Array.from(pitch.querySelectorAll('[data-testid="player"]')).map((player) => {
           const coords = player.getAttribute("transform")!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!;
-          const kit = player.querySelector('[data-kit]')!;
-          return { side: kit.getAttribute("stroke") === "#ff00cc" ? "away" : "home", no: Number(player.querySelector("text")!.textContent),
+          return { side: player.getAttribute("data-side"), no: Number(player.querySelector("text")!.textContent),
             x: Number(coords[1]), y: Number(coords[2]), ring: !!player.querySelector('[data-ring]'),
             distance: Math.hypot(Number(coords[1]) - b[0], Number(coords[2]) - b[1]) };
         });

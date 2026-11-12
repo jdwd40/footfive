@@ -49,8 +49,10 @@ for (const viewport of [{ width: 320, height: 700 }, { width: 360, height: 800 }
     const home = page.getByTestId("home-crowd");
     const away = page.getByTestId("away-crowd");
     const before = (await pitch.boundingBox())!;
-    const band = await stadium.evaluate(el => parseFloat(getComputedStyle(el).getPropertyValue("--stadium-band")));
-    expect(band).toBe(viewport.width < 360 ? 3 : 8);
+    const bands = await stadium.evaluate(el => ["--stadium-band", "--stadium-top", "--stadium-bottom"].map(v => parseFloat(getComputedStyle(el).getPropertyValue(v))));
+    const [band, top, bottom] = bands;
+    // #204 enlarged the stands (sides and top); the bottom band still stops at the commentary row's 8px gap.
+    expect(bands).toEqual(viewport.width < 360 ? [6, 6, 3] : viewport.width < 640 ? [11, 11, 8] : [14, 14, 8]);
     const left = (await home.boundingBox())!;
     const right = (await away.boundingBox())!;
     const main = (await page.locator("main").boundingBox())!;
@@ -58,8 +60,11 @@ for (const viewport of [{ width: 320, height: 700 }, { width: 360, height: 800 }
     expect(right.x + right.width).toBeLessThanOrEqual(main.x + main.width + 0.1);
     expect(left.x).toBeCloseTo(before.x - band, 1);
     expect(right.x + right.width).toBeCloseTo(before.x + before.width + band, 1);
-    expect(left.y).toBeCloseTo(before.y - band, 1);
-    expect(left.height).toBeCloseTo(before.height + band * 2, 1);
+    expect(left.y).toBeCloseTo(before.y - top, 1);
+    expect(left.height).toBeCloseTo(before.height + top + bottom, 1);
+    // The stands stay clear of the commentary row below the pitch.
+    const row = (await page.getByTestId("commentary").boundingBox())!;
+    expect(left.y + left.height).toBeLessThanOrEqual(row.y + 0.5);
     // Removing only the decorative wrapper's box recreates the original direct-child pitch layout.
     const baselineStyle = await page.addStyleTag({ content: ".stadium { display: contents !important; } .stadium-stand { display: none !important; }" });
     const baseline = (await pitch.boundingBox())!;

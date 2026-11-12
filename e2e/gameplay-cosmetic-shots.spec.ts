@@ -155,10 +155,9 @@ for (const key of KEYS) {
         const by = Number(shadow.getAttribute("cy")) - 0.9;
         const players = Array.from(pitch.querySelectorAll('[data-testid="player"]')).map((player) => {
           const c = player.getAttribute("transform")!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!;
-          const kit = player.querySelector("[data-kit]")!;
           const x = Number(c[1]);
           const y = Number(c[2]);
-          return { side: kit.getAttribute("stroke") === "#ff00cc" ? "away" : "home", keeper: kit.getAttribute("fill") === "#c6ff00",
+          return { side: player.getAttribute("data-side"), keeper: player.hasAttribute("data-gk"),
             no: Number(player.querySelector("text")!.textContent), ring: !!player.querySelector("[data-ring]"), x: flipped ? 100 - x : x, y,
             distance: Math.hypot(x - bx, y - by) };
         });
