@@ -433,6 +433,7 @@ function playMinute(st, out) {
   else midfield(st, out, ctx, side);
 
   cosmetic(st, out, ctx, first);
+  halfChance(st, out, ctx, first);
   st.nextAt = ctx.t0 + ctx.dur + ctx.pause;
   if (PERIOD_END[st.phase] === ctx.m) periodEnd(st, out);
 }
@@ -876,6 +877,138 @@ function cosmetic(st, out, ctx, first) {
     cos: 1,
     text: cosPick(r, ["Off the boards! " + p.name + " collects for " + abbr(st, side), "The ball rattles the " + wall + " board and " + p.name + " brings it back in"]),
     clk: clk(t),
+  });
+}
+
+// ---------------------------------------------------------------- cosmetic half-chances (#215)
+
+/**
+ * Spectacle only, like the attempts above: when play has gone a while without a chance, a minute's spare time may carry a
+ * half-chance — a cross headed clear, a ball in behind that runs through to the keeper, or a last-ditch slide on the edge of the
+ * box. Each ends with the defending side (or keeper) on the ball, who clears it; it comes back off the boards to the side that had
+ * it, on the spot real play left it. Three rows (`cross` | `through_ball` | `pass`, then `clearance`, then `bounce`), each with
+ * `cos: 1` and `hc` (the kind), no chain, no major/tick, the last real snapshot (danger off) with their own clock. They draw only
+ * from their own stream, keyed by seed and minute, never rnd(st); they never touch stats, score, danger, possession, ball or
+ * ctx.pause, and end before nextAt, so no real event moves. Their one piece of memory is `st.lastChance`, the minute of the last
+ * chance (real shot or penalty, or a cosmetic try or half-chance): presentation only, nothing real ever reads it.
+ */
+var HC = {
+  after: 5, // minutes since the last chance before a half-chance may come
+  rate: 0.85, // per eligible minute once one is due
+  minAlong: 20, // the side in possession has the ball at least this far up the pitch
+  kinds: [
+    ["head", 0.4],
+    ["keeper", 0.3],
+    ["slide", 0.3],
+  ],
+  // Spacing in fractions of a minute: after the last real event, the delivery; then the defending side's answer; then the ball back
+  // off the boards; and spare time left before the next real event.
+  lead: 0.06,
+  step: 0.1,
+  back: 0.14,
+  tail: 0.1,
+  minRoomMs: 2400, // never squeezed in: fast (test) paces have no room
+};
+var HC_AFTER = { pass: 1, tackle: 1, interception: 1, bounce: 1 }; // real open play only; never after a result, card, goal or restart
+var HC_CHANCE = { shot: 1, penalty_setup: 1 }; // rows that count as a chance (real or cosmetic) for `st.lastChance`
+
+function halfChance(st, out, ctx, first) {
+  emitHalfChance(st, out, ctx, first);
+  for (var i = first; i < out.length; i++) if (HC_CHANCE[out[i].t] || (out[i].t === "clearance" && out[i].cos)) st.lastChance = out[i].min;
+}
+
+function emitHalfChance(st, out, ctx, first) {
+  var last = out[out.length - 1];
+  var side = st.bs;
+  if (out.length <= first || last.cos || !HC_AFTER[last.t] || !side || last.side !== side || st.danger) return;
+  if (st.minute - (st.lastChance || 0) < HC.after) return;
+  var home = st.ball;
+  if (px(side, home[0]) < HC.minAlong) return;
+  var dur = ctx.dur;
+  var room = ctx.t0 + ctx.dur + ctx.pause - st.lastAt; // spare time up to nextAt
+  if (room < Math.max(HC.minRoomMs, (HC.lead + HC.step + HC.back + HC.tail) * dur)) return; // nothing is drawn or emitted
+  var r = mulberry32(hashSeed(st.seed + ":hc:" + st.minute));
+  if (r() >= HC.rate) return;
+  var kind = cosWeighted(r, HC.kinds, function (k) {
+    return k[1];
+  })[0];
+
+  var def = OTHER[side];
+  var holder = { name: last.t === "pass" ? last.p2 : last.p }; // the real player on the ball
+  var mate = cosWeighted(r, outfield(st, side, holder), function (p) {
+    return (p.attack || 50) + 10;
+  });
+  var defender = cosWeighted(r, outfield(st, def), function (p) {
+    return (p.defence || 50) + 10;
+  });
+  var gk = keeper(st, def);
+  var t = st.lastAt + HC.lead * dur;
+  var clk = function (at) {
+    return ctx.clk((at - ctx.t0 - ctx.pause) / dur);
+  };
+  var row = function (at, type, ev) {
+    ev.cos = 1;
+    ev.hc = kind;
+    ev.clk = clk(at);
+    return emit(st, out, at, type, ev);
+  };
+
+  var res;
+  if (kind === "head") {
+    // Out to the wing, crossed in, and a defender heads it away from the box (where the live view's cross drops: 13 from goal).
+    var high = home[1] < 32;
+    var wing = pos(side, 72 + r() * 8, high ? 6 + r() * 4 : 54 + r() * 4);
+    var box = pos(side, 87, high ? 36 : 28);
+    row(t, "cross", { side: side, p: holder.name, p2: mate.name, from: [home[0], home[1]], ball: wing, text: holder.name + " goes wide to " + mate.name + ", who crosses" });
+    t += HC.step * dur;
+    res = row(t, "clearance", {
+      side: def,
+      p: defender.name,
+      p2: mate.name,
+      from: box,
+      ball: pos(side, 60 + r() * 8, high ? 16 + r() * 10 : 38 + r() * 10),
+      text: cosPick(r, ["Headed clear — " + defender.name + " gets there first", "Headed clear by " + defender.name + "!", "Headed clear — " + defender.name + " rises above " + mate.name]),
+    });
+  } else if (kind === "keeper") {
+    // Played in behind, a touch too heavy: it runs on past the runner and the keeper comes out to gather.
+    var spot = pos(side, 82 + r() * 4, 22 + r() * 20);
+    row(t, "through_ball", { side: side, p: holder.name, p2: mate.name, from: [home[0], home[1]], ball: spot, text: cosPick(r, [holder.name + " tries to slip " + mate.name + " in", holder.name + " looks for " + mate.name + " in behind"]) });
+    t += HC.step * dur;
+    res = row(t, "clearance", {
+      side: def,
+      p: gk.name,
+      p2: mate.name,
+      from: spot,
+      ball: pos(side, 94, clamp(32 + (spot[1] - 32) * 0.3, 28, 36)),
+      text: cosPick(r, ["Too heavy — " + gk.name + " gathers", "Too heavy for " + mate.name + " — " + gk.name + " comes out to collect"]),
+    });
+  } else {
+    // Played up to a runner, who drives at the box; a defender slides in on the edge of it and comes away with the ball.
+    var y = clamp(home[1] + (r() - 0.5) * 16, 20, 44); // in line with the box
+    var runAt = pos(side, 68 + r() * 4, y);
+    row(t, "pass", { side: side, p: holder.name, p2: mate.name, from: [home[0], home[1]], ball: runAt, text: holder.name + " plays it up to " + mate.name });
+    t += HC.step * dur;
+    res = row(t, "clearance", {
+      side: def,
+      p: defender.name,
+      p2: mate.name,
+      from: runAt,
+      ball: pos(side, 74 + r() * 4, clamp(y + (y < 32 ? -1 : 1) * (3 + r() * 4), 10, 54)),
+      text: cosPick(r, ["Last-ditch block — " + defender.name + " slides in on " + mate.name, "Last-ditch block! " + defender.name + " gets a toe in on the edge of the box"]),
+    });
+  }
+
+  // Cleared off the boards, back to the side that had it on the spot real play left it: the next real event starts there.
+  t += HC.back * dur;
+  var rb = res.ball;
+  var hit = [clamp(Math.round((rb[0] + home[0]) / 2 + (r() - 0.5) * 12), 4, 96), rb[1] < 32 ? 0 : 64];
+  var p = cosPick(r, outfield(st, side));
+  row(t, "bounce", {
+    side: side,
+    p: p.name,
+    from: hit,
+    ball: [home[0], home[1]],
+    text: (kind === "keeper" ? gk.name + " launches it" : defender.name + " clears") + " — off the boards, " + p.name + " collects for " + abbr(st, side),
   });
 }
 

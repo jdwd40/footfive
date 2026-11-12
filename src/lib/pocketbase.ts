@@ -66,7 +66,8 @@ export type MatchEvent = {
   pen?: PenPlan;
   kick?: { no: number; sd: number; must?: number; win?: number; outcome?: string; decisive?: number };
   major?: number;
-  cos?: 1; // cosmetic presentation only (an extra missed/blocked attempt): excluded from official stats, danger and markets
+  cos?: 1; // cosmetic presentation only (an extra missed/blocked attempt, or a half-chance): excluded from official stats, danger and markets
+  hc?: "head" | "keeper" | "slide"; // #215: a cosmetic half-chance's rows — cross headed clear, ball in behind too heavy for the keeper, last-ditch slide
   text: string;
   tick?: string;
   st: PubState;

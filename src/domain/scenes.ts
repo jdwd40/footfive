@@ -26,7 +26,7 @@ export type Scene = {
   ballHeight?: number[]; // optional lift per keyframe (0..1), for chips/crosses/headers
   actors: Actor[];
   caption: string;
-  flash?: "goal" | "save" | "miss" | "over" | "block" | "wood" | "card" | "pen" | null; // result badge: miss = wide, over = over the bar
+  flash?: "goal" | "save" | "miss" | "over" | "block" | "wood" | "card" | "pen" | HalfChanceFlash | null; // result badge: miss = wide, over = over the bar
   focus?: Side | null; // celebrating side
   side?: Side | null; // event side (banners)
   who?: string; // event's main player
@@ -43,6 +43,11 @@ export type Scene = {
   move?: Move; // #205: the kind of ball movement, for its on-pitch signature (pass line, cross arc, through ball, long strike)
   keeper?: KeeperMove; // #205: result scenes only — the keeper's dive or claim. Never on a shot: a shot cannot show its outcome
 };
+/** #215: a cosmetic half-chance's answer, by kind (the `hc` of its rows): headed clear, too heavy for the keeper, last-ditch slide. */
+export type HalfChanceFlash = "clear" | "heavy" | "stop";
+export const HALF_CHANCE_FLASH: Record<NonNullable<MatchEvent["hc"]>, HalfChanceFlash> = { head: "clear", keeper: "heavy", slide: "stop" };
+/** #215: the half-chance badges (Pitch shows them like WIDE or BLOCKED). */
+export const HALF_CHANCE_BADGE: Record<HalfChanceFlash, string> = { clear: "HEADED CLEAR", heavy: "TOO HEAVY", stop: "LAST-DITCH BLOCK" };
 /** #205: what a scene's ball movement looks like on the pitch. A result scene after a long shot keeps "long" (the strike carries on). */
 export type Move = "pass" | "through" | "cross" | "long";
 /** #205: the keeper's pose in a result scene: he stretches to `to` (`dive`) or comes for it (`claim`), easing in over `at[0]`→`at[1]`,
@@ -337,6 +342,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         const wide = recv[1] > GOAL_Y ? 1 : -1; // he comes in from the touchline side
         const rStart = clampPt([recv[0] - toward(atk, run), recv[1] + wide * 5]);
         const mStart = clampPt([rStart[0] + toward(atk, 3), rStart[1] - wide * 2]);
+        // #215: a half-chance's ball in behind is too heavy: the runner is still a stride short when it gets there and it runs on.
+        const rEnd = e.hc === "keeper" ? clampPt([recv[0] - toward(atk, 4), recv[1] + wide * 1.5]) : recv;
         return {
           ...base,
           ms: d(1300), // #190: quicker than a pass (1500) and lifted over the line, so it reads as a through ball
@@ -344,7 +351,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
           ballHeight: [0, 0.45, 0],
           actors: [
             { id: "p", side: atk, label: short(e.p), path: [lerp(passer, [passer[0] - toward(atk, 1), passer[1]], 1), passer, clampPt([passer[0] + toward(atk, 3), passer[1]])] },
-            { id: "r", side: atk, label: short(e.p2), path: [rStart, lerp(rStart, recv, 0.45), recv] },
+            { id: "r", side: atk, label: short(e.p2), path: [rStart, lerp(rStart, rEnd, 0.45), rEnd] },
             { id: "m", side: def, path: [mStart, clampPt([mStart[0] - toward(atk, 1), mStart[1]]), clampPt([recv[0] - toward(atk, 3), recv[1] + wide * 2.5])] },
           ],
         };
@@ -620,6 +627,8 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
         impact: target,
       };
     }
+    case "clearance":
+      return clearanceScene(e, base, from, ball, d);
     case "bounce": {
       const hit = from; // the wall
       return { ...base, ms: d(1400), ball: [prevBall, hit, lerp(hit, ball, 0.5), ball], actors: [{ id: "c", side, label: short(e.p), path: [clampPt([ball[0] - toward(side, 6), ball[1]]), clampPt([ball[0] - toward(side, 4), ball[1]]), ball, ball] }] };
@@ -792,6 +801,71 @@ function penaltyScene(e: MatchEvent, prevBall: Pt, outcome: string, d: ReturnTyp
     cam: penCam(g),
     focus: outcome === "goal" ? side : outcome === "save" ? def : null,
     impact: strikeAt,
+  };
+}
+
+/**
+ * #215: a cosmetic half-chance's answer. `e.side` defends, `from` is where the delivery left the ball (the cross's drop, the heavy
+ * ball's spot, the runner) and `ball` is where the defending side ends up with it: the "own" actor has it from three quarters of the
+ * way through. Headed clear: a defender meets the cross first and heads it out to a team-mate. Too heavy: it runs on past the runner
+ * and the keeper comes out to gather. Last-ditch block: the runner drives at the box and a defender slides in on its edge.
+ */
+function clearanceScene(e: MatchEvent, base: ReturnType<typeof head>, from: Pt, ball: Pt, d: (base: number, floor?: number) => number): Scene {
+  const def = (e.side || "home") as Side;
+  const atk = other(def);
+  const s = e.seq;
+  const lat = from[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch
+  const at = (p: Pt, along: number, across: number): Pt => clampPt([p[0] + toward(atk, along), p[1] + lat * across]); // `along`: the attackers' way
+  const gk = keeperSpot(def);
+  const flash = HALF_CHANCE_FLASH[e.hc ?? "head"];
+  if (e.hc === "keeper") {
+    const gather = ball;
+    return {
+      ...base,
+      ms: d(1900),
+      ball: [from, gather, gather, gather], // it runs on into his hands early: the half-chance is over before the clearance comes
+      actors: [
+        { id: "own", side: def, keeper: true, label: short(e.p), path: [gk, gather, gather, at(gather, -0.5, 0)] },
+        { id: "run", side: atk, label: short(e.p2), path: [at(from, -4, 1.5), lerp(from, gather, 0.3), lerp(from, gather, 0.35), lerp(from, gather, 0.4)] }, // chases, never gets there
+        { id: "m", side: def, path: [at(from, 3, -3), at(from, 6, -2.5), at(from, 7, -2), at(from, 7.5, -2)] },
+      ],
+      flash,
+      flashAt: 0.4,
+      impact: gather,
+    };
+  }
+  if (e.hc === "slide") {
+    const edge = clampPt([from[0] + toward(atk, Math.min(8, 80 - toward(atk, from[0] - goalX(def)))), from[1]]); // the edge of the box
+    return {
+      ...base,
+      ms: d(2000),
+      ball: [from, edge, ball, ball],
+      actors: [
+        { id: "run", side: atk, label: short(e.p2), path: [from, at(edge, -1, 0), at(edge, 0.5, -1), at(edge, 0.5, -1)] }, // drives at the box, goes down over the tackle
+        { id: "own", side: def, label: short(e.p), path: [at(edge, 5, -4), edge, ball, ball] }, // goal-side, slides in, up with the ball
+        { id: "gk", side: def, keeper: true, path: [gk, gk, gk, gk] },
+      ],
+      flash,
+      flashAt: 0.35,
+      impact: edge,
+    };
+  }
+  // Headed clear: the cross dropping at head height in the box, the defender gets there first and heads it out.
+  const land = ball;
+  return {
+    ...base,
+    ms: d(2000),
+    ball: [from, lerp(from, land, 0.5), land, land],
+    ballHeight: [0.6, 0.8, 0, 0],
+    actors: [
+      { id: "hd", side: def, label: short(e.p), path: [at(from, 2.5, jit(s, 7, 1.5)), from, at(from, -1.5, 0), at(from, -2, 0)] },
+      { id: "run", side: atk, path: [at(from, -3, 2.5), at(from, -1, 1.5), at(from, -0.5, 1.5), at(from, -0.5, 1.5)] }, // beaten to it
+      { id: "own", side: def, path: [at(land, -4, 3), at(land, -2, 1.5), land, land] },
+      { id: "gk", side: def, keeper: true, path: [gk, gk, gk, gk] },
+    ],
+    flash,
+    flashAt: 0.3,
+    impact: from,
   };
 }
 
