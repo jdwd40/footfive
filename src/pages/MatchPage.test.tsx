@@ -1182,7 +1182,7 @@ describe("MatchPage labels and timing (#78)", () => {
     await mount(view([{ ...ev(1, now - 30000, "Our card"), t: "yellow_card", major: 1 }], null, now));
     const row = within(screen.getByRole("region", { name: "Live events" }));
     expect(screen.getAllByTestId("ticker-badge")).toHaveLength(1);
-    expect(["This match", "Elsewhere"]).toContain(row.getByTestId("ticker-badge").textContent);
+    expect(row.getByTestId("ticker-badge")).toHaveTextContent(/This match|Elsewhere/);
     expect(screen.queryByText("Live feed")).toBeNull();
     fireEvent.click(row.getByTestId("ticker-toggle"));
     const rows = [...row.getByTestId("ticker-feed").querySelectorAll("li")];

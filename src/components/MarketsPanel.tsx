@@ -10,26 +10,30 @@ type Reserved = { id: string; short: string; reserved: true };
 const EXACT_SPAN = 6; // pocketbase markets.js lists home and away goals from the current score to +5
 
 /**
- * #207: the exact-score market as a fixed 6×6 grid, home goals down and away goals across from the lowest listed score. A score the
- * server stops listing keeps its cell (drawn unavailable), so the other prices never shift. `base` is the last grid origin for
- * this fixture, kept for a refresh that lists no exact score at all. Null when the list does not fit one grid (then it is drawn as is).
+ * #207: the exact-score market as a fixed 6×6 grid, home goals down and away goals across. A score the server stops listing keeps
+ * its cell (drawn unavailable), so the other prices never shift. The grid's origin is, in order: the match's current score when the
+ * host knows it and the listed scores fit its grid (markets.js lists the score to +5); else the origin already in use for this
+ * fixture while they still fit it, so a dropped row or column never re-bases the grid; else the lowest listed score. Null when the
+ * list does not fit one grid (then it is drawn as is).
  */
-function exactGrid(sel: Sel[], base: [number, number] | null): { cells: Array<Sel | Reserved>; base: [number, number] } | null {
-  const parsed = sel.map((s) => ({ s, hg: /^(\d+)-(\d+)$/.exec(s.id) }));
-  if (parsed.some((p) => !p.hg)) return null;
-  const goals = parsed.map((p) => [Number(p.hg![1]), Number(p.hg![2])] as const);
-  const origin: [number, number] | null = goals.length ? [Math.min(...goals.map((g) => g[0])), Math.min(...goals.map((g) => g[1]))] : base;
-  if (!origin) return null;
-  if (goals.some(([h, a]) => h >= origin[0] + EXACT_SPAN || a >= origin[1] + EXACT_SPAN)) return null;
+function exactGrid(sel: Sel[], base: [number, number] | null, score?: [number, number]): { cells: Array<Sel | Reserved>; base: [number, number] } | null {
+  const parsed = sel.map((s) => /^(\d+)-(\d+)$/.exec(s.id));
+  if (parsed.some((hg) => !hg)) return null;
+  const goals = parsed.map((hg) => [Number(hg![1]), Number(hg![2])] as const);
+  const fits = (o: [number, number] | null | undefined): o is [number, number] =>
+    !!o && goals.every(([h, a]) => h >= o[0] && a >= o[1] && h < o[0] + EXACT_SPAN && a < o[1] + EXACT_SPAN);
+  const lowest: [number, number] | null = goals.length ? [Math.min(...goals.map((g) => g[0])), Math.min(...goals.map((g) => g[1]))] : null;
+  const origin = fits(score) ? score : fits(base) ? base : lowest;
+  if (!fits(origin)) return null;
   const byId = new Map(sel.map((s) => [s.id, s]));
   const cells: Array<Sel | Reserved> = [];
   for (let h = origin[0]; h < origin[0] + EXACT_SPAN; h++)
-    for (let a = origin[1]; a < origin[1] + EXACT_SPAN; a++) cells.push(byId.get(`${h}-${a}`) ?? { id: `${h}-${a}`, short: `${h}–${a}`, reserved: true });
+    for (let a = origin[1]; a < origin[1] + EXACT_SPAN; a++) cells.push(byId.get(`${h}-${a}`) ?? { id: `${h}-${a}`, short: `${h}\u2013${a}`, reserved: true });
   return { cells, base: origin };
 }
 
 /** Live/pre-match markets for one fixture. Re-fetches when the published sequence moves. */
-export default function MarketsPanel({ fixtureId, seq, fixtureLabel, compact = false, onClosed }: { fixtureId: string; seq: number; fixtureLabel: string; compact?: boolean; onClosed?: (closed: string | null) => void }) {
+export default function MarketsPanel({ fixtureId, seq, fixtureLabel, compact = false, onClosed, score }: { fixtureId: string; seq: number; fixtureLabel: string; compact?: boolean; onClosed?: (closed: string | null) => void; score?: [number, number] /* the match's current score: the exact grid's origin */ }) {
   const [data, setData] = useState<FixtureMarkets | null>(null);
   const [error, setError] = useState("");
   const { pick, setPick } = useSlip();
@@ -84,7 +88,7 @@ export default function MarketsPanel({ fixtureId, seq, fixtureLabel, compact = f
   const list = compact ? data.markets.filter((m) => m.key === "winner" || m.key === "next_goal") : data.markets;
   const blocks = list.map((m) => {
     const disabled = !!suspended || !!m.closed;
-    const grid = m.key === "exact" ? exactGrid(m.sel || [], exactBase.current.base) : null;
+    const grid = m.key === "exact" ? exactGrid(m.sel || [], exactBase.current.base, score) : null;
     if (grid) exactBase.current.base = grid.base;
     const cells: Array<Sel | Reserved> = grid ? grid.cells : m.sel || [];
     const unoffered = !disabled && cells.some((s) => "reserved" in s || !formatOdds(s.odds));

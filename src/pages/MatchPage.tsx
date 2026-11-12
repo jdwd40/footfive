@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Layout from "../components/Layout";
 import Pitch from "../components/Pitch";
@@ -91,11 +91,21 @@ function CommentaryLine({ fixtureId, replayCaption, seq, text, idle }: {
 /** Pitch on/off preference: presentation only, never changes the match. Legacy "quick" counts as "full". */
 function usePref(): [Pref, (p: Pref) => void, boolean] {
   const sysReduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [p, setP] = useState<Pref>(() => (localStorage.getItem(PREF_KEY) === "off" ? "off" : "full"));
+  const [p, setP] = useState<Pref>(() => {
+    try {
+      return localStorage.getItem(PREF_KEY) === "off" ? "off" : "full";
+    } catch {
+      return "full"; // a blocked store (private mode, previews) only forgets the choice
+    }
+  });
   return [
     p,
     (v) => {
-      localStorage.setItem(PREF_KEY, v);
+      try {
+        localStorage.setItem(PREF_KEY, v);
+      } catch {
+        /* as above */
+      }
       setP(v);
     },
     !!sysReduced,
@@ -392,20 +402,21 @@ export default function MatchPage() {
       <div className="match-page">
       {/* #207: the other matches' scores and the one merged ticker share a row on desktop; on phones they are two slim rows. */}
       <div className="match-top" data-testid="match-top">
-        <div className="match-others flex items-center gap-1.5 overflow-x-auto no-scrollbar" aria-label="Other matches">
+        <OtherMatches count={others.length}>
           <Link to="/live" className="btn-ghost !min-h-8 shrink-0 !px-2.5 !py-0.5 text-xs">
             ← Round
           </Link>
           {others.map((o) => (
             <OtherMatch key={o.id} fx={o} />
           ))}
-        </div>
+        </OtherMatches>
         <Ticker
           key={fx.id}
           items={tickerItems}
           label="Live events"
           badge="Live"
           badgeFor={(i) => (i.fixtureId === fx.id ? "This match" : "Elsewhere")}
+          badgeShortFor={(i) => (i.fixtureId === fx.id ? "This" : "Other")}
           flashGoals={(i) => i.fixtureId !== fx.id}
           empty="Goals, cards and penalties from this match and the round appear here."
         />
@@ -457,7 +468,7 @@ export default function MatchPage() {
               Key moments: every shot and its result, plus goals, cards and penalties. Passes, tackles and fouls are left out, so quiet spells are normal. Statistics are match totals.
             </p>
             {/* #207: a fixed-height list, so a new row never pushes the line-ups and statistics below it. */}
-            <div className="match-feed h-64 overflow-y-auto overscroll-contain pr-1">
+            <div className="match-feed h-64 overflow-y-auto pr-1 lg:overscroll-contain">
               <EventFeed
                 events={seen}
                 view={view}
@@ -507,27 +518,89 @@ function BetTab({ fx, finished }: { fx: MatchView["fixture"]; finished: boolean 
       return !o;
     });
   const bodyId = `bet-tab-${fx.id}`;
+  // #207 review: a cue while more markets are below the fold of the fixed-height body. Opacity only: it never moves anything.
+  const body = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const measure = useCallback(() => {
+    const el = body.current;
+    setMore(!!el && el.scrollHeight - el.scrollTop - el.clientHeight > 24);
+  }, []);
+  useEffect(() => {
+    const el = body.current;
+    if (!el || !open) return;
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [open, measure, finished]);
+  const scoreNow = fx.st?.sc;
   return (
     <section className="panel overflow-hidden" data-testid="bet-tab">
-      <button type="button" className="flex h-11 w-full items-center gap-2 px-3 text-left" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-testid="bet-tab-toggle">
-        <h2 className="panel-title min-w-0 flex-1 truncate">Bet on this match</h2>
-        {!finished && closed ? (
-          <span className="chip chip-amber max-w-[11rem] truncate" data-testid="bet-tab-suspended">
-            <span className="truncate">{closed}</span>
+      <h2 className="m-0">
+        <button type="button" className="flex h-11 w-full items-center gap-2 px-3 text-left" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-testid="bet-tab-toggle">
+          <span className="panel-title min-w-0 flex-1 truncate" title="Bet on this match">
+            Bet on this match
           </span>
-        ) : null}
-        <span aria-hidden className={`text-muted transition-transform ${open ? "rotate-180" : ""}`}>
-          ▾
-        </span>
-      </button>
-      <div id={bodyId} hidden={!open} className="match-bet-body h-80 overflow-y-auto overscroll-contain border-t border-line px-3 py-2" data-testid="bet-tab-body">
-        {finished ? (
-          <p className="text-sm text-muted">Betting has closed — this match is over.</p>
-        ) : (
-          <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} onClosed={onClosed} />
-        )}
+          {!finished && closed ? (
+            <span className="chip chip-amber max-w-[11rem] truncate" title={closed} data-testid="bet-tab-suspended">
+              <span className="truncate">{closed}</span>
+            </span>
+          ) : null}
+          <span aria-hidden className={`text-muted transition-transform ${open ? "rotate-180" : ""}`}>
+            ▾
+          </span>
+        </button>
+      </h2>
+      <div className="relative" hidden={!open}>
+        <div id={bodyId} ref={body} onScroll={measure} className="match-bet-body h-80 overflow-y-auto border-t border-line px-3 py-2 lg:overscroll-contain" data-testid="bet-tab-body">
+          {finished ? (
+            <p className="text-sm text-muted">Betting has closed — this match is over.</p>
+          ) : (
+            <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} onClosed={onClosed} score={scoreNow ? [scoreNow[0], scoreNow[1]] : undefined} />
+          )}
+        </div>
+        <div
+          className={`pointer-events-none absolute inset-x-0 bottom-0 flex h-12 items-end justify-center bg-gradient-to-t from-panel via-panel/80 to-transparent pb-1.5 transition-opacity ${more ? "opacity-100" : "opacity-0"}`}
+          data-testid="bet-more"
+          data-visible={more || undefined}
+        >
+          <button
+            type="button"
+            tabIndex={more ? 0 : -1}
+            aria-hidden={!more}
+            className={`chip chip-muted ${more ? "pointer-events-auto" : ""}`}
+            onClick={() => body.current?.scrollBy({ top: 240, behavior: "smooth" })}
+          >
+            More markets ↓
+          </button>
+        </div>
       </div>
     </section>
+  );
+}
+
+/** #207 review: the other matches. Every chip keeps its width (the score has a fixed slot), so a goal there never moves the
+ * ticker; when the strip cannot show them all it says so with a fade at the clipped edge. */
+function OtherMatches({ count, children }: { count: number; children: ReactNode }) {
+  const el = useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = useState(false);
+  useEffect(() => {
+    const node = el.current;
+    if (!node) return;
+    const check = () => setClipped(node.scrollWidth - node.scrollLeft - node.clientWidth > 2);
+    check();
+    node.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      node.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, [count]);
+  return (
+    <div ref={el} className="match-others flex items-center gap-1.5 overflow-x-auto no-scrollbar" aria-label="Other matches" data-clipped={clipped || undefined}>
+      {children}
+    </div>
   );
 }
 
@@ -536,7 +609,7 @@ function OtherMatch({ fx }: { fx: FixtureCardData }) {
   const score = fx.st ? `${fx.st.sc[0]}–${fx.st.sc[1]}` : "";
   const flash = useChanged(fx.st ? fx.st.sc.join("-") : "0-0"); // kick-off (no state yet → 0–0) is not a goal
   return (
-    <Link to={`/match/${fx.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs hover:border-cyan/50" data-testid="other-match">
+    <Link to={`/match/${fx.id}`} className="flex shrink-0 items-center gap-1 rounded-lg border border-line px-1.5 py-1 text-xs hover:border-cyan/50" data-testid="other-match">
       <Abbr team={fx.home} />
       <span key={flash} className={`tabular inline-block min-w-[2.25rem] rounded px-0.5 text-center font-bold ${flash ? "goal-flash" : ""}`} data-testid="other-score" data-flash={flash || undefined}>
         {score || "v"}
@@ -580,8 +653,8 @@ function Scoreboard({ view, events, now, clockNow, minSec, stale, autoReturn }: 
     <section className="panel overflow-hidden" data-testid="match-scoreboard">
       <div className="match-score-row grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-3 pt-1.5 sm:gap-4 sm:px-4">
         <ScoreTeam team={fx.home} side="home" dim={winner === "away"} />
-        <div className="flex items-center gap-2.5 sm:gap-4">
-          <div className="flex h-10 w-[5.5rem] items-center justify-center">
+        <div className="score-center flex items-center gap-2.5 sm:gap-4">
+          <div className="score-slot flex h-10 w-[5.5rem] items-center justify-center">
             {st ? (
               <div key={flash} className={`w-full text-center text-4xl font-bold leading-none tabular ${flash ? "score-pop" : ""}`} data-testid="match-score">
                 {st.sc[0]}
@@ -688,7 +761,7 @@ function Timeline({ fx, events, sec }: { fx: MatchView["fixture"]; events: Match
       {marks.map(({ e, kind, pct }) => (
         <span
           key={e.seq}
-          className={`absolute -translate-x-1/2 ${e.side === "away" ? "bottom-0" : "top-0"} ${kind === "goal" ? "h-2 w-2 rounded-full border border-ink bg-white" : `h-2 w-1.5 rounded-[1px] ${kind === "red" ? "bg-[#ff3344]" : "bg-[#ffd400]"}`}`}
+          className={`absolute -translate-x-1/2 ${e.side === "away" ? "bottom-0" : "top-0"} ${kind === "goal" ? "h-2 w-2 rounded-full border border-ink bg-white" : kind === "red" ? "h-2.5 w-2 rounded-[1px] bg-[#ff3344] ring-1 ring-white/80" : "h-2 w-1.5 rounded-[1px] bg-[#ffd400]"}`}
           style={{ left: `${pct}%` }}
           title={`${MARK_NAME[kind]} · ${team(e.side)} · ${minuteLabel(e.min)}`}
           data-testid="timeline-mark"

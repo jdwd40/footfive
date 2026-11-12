@@ -297,10 +297,31 @@ h3,
 .btn-odds[data-reserved] { opacity: 0.4; border-style: dashed; }
 @media (min-width: 1024px) {
   .match-top { flex-direction: row; align-items: center; gap: 8px; }
-  /* Fixed halves: chips arriving or a score widening never move the ticker. */
-  .match-top > .match-others { flex: 0 0 calc(50% - 4px); min-width: 0; }
-  .match-top > [data-testid="ticker"] { flex: 1 1 0; min-width: 0; }
+  /* The strip takes the room its chips need (a round's eight fixtures fit at 1280 px), up to 72%; the ticker has the rest. A chip
+     never changes width (its score has a fixed slot), so a goal elsewhere never moves the ticker. */
+  .match-top > .match-others { flex: 0 1 auto; max-width: 76%; min-width: 0; gap: 4px; }
+  .match-others [data-testid="other-match"] { padding-inline: 4px; gap: 2px; }
+  .match-others [data-testid="other-match"] abbr { min-width: 2.25rem; padding-inline: 3px; }
+  .match-others [data-testid="other-score"] { min-width: 2rem; }
+  .match-top > [data-testid="ticker"] { flex: 1 1 0; min-width: 18rem; }
   .match-top > [data-testid="ticker"] > div > .flex-1 { height: 32px; }
+}
+/* #207 review: a strip that cannot show every other match fades out at its clipped edge. */
+.match-others[data-clipped] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+/* #207 review: under 360 px the scoreboard row is narrower (smaller crests, score and clock slots), so each crest keeps a clear gap
+   from the score and the clock. */
+@media (max-width: 359px) {
+  .match-score-row { column-gap: 6px; }
+  .match-score-row .score-center { gap: 6px; }
+  .match-score-row .score-slot { width: 4.25rem; }
+  .match-score-row [data-testid="match-score"] { font-size: 32px; }
+  .match-score-row .match-clock { width: 4rem; font-size: 24px; }
+  .match-score-row .match-clock [aria-label="Match clock"] { font-size: 24px; }
+  .match-score-row .match-clock [data-testid="match-shootout-score"] { font-size: 15px; }
+  .score-crest abbr { font-size: 11px; padding: 2px 4px; min-width: 2.4rem; }
 }
 /* Final chrome must fit without taking height from the pitch. */
 @media (max-width: 359px) {

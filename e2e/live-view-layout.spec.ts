@@ -47,7 +47,8 @@ function markets(sc: [number, number], phase: "priced" | "withdrawn", closed: st
 }
 
 type Req = { method: string; path: string; search: string; body: unknown; at: number };
-type Opts = { start: number; betTab?: "open"; marketPhase?: (now: number) => "priced" | "withdrawn" };
+type Opts = { start: number; betTab?: "open"; marketPhase?: (now: number) => "priced" | "withdrawn"; others?: number /* other fixtures in the round (R16: 7) */ };
+const EXTRA = ["ABC", "DEF", "GHI", "JKL", "MNO", "PQR", "STU", "VWX", "YZA", "BCD", "EFG", "HIJ"].map((a, i) => team(`x${i}`, `Extra ${a}`, a, ["#3a86ff", "#ff006e", "#8ac926", "#ffbe0b"][i % 4]));
 
 async function mount(page: Page, opts: Opts) {
   const user = { id: "layout207user01", email: "layout207@example.invalid", display_name: "Layout test", role: "user", must_change_password: false };
@@ -83,7 +84,7 @@ async function mount(page: Page, opts: Opts) {
     let body: unknown;
     if (url.pathname === "/api/collections/users/auth-refresh") body = { token, record: user };
     else if (url.pathname === "/api/footfive/me") body = { ...user, credits: 1000 };
-    else if (url.pathname === "/api/footfive/live") body = { serverTimeMs: now, paused: false, mode: "live", timing: { minuteMs: MIN_MS }, championship: null, round: { id: "r", key: "r16", label: "Round of 16", status: "live", scheduledAt: START, finishedAt: null }, fixtures: [fixture, other], bracket: [], ticker: scored ? [{ id: "other:9", fixtureId: "other", seq: 9, at: OTHER_GOAL, t: "goal", side: "home", text: "GOAL! PHL 1–0 TRI", min: 3 }] : [], champion: null, nextChampionshipAt: null } as LiveView;
+    else if (url.pathname === "/api/footfive/live") body = { serverTimeMs: now, paused: false, mode: "live", timing: { minuteMs: MIN_MS }, championship: null, round: { id: "r", key: "r16", label: "Round of 16", status: "live", scheduledAt: START, finishedAt: null }, fixtures: [fixture, other, ...Array.from({ length: Math.max(0, (opts.others ?? 1) - 1) }, (_, i) => ({ ...other, id: `extra${i}`, slot: `c${i}`, index: i + 2, home: EXTRA[i * 2], away: EXTRA[i * 2 + 1], st: last ? { ...last.st, sc: [0, 0] as [number, number], d: 0 as const } : null }))], bracket: [], ticker: scored ? [{ id: "other:9", fixtureId: "other", seq: 9, at: OTHER_GOAL, t: "goal", side: "home", text: "GOAL! PHL 1–0 TRI", min: 3 }] : [], champion: null, nextChampionshipAt: null } as LiveView;
     else if (url.pathname === "/api/footfive/match/layout") body = { serverTimeMs: now, round: { id: "r", key: "r16", label: "Round of 16", status: "live" }, fixture, events: published.filter((e) => e.seq > Number(url.searchParams.get("since") ?? 0)), eventsPage: { nextSeq: last?.seq ?? 0, hasMore: false, throughMs: now }, lineups: { home: lineup("home"), away: lineup("away") }, sentOff: [], managedSide: null, coach: null } satisfies MatchView;
     else if (url.pathname === "/api/footfive/bets/mine") body = { credits: 1000, bets: [], settledStaked: 0, settledReturned: 0, net: 0 };
     else if (url.pathname === "/api/footfive/markets/layout") {
@@ -152,6 +153,47 @@ for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)).toBe(false);
   });
 }
+
+for (const vp of [{ width: 320, height: 700 }, { width: 390, height: 844 }]) {
+  test(`phones: the scoreboard crests keep a clear gap from the score and clock, and the ticker item stays readable — ${vp.width}px (#207 review)`, async ({ page }) => {
+    await page.setViewportSize(vp);
+    await mount(page, { start: T(30), others: 7 });
+    await until(page, T(30) + LAG + 500);
+    const crest = async (side: string) => (await page.getByTestId(`score-team-${side}`).locator("abbr").boundingBox())!;
+    const [home, away, score, clock] = [await crest("home"), await crest("away"), await box(page, "match-score"), await box(page, "match-clock")];
+    // The home crest is left of the score, the away crest right of the clock, with at least 8 px of clear space each.
+    expect(score.x - (home.x + home.width), "home crest to score").toBeGreaterThanOrEqual(8);
+    expect(away.x - (clock.x + clock.width), "clock to away crest").toBeGreaterThanOrEqual(8);
+    const clockText = (await page.getByTestId("match-clock").getByLabel("Match clock").boundingBox())!;
+    expect(away.x - (clockText.x + clockText.width), "clock digits to away crest").toBeGreaterThanOrEqual(8);
+    // The ticker item has room to be read (it had about 38 px at 320 px), and the toggle keeps an accessible name.
+    await expect.poll(async () => { await page.clock.runFor(500); return page.getByTestId("ticker-current").count(); }).toBe(1);
+    const room = await page.getByTestId("ticker-current").evaluate((a) => { const p = a.parentElement!; const cs = getComputedStyle(p); return p.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); });
+    expect(room, "room for the ticker item").toBeGreaterThanOrEqual(vp.width < 360 ? 150 : 200);
+    await expect(page.getByTestId("ticker-toggle")).toHaveAccessibleName(/Recent events/);
+    // Phones show part of the other matches' strip: its clipped edge says there is more.
+    await expect(page.getByLabel("Other matches")).toHaveAttribute("data-clipped", "true");
+    // The pitch is not lower than on main (258 px at 320, 254 px at 390).
+    expect((await box(page, "pitch")).y).toBeLessThan(vp.width < 360 ? 258 : 254);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)).toBe(false);
+  });
+}
+
+test("desktop: every other match of a Round of 16 is visible at 1280 px, with no clipped strip (#207 review)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mount(page, { start: T(30), others: 7 });
+  const strip = page.getByLabel("Other matches");
+  await expect(page.getByTestId("other-match")).toHaveCount(7);
+  const s = (await strip.boundingBox())!;
+  for (const chip of await page.getByTestId("other-match").all()) {
+    const c = (await chip.boundingBox())!;
+    expect(c.x).toBeGreaterThanOrEqual(s.x - 0.5);
+    expect(c.x + c.width).toBeLessThanOrEqual(s.x + s.width + 0.5);
+  }
+  await expect(strip).not.toHaveAttribute("data-clipped", /.*/);
+  expect((await box(page, "ticker")).width).toBeGreaterThanOrEqual(280);
+  expect((await box(page, "pitch")).y).toBeLessThan(205);
+});
 
 for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
   test(`no layout shift from before kick-off through the first card, a goal, a goal elsewhere and withdrawn markets — ${vp.width}px`, async ({ page }) => {
@@ -222,10 +264,17 @@ test("betting tab: folded by default, same requests whether open or not, a fixed
   const known = ["/api/collections/users/auth-refresh", "/api/footfive/me", "/api/footfive/live", "/api/footfive/match/layout", "/api/footfive/bets/mine", "/api/footfive/markets/layout"];
   expect(requests.filter((r) => !known.includes(r.path)).map((r) => r.path)).toEqual([]);
   expect(requests.filter((r) => r.method !== "GET" && r.path !== "/api/collections/users/auth-refresh").map((r) => r.path)).toEqual([]);
-  // A fixed-height body: markets scroll inside it.
+  // A fixed-height body: markets scroll inside it, and a cue says so until its end is in view (#207 review).
   const bodyBox = (await body.boundingBox())!;
   expect(bodyBox.height).toBeCloseTo(320, 0);
   expect(await body.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+  const more = page.getByTestId("bet-more");
+  await expect(more).toHaveAttribute("data-visible", "true");
+  await expect(more.getByRole("button", { name: "More markets ↓" })).toBeVisible();
+  await body.evaluate((e) => e.scrollTo({ top: e.scrollHeight }));
+  await expect(more).not.toHaveAttribute("data-visible", /.*/);
+  expect((await body.boundingBox())!.height).toBeCloseTo(320, 0);
+  await body.evaluate((e) => e.scrollTo({ top: 0 }));
   // The bet slip flow from the tab is the old one, with the same payload.
   await page.getByTestId("odds-next_goal-away").click();
   const slip = page.getByTestId("bet-slip");
@@ -275,4 +324,10 @@ test("betting tab: a withdrawn price and a dropped exact score change neither th
     const i = ids.indexOf(id);
     expect(suspended[i], id).toEqual(before[i]);
   }
+  // Folded, the tab still says the markets are suspended (#207 review).
+  await page.getByTestId("bet-tab-toggle").click();
+  await expect(page.getByTestId("bet-tab-body")).toBeHidden();
+  await expect(page.getByTestId("bet-tab-suspended")).toBeVisible();
+  await expect(page.getByTestId("bet-tab-suspended")).toHaveAttribute("title", "Suspended — incident in progress");
+  await expect(page.getByRole("heading", { name: /Bet on this match/ }).getByRole("button")).toHaveAttribute("aria-expanded", "false");
 });

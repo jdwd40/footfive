@@ -40,6 +40,7 @@ export default function Ticker({
   empty = "Goals, penalties, red cards and results from every match appear here.",
   flashGoals = false,
   badgeFor,
+  badgeShortFor,
 }: {
   items: TickerItem[];
   label?: string;
@@ -47,6 +48,7 @@ export default function Ticker({
   empty?: string;
   flashGoals?: boolean | ((i: TickerItem) => boolean) /* #206: a goal that arrives while watching flashes the row once (only those this picks) */;
   badgeFor?: (i: TickerItem) => string;
+  badgeShortFor?: (i: TickerItem) => string /* the badge on phones under 480 px (the full label stays its accessible name) */;
 }) {
   const [shown, setShown] = useState<TickerItem | null>(items[0] || null);
   const [open, setOpen] = useState(false);
@@ -85,11 +87,23 @@ export default function Ticker({
   const flashes = typeof flashGoals === "function" ? flashGoals : () => flashGoals;
   const flash = !!shown && (shown.t === "goal" || shown.t === "penalty_goal") && flashes(shown) && arrived.current!.has(shown.id);
   const tag = badgeFor && shown ? badgeFor(shown) : badge;
+  // The badge keeps one width whether an item is shown or not, so the first item never moves the text beside it.
+  const short = badgeShortFor ? (shown ? badgeShortFor(shown) : badge) : null;
   return (
     <section className="panel relative overflow-hidden" aria-label={label} data-testid="ticker">
       {flash ? <span key={shown!.id} className="goal-flash pointer-events-none absolute inset-0" data-testid="ticker-flash" aria-hidden /> : null}
       <div className="flex items-stretch">
-        <div className={`flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white ${badgeFor ? "w-[7.5rem] justify-center px-1 text-[10px] tracking-wider" : ""}`} data-testid="ticker-badge">{tag}</div>
+        <div className={`flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white ${badgeFor ? `${short ? "w-[3.25rem] min-[480px]:w-[7.5rem]" : "w-[7.5rem]"} justify-center px-1 text-[10px] tracking-wider` : ""}`} data-testid="ticker-badge">
+          {short ? (
+            // #207 review: under 480 px a short label, so the item keeps room to be read; the full label is still its name.
+            <>
+              <span className="min-[480px]:hidden" aria-hidden>{short}</span>
+              <span className="sr-only min-[480px]:not-sr-only">{tag}</span>
+            </>
+          ) : (
+            tag
+          )}
+        </div>
         {/* One line at one height: an item, a long item and the empty note all fit it (#207: no shift at the first item). */}
         <div className="flex h-9 min-w-0 flex-1 items-center px-3 text-sm leading-5" aria-live="polite">
           {shown ? (
@@ -101,8 +115,17 @@ export default function Ticker({
             <span className="truncate text-muted" title={empty}>{empty}</span>
           )}
         </div>
-        <button type="button" className="w-[5.5rem] shrink-0 border-l border-line px-2 text-center text-xs text-muted hover:text-white" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="ticker-toggle">
-          {open ? "Hide" : `Recent${pending ? ` (+${pending})` : ""}`}
+        {/* Under 480 px the toggle is an icon (its label stays its accessible name), so the item keeps room to be read. */}
+        <button
+          type="button"
+          className="w-10 shrink-0 border-l border-line px-1 text-center text-xs text-muted hover:text-white min-[480px]:w-[5.5rem] min-[480px]:px-2"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={open ? "Hide recent events" : `Recent events${pending ? `, ${pending} more` : ""}`}
+          data-testid="ticker-toggle"
+        >
+          <span aria-hidden className="min-[480px]:hidden">{open ? "✕" : pending ? `☰${pending}` : "☰"}</span>
+          <span aria-hidden className="hidden min-[480px]:inline">{open ? "Hide" : `Recent${pending ? ` (+${pending})` : ""}`}</span>
         </button>
       </div>
       {open ? (
