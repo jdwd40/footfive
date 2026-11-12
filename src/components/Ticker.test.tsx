@@ -39,3 +39,34 @@ describe("Ticker goal flash (#206)", () => {
     expect(screen.queryByTestId("ticker-flash")).toBeNull();
   });
 });
+
+describe("Ticker as one merged row (#207)", () => {
+  it("labels each item with badgeFor and flashes only the goals the predicate picks", () => {
+    const ours = { ...item("ours", "goal"), fixtureId: "fx1" };
+    const theirs = { ...item("theirs", "goal"), fixtureId: "fx2" };
+    const row = (items: TickerItem[]) => (
+      <MemoryRouter>
+        <Ticker items={items} badgeFor={(i) => (i.fixtureId === "fx1" ? "This match" : "Elsewhere")} flashGoals={(i) => i.fixtureId !== "fx1"} />
+      </MemoryRouter>
+    );
+    const a = render(row([]));
+    a.rerender(row([ours]));
+    expect(screen.getByTestId("ticker-badge")).toHaveTextContent("This match");
+    expect(screen.queryByTestId("ticker-flash")).toBeNull();
+    cleanup();
+    const b = render(row([]));
+    b.rerender(row([theirs]));
+    expect(screen.getByTestId("ticker-badge")).toHaveTextContent("Elsewhere");
+    expect(screen.getByTestId("ticker-flash")).toBeTruthy();
+  });
+
+  it("draws the empty note and an item in the same one-line box, so the first item cannot change its height", () => {
+    const a = render(draw([]));
+    const box = () => screen.getByTestId("ticker").querySelector("[aria-live]")!;
+    expect(box().className).toContain("h-9");
+    expect(box().firstElementChild!.className).toContain("truncate");
+    a.rerender(draw([item("x", "goal")]));
+    expect(box().className).toContain("h-9");
+    expect(screen.getByTestId("ticker-current").querySelector(".truncate")).toBeTruthy();
+  });
+});

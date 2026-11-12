@@ -29,7 +29,7 @@ export function PhaseChip({ fx, now }: { fx: Fx; now: number }) {
 
 /** Clock: regulation / extra time, "PENS" in a shootout, kick-off time before the start.
  * `minSec` is the match page's visit floor. Cards omit it and keep the raw reading. A missing raw clock stays blank. */
-export function MatchClock({ fx, now, big = false, minSec = null }: { fx: Fx; now: number; big?: boolean; minSec?: number | null }) {
+export function MatchClock({ fx, now, big = false, minSec = null, sizeClass }: { fx: Fx; now: number; big?: boolean; minSec?: number | null; sizeClass?: string /* #207: the match scoreboard's big clock */ }) {
   const st = fx.st;
   if (!st) return <span className="tabular text-muted">{ukTime(fx.kickoffAt)} UK</span>;
   if (st.ph === "shootout") return <span className={`font-display text-magenta ${big ? "text-lg" : ""}`}>PENS</span>;
@@ -39,9 +39,9 @@ export function MatchClock({ fx, now, big = false, minSec = null }: { fx: Fx; no
   const paused = !st.clk?.run;
   const et = st.ph.startsWith("extra") || st.ph === "et_half_time";
   return (
-    <span className={`tabular font-bold ${et ? "text-magenta" : "text-cyan"} ${paused ? "opacity-70" : ""} ${big ? "text-xl" : "text-sm"}`} aria-label="Match clock">
+    <span className={`tabular font-bold ${et ? "text-magenta" : "text-cyan"} ${paused ? "opacity-70" : ""} ${sizeClass ?? (big ? "text-xl" : "text-sm")}`} aria-label="Match clock">
       {clockText(shown)}
-      {et ? <span className="ml-1 text-[9px]">ET</span> : null}
+      {et ? <span className={`ml-1 ${sizeClass ? "align-top text-[11px]" : "text-[9px]"}`}>ET</span> : null}
     </span>
   );
 }

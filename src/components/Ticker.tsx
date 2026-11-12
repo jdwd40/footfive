@@ -28,10 +28,28 @@ function icon(t: string) {
 }
 
 /**
- * Round-wide recent-events ticker. Each new item holds for a readable time; when several
+ * Recent-events ticker. Each new item holds for a readable time; when several
  * arrive together they queue (bounded) and the expandable feed lets users catch up.
+ * #207: one fixed line whatever it shows (the empty note, an item, a long item), so the first item never moves the page;
+ * `badgeFor` labels each item (the match page's one ticker carries this match and the other matches) in a fixed-width badge.
  */
-export default function Ticker({ items, label = "Round events", badge = "Live feed", empty = "Goals, penalties, red cards and results from every match appear here.", flashGoals = false }: { items: TickerItem[]; label?: string; badge?: string; empty?: string; flashGoals?: boolean /* #206: a goal that arrives while watching flashes the row once */ }) {
+export default function Ticker({
+  items,
+  label = "Round events",
+  badge = "Live feed",
+  empty = "Goals, penalties, red cards and results from every match appear here.",
+  flashGoals = false,
+  badgeFor,
+  badgeShortFor,
+}: {
+  items: TickerItem[];
+  label?: string;
+  badge?: string;
+  empty?: string;
+  flashGoals?: boolean | ((i: TickerItem) => boolean) /* #206: a goal that arrives while watching flashes the row once (only those this picks) */;
+  badgeFor?: (i: TickerItem) => string;
+  badgeShortFor?: (i: TickerItem) => string /* the badge on phones under 480 px (the full label stays its accessible name) */;
+}) {
   const [shown, setShown] = useState<TickerItem | null>(items[0] || null);
   const [open, setOpen] = useState(false);
   const queue = useRef<TickerItem[]>([]);
@@ -66,24 +84,48 @@ export default function Ticker({ items, label = "Round events", badge = "Live fe
   }, []);
 
   const pending = queue.current.length;
-  const flash = flashGoals && !!shown && (shown.t === "goal" || shown.t === "penalty_goal") && arrived.current!.has(shown.id);
+  const flashes = typeof flashGoals === "function" ? flashGoals : () => flashGoals;
+  const flash = !!shown && (shown.t === "goal" || shown.t === "penalty_goal") && flashes(shown) && arrived.current!.has(shown.id);
+  const tag = badgeFor && shown ? badgeFor(shown) : badge;
+  // The badge keeps one width whether an item is shown or not, so the first item never moves the text beside it.
+  const short = badgeShortFor ? (shown ? badgeShortFor(shown) : badge) : null;
   return (
     <section className="panel relative overflow-hidden" aria-label={label} data-testid="ticker">
       {flash ? <span key={shown!.id} className="goal-flash pointer-events-none absolute inset-0" data-testid="ticker-flash" aria-hidden /> : null}
       <div className="flex items-stretch">
-        <div className="flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white" data-testid="ticker-badge">{badge}</div>
-        <div className="min-w-0 flex-1 px-3 py-2.5" aria-live="polite">
+        <div className={`flex shrink-0 items-center bg-live/90 px-3 font-display text-[11px] font-bold uppercase tracking-widest text-white ${badgeFor ? `${short ? "w-[3.25rem] min-[480px]:w-[7.5rem]" : "w-[7.5rem]"} justify-center px-1 text-[10px] tracking-wider` : ""}`} data-testid="ticker-badge">
+          {short ? (
+            // #207 review: under 480 px a short label, so the item keeps room to be read; the full label is still its name.
+            <>
+              <span className="min-[480px]:hidden" aria-hidden>{short}</span>
+              <span className="sr-only min-[480px]:not-sr-only">{tag}</span>
+            </>
+          ) : (
+            tag
+          )}
+        </div>
+        {/* One line at one height: an item, a long item and the empty note all fit it (#207: no shift at the first item). */}
+        <div className="flex h-9 min-w-0 flex-1 items-center px-3 text-sm leading-5" aria-live="polite">
           {shown ? (
-            <Link key={shown.id} to={`/match/${shown.fixtureId}`} className={`event-enter flex items-center gap-2 font-semibold ${tone(shown.t)}`} data-testid="ticker-current">
+            <Link key={shown.id} to={`/match/${shown.fixtureId}`} className={`event-enter flex min-w-0 items-center gap-2 font-semibold ${tone(shown.t)}`} data-testid="ticker-current">
               <span aria-hidden>{icon(shown.t)}</span>
               <span className="truncate">{shown.text}</span>
             </Link>
           ) : (
-            <span className="text-sm text-muted">{empty}</span>
+            <span className="truncate text-muted" title={empty}>{empty}</span>
           )}
         </div>
-        <button type="button" className="shrink-0 border-l border-line px-3 text-xs text-muted hover:text-white" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="ticker-toggle">
-          {open ? "Hide" : `Recent${pending ? ` (+${pending})` : ""}`}
+        {/* Under 480 px the toggle is an icon (its label stays its accessible name), so the item keeps room to be read. */}
+        <button
+          type="button"
+          className="w-10 shrink-0 border-l border-line px-1 text-center text-xs text-muted hover:text-white min-[480px]:w-[5.5rem] min-[480px]:px-2"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={open ? "Hide recent events" : `Recent events${pending ? `, ${pending} more` : ""}`}
+          data-testid="ticker-toggle"
+        >
+          <span aria-hidden className="min-[480px]:hidden">{open ? "✕" : pending ? `☰${pending}` : "☰"}</span>
+          <span aria-hidden className="hidden min-[480px]:inline">{open ? "Hide" : `Recent${pending ? ` (+${pending})` : ""}`}</span>
         </button>
       </div>
       {open ? (
@@ -94,6 +136,7 @@ export default function Ticker({ items, label = "Round events", badge = "Live fe
                 <span aria-hidden className="w-5 shrink-0 text-center">
                   {icon(i.t)}
                 </span>
+                {badgeFor ? <span className="w-[5.5rem] shrink-0 text-[10px] font-bold uppercase tracking-wider text-muted">{badgeFor(i)}</span> : null}
                 <Link to={`/match/${i.fixtureId}`} className={`min-w-0 flex-1 hover:underline ${tone(i.t)}`}>
                   {i.text}
                 </Link>

@@ -51,7 +51,9 @@ test.describe("shared multiplayer + live", () => {
     await page.goto(`/match/${first.id}`);
     await expect(page.getByTestId("match-scoreboard")).toBeVisible({ timeout: 20000 });
     await expect(page.getByTestId("commentary")).toBeVisible();
-    if (l.mode === "live" && l.ticker?.some((i) => i.fixtureId !== first.id)) await expect(page.getByRole("region", { name: "Other matches", exact: true })).toBeVisible({ timeout: 15000 });
+    // #207: this match and the other matches share one ticker row.
+    if (l.mode === "live" && l.ticker?.some((i) => i.fixtureId !== first.id)) await expect(page.getByRole("region", { name: "Live events", exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("ticker")).toHaveCount(1);
     if (second) {
       await page.goto(`/match/${second.id}`);
       await expect(page.getByTestId("match-scoreboard")).toBeVisible({ timeout: 15000 });
@@ -69,6 +71,10 @@ test.describe("shared multiplayer + live", () => {
     test.skip(!l.fixtures.length, "no fixtures announced yet");
     await loginViaUi(page, "e2e_user_a@test.local", "testpass99");
     await page.goto(`/match/${l.fixtures[l.fixtures.length - 1].id}`);
+    // #207: the markets are folded into the "Bet on this match" tab; open it (a finished match has no markets to bet on).
+    const tab = page.getByTestId("bet-tab-toggle");
+    await expect(tab).toBeVisible({ timeout: 20000 });
+    if ((await tab.getAttribute("aria-expanded")) !== "true") await tab.click();
     const odds = page.locator('[data-testid^="odds-winner-"]:not([disabled])').first();
     const has = await odds.isVisible({ timeout: 10000 }).catch(() => false);
     test.skip(!has, "markets suspended or blocked right now");

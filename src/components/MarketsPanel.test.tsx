@@ -159,10 +159,106 @@ describe("MarketsPanel", () => {
     expect(after).toBeDisabled();
     expect(after).toHaveTextContent(NOT_OFFERED);
     expect(after).toHaveAccessibleName("Orl, Not offered");
-    // The explanation is for assistive tech only, so it never adds a visible line that pushes the page down.
-    expect(screen.getByTestId("unoffered-hint")).toHaveClass("sr-only");
+    // #207 (deferred #203 finding): the explanation is visible to sighted touch users too, inside the panel's reserved status
+    // area, which already existed before the withdrawal (so the line costs no layout).
+    const hint = screen.getByTestId("unoffered-hint");
+    expect(hint).not.toHaveClass("sr-only");
+    expect(hint).toHaveTextContent(UNOFFERED_HINT);
+    expect(screen.getByTestId("markets-status").contains(hint)).toBe(true);
+    expect(screen.getByTestId("markets-status")).toHaveClass("h-11");
+    expect(after).toHaveAttribute("aria-describedby", hint.id);
     fireEvent.click(after);
     expect(setPick).not.toHaveBeenCalled();
+  });
+
+  it("holds the exact-score grid when a score is dropped in play: its cell stays as unavailable and no other price moves (#207)", async () => {
+    vi.useFakeTimers();
+    setPick.mockClear();
+    const ids = ["0-3", "0-4", "0-5", "1-3", "1-4", "1-5", "2-3", "2-4"];
+    const exact = (drop: string | null): FixtureMarkets => {
+      const m = openRepro();
+      m.markets[1] = { ...m.markets[1], sel: ids.filter((id) => id !== drop).map((id, i) => ({ id, label: `HOM ${id} ORL`, short: id.replace("-", "\u2013"), odds: 2 + i })) };
+      return m;
+    };
+    const { footfiveApi } = await import("../lib/pocketbase");
+    // markets.js drops a near-certain exact score from the list in play (it is not sent as a null).
+    vi.mocked(footfiveApi.fixtureMarkets).mockReset().mockResolvedValueOnce(exact(null)).mockResolvedValue(exact("0-3"));
+    const { default: MarketsPanel } = await import("./MarketsPanel");
+    render(<MarketsPanel fixtureId="fx1" seq={1} fixtureLabel="HOM v ORL" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const grid = screen.getByTestId("exact-grid");
+    const cellIds = () => [...grid.children].map((c) => c.getAttribute("data-testid"));
+    expect(grid.children).toHaveLength(36); // 6×6 from the lowest listed score: home 0–5 down, away 3–8 across
+    const before = cellIds();
+    expect(before.slice(0, 6)).toEqual(["odds-exact-0-3", "odds-exact-0-4", "odds-exact-0-5", "exact-reserved", "exact-reserved", "exact-reserved"]);
+    const kept = screen.getByTestId("odds-exact-2-4");
+    const keptIndex = [...grid.children].indexOf(kept);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.queryByTestId("odds-exact-0-3")).toBeNull();
+    expect(grid.children).toHaveLength(36);
+    expect(cellIds()).toEqual(["exact-reserved", ...before.slice(1)]);
+    expect(screen.getByTestId("odds-exact-2-4")).toBe(kept);
+    expect([...grid.children].indexOf(kept)).toBe(keptIndex);
+    const hole = grid.children[0] as HTMLElement;
+    expect(hole).toHaveAttribute("aria-hidden");
+    expect(hole.tagName).toBe("DIV"); // not a button: it can never be picked
+    expect(hole.title).toBe(`0\u20133: ${NOT_OFFERED}`);
+    expect(screen.getByTestId("unoffered-hint")).toHaveTextContent(UNOFFERED_HINT);
+    fireEvent.click(hole);
+    expect(setPick).not.toHaveBeenCalled();
+    fireEvent.click(kept);
+    expect(setPick).toHaveBeenCalledWith(expect.objectContaining({ market: "exact", selection: "2-4", fixtureId: "fx1" }));
+  });
+
+  it("holds the exact grid's origin when a whole row or column is dropped, so no cell relabels without a goal (#207 review)", async () => {
+    vi.useFakeTimers();
+    const withExact = (ids: string[]): FixtureMarkets => {
+      const m = openRepro();
+      m.markets[1] = { ...m.markets[1], sel: ids.map((id, i) => ({ id, label: `HOM ${id} ORL`, short: id.replace("-", "\u2013"), odds: 3 + i })) };
+      return m;
+    };
+    const { footfiveApi } = await import("../lib/pocketbase");
+    // Listed 2-2, 3-1, 4-1: the origin is 2–1. Dropping 2-2 (the only score in home row 2) leaves 3-1 and 4-1, whose lowest home
+    // score is 3: inferring the origin from the list alone re-based the whole grid one row down.
+    vi.mocked(footfiveApi.fixtureMarkets).mockReset().mockResolvedValueOnce(withExact(["2-2", "3-1", "4-1"])).mockResolvedValue(withExact(["3-1", "4-1"]));
+    const { default: MarketsPanel } = await import("./MarketsPanel");
+    render(<MarketsPanel fixtureId="fx1" seq={1} fixtureLabel="HOM v ORL" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const grid = screen.getByTestId("exact-grid");
+    const labels = () => [...grid.children].map((c) => c.firstElementChild!.textContent);
+    expect(labels()[0]).toBe("2\u20131");
+    const at = (id: string) => [...grid.children].indexOf(screen.getByTestId(`odds-exact-${id}`));
+    const before = { labels: labels(), i31: at("3-1"), i41: at("4-1") };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.queryByTestId("odds-exact-2-2")).toBeNull();
+    expect(labels()).toEqual(before.labels); // same origin: every cell keeps its score
+    expect(at("3-1")).toBe(before.i31);
+    expect(at("4-1")).toBe(before.i41);
+  });
+
+  it("anchors the exact grid to the match's current score when the host passes it (#207 review)", async () => {
+    const m = openRepro();
+    m.markets[1] = { ...m.markets[1], sel: [{ id: "3-1", label: "HOM 3–1 ORL", short: "3\u20131", odds: 4 }, { id: "4-2", label: "HOM 4–2 ORL", short: "4\u20132", odds: 6 }] };
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.fixtureMarkets).mockReset().mockResolvedValue(m);
+    const { default: MarketsPanel } = await import("./MarketsPanel");
+    render(<MarketsPanel fixtureId="fx1" seq={1} fixtureLabel="HOM v ORL" score={[2, 0]} />);
+    const grid = await screen.findByTestId("exact-grid");
+    expect(grid.children).toHaveLength(36);
+    expect(grid.children[0].firstElementChild!.textContent).toBe("2\u20130"); // the score itself, though 2–0 is not listed
+    expect([...grid.children].indexOf(screen.getByTestId("odds-exact-3-1"))).toBe(6 + 1);
+  });
+
+  it("reports the suspension to its host and keeps it in the reserved status area (#207)", async () => {
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.fixtureMarkets).mockReset().mockResolvedValue(openRepro(SUSPENDED));
+    const onClosed = vi.fn();
+    const { default: MarketsPanel } = await import("./MarketsPanel");
+    render(<MarketsPanel fixtureId="fx1" seq={1} fixtureLabel="HOM v ORL" onClosed={onClosed} />);
+    const chip = await screen.findByTestId("markets-suspended");
+    expect(chip).toHaveTextContent(SUSPENDED);
+    expect(screen.getByTestId("markets-status").contains(chip)).toBe(true);
+    expect(onClosed).toHaveBeenLastCalledWith(SUSPENDED);
   });
 
   it("shows the bare error only when nothing has loaded", async () => {

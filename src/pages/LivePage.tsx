@@ -268,7 +268,7 @@ function BetDrawer({ fx, onClose }: { fx: Fx; onClose: () => void }) {
             ✕
           </button>
         </div>
-        <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} />
+        <MarketsPanel fixtureId={fx.id} seq={fx.seq} fixtureLabel={`${fx.home.abbreviation} v ${fx.away.abbreviation}`} score={fx.st ? [fx.st.sc[0], fx.st.sc[1]] : undefined} />
       </div>
     </div>
   );
