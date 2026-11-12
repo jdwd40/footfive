@@ -487,3 +487,36 @@ main {
   .pitch-emph { display: none; }
   .goal-flash { animation: none; }
 }
+
+/* #208: dead time. The break summary sits under the docked break banner inside the pitch box: one card on a narrow pitch, two side
+   by side on a wide one (a container query on the summary picks the `data-n` or the `data-w` set). Type sizes follow the pitch
+   width. The pre-match line-ups walk out of the tunnel (transform and opacity only: no layout). */
+.brk { container-type: inline-size; }
+.brk-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; height: 100%; font-size: 11px; line-height: 1.25; }
+.brk-card { display: none; overflow: hidden; }
+.brk-card[data-n] { display: flex; }
+.brk-title { font-size: 10px; }
+.brk-dot > span { background: rgba(255, 255, 255, 0.35); }
+.brk-dot[data-n] > span { background: var(--color-cyan); }
+@container (min-width: 520px) {
+  .brk-title { font-size: 12px; }
+  .brk-cards { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); font-size: 13px; line-height: 1.35; }
+  .brk-card[data-n] { display: none; }
+  .brk-card[data-w] { display: flex; }
+  .brk-dot[data-n] > span { background: rgba(255, 255, 255, 0.35); }
+  .brk-dot[data-w] > span { background: var(--color-cyan); }
+}
+@container (min-width: 760px) {
+  .brk-cards { font-size: 15px; }
+  .brk-title { font-size: 13px; }
+}
+.brk .brk-body abbr { font-size: 0.85em; min-width: 2.4rem; }
+@keyframes walkout {
+  from { transform: translate(var(--dx), var(--dy)); opacity: 0; }
+  25% { opacity: 1; }
+  to { transform: none; opacity: 1; }
+}
+.walkout { animation: walkout 1.6s cubic-bezier(0.25, 0.7, 0.3, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .walkout, .brk-card { animation: none !important; }
+}

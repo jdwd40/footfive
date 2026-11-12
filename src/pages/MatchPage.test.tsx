@@ -1958,3 +1958,266 @@ describe("MatchPage scoreboard timeline (#207)", () => {
     }
   });
 });
+
+describe("MatchPage dead time: break summaries and the pre-match walkout (#208)", () => {
+  const LAG = 1500;
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    h.live = null;
+    const { footfiveApi } = await import("../lib/pocketbase");
+    vi.mocked(footfiveApi.match).mockReset();
+  });
+  type St = NonNullable<MatchView["fixture"]["st"]>;
+  const stat = (ph: string, sc: [number, number], s: number, x: [number[], number[]], run: 0 | 1 = 1) => ({ ...st!, ph, sc, pos: 47, x, clk: { s, run } }) as St;
+  const X = (h: number[], a: number[]): [number[], number[]] => [[...h, 0, 0, 0, 0, 0, 0, 0].slice(0, 8), [...a, 0, 0, 0, 0, 0, 0, 0].slice(0, 8)];
+  /** A first half as the engine publishes it (a saved shot, a goal, a booking), the 30 s break, and a second half that is already
+   * published but still ahead of the lagged pitch. */
+  const match = (HT: number) => {
+    const fh = (s: number, sc: [number, number], x: [number[], number[]]) => stat("first_half", sc, s, x);
+    return [
+      { ...ev(1, HT - 60000, "Kick-off!"), t: "kickoff", st: fh(0, [0, 0], X([], [])) },
+      { ...ev(2, HT - 50000, "Home P3 shoots!"), t: "shot", chain: 2, p: "Home P3", ball: [84, 30], from: null, min: 10, st: fh(600, [0, 0], X([1], [])) },
+      { ...ev(3, HT - 49520, "Saved by Away P0"), t: "save", side: "away", chain: 2, p: "Away P0", p2: "Home P3", ball: [96, 31], min: 10, st: fh(600, [0, 0], X([1, 1], [0, 0, 1])) },
+      { ...ev(4, HT - 40000, "Away P4 shoots!"), t: "shot", side: "away", chain: 4, p: "Away P4", ball: [18, 36], from: null, min: 20, st: fh(1200, [0, 0], X([1, 1], [1, 0, 1])) },
+      { ...ev(5, HT - 39520, "GOAL! Away P4 scores"), t: "goal", side: "away", chain: 4, p: "Away P4", p2: "Home P0", target: [0, 32], ball: [0, 32], major: 1, min: 20, st: fh(1200, [0, 1], X([1, 1], [1, 1, 1])) },
+      { ...ev(6, HT - 36000, "Away P4 wheels away"), t: "celebration", side: "away", chain: 4, p: "Away P4", min: 20, st: fh(1203, [0, 1], X([1, 1], [1, 1, 1])) },
+      { ...ev(7, HT - 30000, "Home restart"), t: "restart", ball: [50, 32], min: 21, st: fh(1260, [0, 1], X([1, 1], [1, 1, 1])) },
+      { ...ev(8, HT - 20000, "Booked: Home P2"), t: "yellow_card", p: "Home P2", min: 40, st: fh(2400, [0, 1], X([1, 1, 0, 0, 1, 1], [1, 1, 1])) },
+      { ...ev(9, HT, "Half-time: HOM 0–1 AWA"), t: "half_time", side: undefined, min: 45, st: stat("half_time", [0, 1], 2700, X([1, 1, 0, 0, 1, 1], [1, 1, 1]), 0) },
+      { ...ev(10, HT + 30000, "Second half under way"), t: "second_half", side: "away", ball: [50, 32], min: 45, st: stat("second_half", [0, 1], 2700, X([1, 1, 0, 0, 1, 1], [1, 1, 1])) },
+      { ...ev(11, HT + 40000, "Home P4 shoots!"), t: "shot", chain: 11, p: "Home P4", ball: [86, 34], from: null, min: 50, st: stat("second_half", [0, 1], 3000, X([2, 1, 0, 0, 1, 1], [1, 1, 1])) },
+      { ...ev(12, HT + 40480, "GOAL! Home P4 scores"), t: "goal", chain: 11, p: "Home P4", p2: "Away P0", target: [100, 32], ball: [100, 32], major: 1, min: 50, st: stat("second_half", [1, 1], 3000, X([2, 2, 0, 0, 1, 1], [1, 1, 1])) },
+    ] as MatchEvent[];
+  };
+  const paced = (events: MatchEvent[], now: number, fixture: Partial<MatchView["fixture"]> = {}) => {
+    const v = view(events, { home: names("Home"), away: names("Away") }, now);
+    v.fixture = { ...v.fixture, minuteMs: 6000, ...fixture };
+    return v;
+  };
+  const withClock = async (body: () => Promise<void>) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const live = await import("../lib/live");
+    const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
+    try {
+      await body();
+    } finally {
+      serverClock.mockRestore();
+    }
+  };
+  /** Jump the lagged playhead to `t` (over a second: the pitch clock snaps, as for a resumed tab, so this is never a catch-up). */
+  const playheadAt = async (t: number) => {
+    vi.setSystemTime(t + LAG);
+    await act(() => new Promise((r) => setTimeout(r, 40)));
+  };
+  const shownCard = () => screen.getAllByTestId("break-card").filter((c) => c.hasAttribute("data-n")).map((c) => c.dataset.card);
+  const wideCards = () => screen.getAllByTestId("break-card").filter((c) => c.hasAttribute("data-w")).map((c) => c.dataset.card);
+
+  it("keeps the large half-time banner to itself for 5 s, then docks it over a summary of the half that runs through its four cards", async () => {
+    await withClock(async () => {
+      const HT = Date.now() - 60000;
+      vi.setSystemTime(HT + 3000 + LAG);
+      await mount(paced(match(HT), Date.now()));
+      const banner = screen.getByTestId("period-banner");
+      expect(banner).toHaveTextContent("HALF-TIME · HOM 0–1 AWA");
+      expect(banner.hasAttribute("data-docked")).toBe(false);
+      expect(screen.queryByTestId("break-summary")).toBeNull();
+      await playheadAt(HT + 5500);
+      const summary = screen.getByTestId("break-summary");
+      expect(summary.dataset.kind).toBe("ht");
+      expect(screen.getByTestId("pitch").contains(summary)).toBe(true);
+      expect(screen.getByTestId("period-banner")).toHaveTextContent("HALF-TIME · HOM 0–1 AWA");
+      expect(screen.getByTestId("period-banner").hasAttribute("data-docked")).toBe(true);
+      expect(shownCard()).toEqual(["stats"]);
+      expect(wideCards()).toEqual(["stats", "shots"]);
+      // The half-time snapshot's statistics, as the scoreboard and the Statistics panel show them.
+      const row = (name: string) => within(screen.getByTestId("break-stats")).getAllByTestId("break-stat").find((r) => r.dataset.stat === name)!.textContent;
+      expect(row("Shots")).toBe("1Shots1");
+      expect(row("Saves")).toBe("0Saves1");
+      expect(row("Yellow cards")).toBe("1Yellow cards0");
+      expect(screen.getByTestId("break-stats")).toHaveTextContent("47%");
+      await playheadAt(HT + 11500);
+      expect(shownCard()).toEqual(["shots"]);
+      expect(screen.getAllByTestId("shot-dot").map((d) => [d.dataset.side, d.dataset.result])).toEqual([["home", "save"], ["away", "goal"]]);
+      await playheadAt(HT + 17500);
+      expect(shownCard()).toEqual(["goals"]);
+      expect(wideCards()).toEqual(["goals", "players"]);
+      expect(screen.getAllByTestId("break-goal").map((g) => g.textContent)).toEqual(["20′AWAAway P40–1"]);
+      await playheadAt(HT + 23500);
+      expect(shownCard()).toEqual(["players"]);
+      expect(screen.getAllByTestId("break-top-player")[0]).toHaveTextContent("Away P4");
+      // The restart ends it: the second half's banner is on the pitch.
+      await playheadAt(HT + 30500);
+      expect(screen.queryByTestId("break-summary")).toBeNull();
+      expect(screen.getByTestId("period-banner")).toHaveTextContent("SECOND HALF");
+    });
+  }, 15000);
+
+  it("never shows what the pitch has not reached: a second-half goal already published stays out of the half-time summary", async () => {
+    await withClock(async () => {
+      const HT = Date.now() - 60000;
+      vi.setSystemTime(HT + 20000 + LAG);
+      await mount(paced(match(HT), Date.now()));
+      expect(screen.getAllByTestId("break-goal")).toHaveLength(1);
+      expect(screen.getByTestId("break-summary")).not.toHaveTextContent("Home P4");
+      expect(screen.getAllByTestId("shot-dot")).toHaveLength(2);
+      expect(screen.getByTestId("match-score").textContent).toBe("0–1");
+    });
+  });
+
+  it("joining in the middle of the break lands on the card for that moment straight away; a dot picks a card by hand", async () => {
+    await withClock(async () => {
+      const HT = Date.now() - 60000;
+      vi.setSystemTime(HT + 18000 + LAG);
+      await mount(paced(match(HT), Date.now()));
+      expect(shownCard()).toEqual(["goals"]);
+      fireEvent.click(screen.getByRole("button", { name: "Show shot map" }));
+      expect(shownCard()).toEqual(["shots"]);
+      await playheadAt(HT + 25000);
+      expect(shownCard()).toEqual(["shots"]); // held for the rest of this break
+    });
+  });
+
+  it("makes no request of its own: the cards turn over without a fetch or an extra match poll", async () => {
+    await withClock(async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const HT = Date.now() - 60000;
+      vi.setSystemTime(HT + 5500 + LAG);
+      await mount(paced(match(HT), Date.now()));
+      const { footfiveApi } = await import("../lib/pocketbase");
+      const calls = vi.mocked(footfiveApi.match).mock.calls.length;
+      for (const t of [11500, 17500, 23500]) await playheadAt(HT + t);
+      expect(vi.mocked(footfiveApi.match).mock.calls.length).toBe(calls);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("full time: the FULL-TIME banner first, then the summary under it, with the auto-return still counting down", async () => {
+    await withClock(async () => {
+      const HT = Date.now() - 200000;
+      const FT = HT + 60000;
+      const end = { ...ev(13, FT, "Full-time: HOM 1–1 AWA"), t: "match_end", side: "home" as const, min: 90, st: { ...stat("finished", [2, 1], 5400, X([2, 2], [1, 1, 1]), 0), win: "home", by: "normal" } as St };
+      const events = [...match(HT).slice(0, 10), end];
+      vi.setSystemTime(FT + 3000 + LAG);
+      await mount(paced(events, Date.now(), { status: "finished", st: end.st }));
+      expect(screen.getByTestId("ft-banner").hasAttribute("data-docked")).toBe(false);
+      expect(screen.queryByTestId("break-summary")).toBeNull();
+      expect(screen.getByTestId("auto-return")).toBeTruthy();
+      await playheadAt(FT + 6000);
+      expect(screen.getByTestId("break-summary").dataset.kind).toBe("ft");
+      expect(screen.getByTestId("ft-banner")).toHaveTextContent("FULL-TIME");
+      expect(screen.getByTestId("ft-banner").hasAttribute("data-docked")).toBe(true);
+      expect(screen.getByTestId("auto-return")).toHaveTextContent("tap to stay");
+      // Full time holds: the cards go round again.
+      await playheadAt(FT + 5000 + 4 * 6000 + 500);
+      expect(shownCard()).toEqual(["stats"]);
+    });
+  });
+
+  it("extra time: the break after 90 minutes gets a summary; the extra-time half-time and the shootout keep just their banners", async () => {
+    await withClock(async () => {
+      const E = Date.now() - 100000;
+      const level = stat("et_break", [1, 1], 5400, X([3, 2], [2, 1]), 0);
+      const events = [
+        { ...ev(1, E - 10000, "Goal"), t: "goal", min: 80, p: "Home P4", st: stat("second_half", [1, 1], 4800, X([3, 2], [2, 1])) },
+        { ...ev(2, E, "90 minutes up"), t: "end_of_normal_time", side: undefined, min: 90, st: level },
+        { ...ev(3, E + 20000, "Extra time"), t: "extra_time", min: 90, st: stat("extra_time_1", [1, 1], 5400, X([3, 2], [2, 1])) },
+        { ...ev(4, E + 40000, "ET half-time"), t: "et_half_time", side: undefined, min: 105, st: stat("et_half_time", [1, 1], 6300, X([3, 2], [2, 1]), 0) },
+        { ...ev(5, E + 50000, "ET second half"), t: "et_second_half", min: 105, st: stat("extra_time_2", [1, 1], 6300, X([3, 2], [2, 1])) },
+      ] as MatchEvent[];
+      vi.setSystemTime(E + 8000 + LAG);
+      await mount(paced(events, Date.now()));
+      expect(screen.getByTestId("break-summary").dataset.kind).toBe("et");
+      expect(screen.getByTestId("period-banner")).toHaveTextContent("FULL-TIME · 1–1 · EXTRA TIME");
+      await playheadAt(E + 19500);
+      expect(screen.getByTestId("break-summary")).toBeTruthy();
+      await playheadAt(E + 40000 + 8000);
+      expect(screen.queryByTestId("break-summary")).toBeNull();
+      expect(screen.getByTestId("period-banner")).toHaveTextContent("ET HALF-TIME");
+    });
+  });
+
+  it("under reduced motion the summary still comes, headed by the half-time title", async () => {
+    const prev = window.matchMedia;
+    window.matchMedia = reducedMotionList;
+    try {
+      await withClock(async () => {
+        const HT = Date.now() - 60000;
+        vi.setSystemTime(HT + 8000 + LAG);
+        await mount(paced(match(HT), Date.now()));
+        expect(screen.getByTestId("break-summary")).toBeTruthy();
+        expect(screen.getByTestId("period-banner")).toHaveTextContent("HALF-TIME · HOM 0–1 AWA");
+      });
+    } finally {
+      window.matchMedia = prev;
+    }
+  });
+
+  it("a late batch fast-forwarded through half-time shows no summary until the pitch has caught up, then the right card", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); // real rAF and poll interval, frozen server clock
+    const now = Date.now();
+    const target = now - LAG;
+    const HT = target - 20000; // caught up, the playhead is 20 s into the break
+    const run = match(HT);
+    // The booking 4 s before the break: 24 s behind, inside the fast-forward range (CATCHUP_MAX_MS), so it is played through.
+    const all = [...run.slice(0, 7), { ...run[7], at: HT - 4000 }, run[8]];
+    const { footfiveApi } = await import("../lib/pocketbase");
+    const m = vi.mocked(footfiveApi.match).mockReset();
+    m.mockResolvedValueOnce(paced(all.slice(0, 7), now)); // up to the restart
+    m.mockResolvedValue(paced(all, now)); // the booking and half-time: published late
+    await mount();
+    await act(() => new Promise((r) => setTimeout(r, MATCH_POLL_MS + 100)));
+    expect(screen.queryByTestId("period-banner")).toBeNull(); // rewound to the booking, not snapped to the break
+    // Unchecked, the summary would be up once the fast-forwarded clock is 5 s into the break (about 2.4 s from here); the catch-up
+    // itself takes about 7 s.
+    let early = false;
+    for (let i = 0; i < 80; i++) {
+      await act(() => new Promise((r) => setTimeout(r, 50)));
+      early ||= !!screen.queryByTestId("break-summary");
+    }
+    expect(early, "no summary while the late batch is fast-forwarded").toBe(false);
+    await waitFor(() => expect(screen.getByTestId("break-summary")).toBeTruthy(), { timeout: 10000 });
+    expect(shownCard()).toEqual(["goals"]);
+  }, 25000);
+
+  it("before kick-off the line-ups walk out onto the pitch, and stay until the kick-off is on the (lagged) pitch", async () => {
+    const now = Date.now();
+    const pre = paced([], now, { status: "scheduled", st: null, kickoffAt: now + 60000 } as Partial<MatchView["fixture"]>);
+    await mount(pre);
+    const over = screen.getByTestId("prematch");
+    expect(screen.getByTestId("pitch").contains(over)).toBe(true);
+    expect(screen.getAllByTestId("prematch-player")).toHaveLength(10);
+    expect(screen.getAllByTestId("prematch-player").filter((p) => p.dataset.side === "home")).toHaveLength(5);
+    expect(screen.getByTestId("prematch-title")).toHaveTextContent("LINE-UPS · HOM v AWA");
+    expect(over).toHaveTextContent("P0"); // names, last word (as on the pitch)
+    expect(screen.queryAllByTestId("player")).toHaveLength(0);
+    cleanup();
+    // Kick-off published but still inside the pitch's lag: the walkout stays.
+    const kick = { ...ev(1, now - 500, "Kick-off!"), t: "kickoff" } as MatchEvent;
+    await mount(paced([kick], now));
+    expect(screen.getByTestId("prematch")).toBeTruthy();
+    cleanup();
+    // On the pitch: the walkout is gone and the match's own players are drawn.
+    await mount(paced([{ ...kick, at: now - 3000 }], now));
+    expect(screen.queryByTestId("prematch")).toBeNull();
+    expect(screen.getAllByTestId("player")).toHaveLength(10);
+  });
+
+  it("no walkout without line-ups, with highlights off, or after the match", async () => {
+    const now = Date.now();
+    const pre = paced([], now, { status: "scheduled", st: null } as Partial<MatchView["fixture"]>);
+    await mount({ ...pre, lineups: null });
+    expect(screen.queryByTestId("prematch")).toBeNull();
+    cleanup();
+    mem.set("ff_highlights", "off");
+    try {
+      await mount(pre);
+      expect(screen.queryByTestId("prematch")).toBeNull();
+    } finally {
+      mem.delete("ff_highlights");
+    }
+    cleanup();
+    await mount(paced([], now, { status: "finished", st: { ...st!, ph: "finished", win: "home", by: "normal" } as St }));
+    expect(screen.queryByTestId("prematch")).toBeNull();
+  });
+});

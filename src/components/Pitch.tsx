@@ -18,6 +18,8 @@ type Props = {
   hud?: ReactNode; // compact score / clock / shootout strip pinned to the pitch's top-left corner
   minute?: number; // #206: the drawn event's match minute, for the goal screen
   replayed?: boolean; // #206: this goal's replay has already started: the live celebration keeps the GOAL! chip, no second big screen or cheer
+  summary?: ReactNode; // #208: a break summary, under the break banner docked at the top of the pitch
+  overlay?: ReactNode; // #208: the pre-match line-ups (its own overlay inside the pitch box)
 };
 
 const W = 100;
@@ -242,7 +244,7 @@ function MoveFx({ fx, players, projectX, revealed }: { fx: Fx | null; players: F
   );
 }
 
-export default function Pitch({ frame, home, away, replay, revealed, hud, minute, replayed }: Props) {
+export default function Pitch({ frame, home, away, replay, revealed, hud, minute, replayed, summary, overlay }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
   const kits = useMemo(() => kitsFor(home, away), [home, away]);
@@ -310,6 +312,11 @@ export default function Pitch({ frame, home, away, replay, revealed, hud, minute
   // #203: every banner fits the pitch at any width. A title breaks onto its own line at " · " / " — " (the separator stays in the
   // text, unseen), and its size follows the pitch width (cqw of the banner box) so the longest line fits, capped at the old 60 px.
   const titleLines = banner ? banner.title.split(/ ([·—]) /) : [];
+  // #208: a break summary docks the break banner (half-time, end of 90, full time) at the top of the pitch, still large, with the
+  // summary under it. The goal screen is never docked.
+  // Past the scene's life (reduced motion holds p at 1; a late restart) the break's own title still heads its summary.
+  const showSummary = !!summary && banner?.id !== "goal-banner";
+  const dock = !showSummary ? null : banner ?? (frame && PERIOD[frame.type] ? { id: "period-banner", title: PERIOD[frame.type], sub: "", who: "", cls: "text-amber" } : null);
   const longest = Math.max(1, ...titleLines.filter((_, i) => i % 2 === 0).map((l) => l.length));
   const cheering = goal?.side ?? ft?.side ?? (frame?.type === "shootout_end" ? frame.side : null) ?? null;
   // A goal and its celebration share a score; a new goal restarts the cheer even for consecutive goals by the same side.
@@ -410,8 +417,25 @@ export default function Pitch({ frame, home, away, replay, revealed, hud, minute
         {flash === "goal" ? <circle cx={ball[0]} cy={32} r={9} fill="url(#glow)" opacity={0.7} /> : null}
       </svg>
 
-      {banner ? (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30 px-[4%] transition-opacity duration-1000 [container-type:inline-size]" style={dim ? { opacity: 0.85 } : undefined} data-testid={banner.id}>
+      {showSummary ? (
+        // Its own element (keyed), never the big banner's node restyled: a node that changed size would count as a layout shift.
+        <div key="break" className="pointer-events-none absolute inset-0 flex flex-col overflow-hidden bg-[#06130c]/85 px-[3%] pb-[1.5%] pt-[1.5%] [container-type:inline-size]" data-testid="break-overlay">
+          {dock ? (
+          <div className={`shrink-0 text-center ${dock.cls}`} data-testid={dock.id} data-docked>
+            <div className="font-display font-black leading-tight" style={{ fontSize: `min(2rem, 6.5cqw, ${(88 / Math.max(1, dock.title.length)).toFixed(2)}cqw)` }} data-testid="banner-title">
+              {dock.title}
+            </div>
+            {dock.sub || dock.who ? (
+              <div className="font-bold leading-tight" style={{ fontSize: "min(1rem, 3.6cqw)" }} data-testid="banner-sub">
+                {[dock.sub, dock.who].filter(Boolean).join(" · ")}
+              </div>
+            ) : null}
+          </div>
+          ) : null}
+          <div className="mt-[1%] min-h-0 flex-1">{summary}</div>
+        </div>
+      ) : banner ? (
+        <div key="banner" className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black/30 px-[4%] transition-opacity duration-1000 [container-type:inline-size]" style={dim ? { opacity: 0.85 } : undefined} data-testid={banner.id}>
           {glow ? (
             <div className="confetti absolute inset-x-0 top-0 h-0" aria-hidden>
               {Array.from({ length: 24 }, (_, i) => (
@@ -454,6 +478,7 @@ export default function Pitch({ frame, home, away, replay, revealed, hud, minute
           </span>
         </div>
       ) : null}
+      {overlay}
       {hud ? (
         <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-2 rounded-md bg-black/60 px-2 py-1 font-display text-[11px] font-bold tracking-wider text-white shadow-lg sm:text-xs" data-testid="pitch-hud">
           {hud}
