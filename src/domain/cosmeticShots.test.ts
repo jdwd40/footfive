@@ -38,14 +38,17 @@ const { defaultStarters } = lib("tournament.js");
  * Issue #217 re-pins for the more-shots tuning: pin 2d0870bf… → 32359e37…, full b0c4a004… → 969d5225…,
  * steps ccee40cd… → c0dceaf4…. Same inputs, pace, projection and assertions; cosmetic generation/RNG unchanged.
  * See docs/balance-217.md.
+ * Issue #218 re-pins for final-third turnovers (half the failed attacks now draw a progression and a stop): pin 32359e37… →
+ * 8bd5c427…, full 969d5225… → 1cfad7d3…, steps c0dceaf4… → 0cf460db…. Same inputs, pace, projection and assertions; cosmetic
+ * generation/RNG unchanged. See docs/balance-218.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
-  pin: "32359e3717fd564731f85cbcc81eb8911f93280cc21c1eddc903a4eeb6b336df",
+  pin: "8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81",
   /** Every field of every event plus the whole final state. */
-  full: "969d52256f8d9f8dfb3d4ec2e71e6b8ea654425f33e350095a9d434d5e3a2fe1",
+  full: "1cfad7d3427d2586a43d768014ec3de2329aeadd364710a3e122495c13afe964",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "c0dceaf40a4b8ad414b96b90ef66b3e1a82b3ce324bd6db94822fe6c5dce30c1",
+  steps: "0cf460db3b719c2be80d6178e9b9c837e659b0fc47143adeb52267f3aedd31ea",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };

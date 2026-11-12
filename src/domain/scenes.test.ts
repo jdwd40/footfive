@@ -17,10 +17,11 @@ function team(i: number) {
 
 /** All published events of several full simulated matches. */
 // 120 matches: the shootout-badge test below needs a wide shootout miss, which the
-// engine produces only every few dozen kicks — 40 matches may not roll one.
-function events(n = 120): MatchEvent[][] {
+// engine produces only every few dozen kicks — 40 matches may not roll one. (#218's extra
+// draws moved the first one in this seed set to match 138: that test adds matches 120–139.)
+function events(n = 120, from = 0): MatchEvent[][] {
   const out: MatchEvent[][] = [];
-  for (let i = 0; i < n; i++) {
+  for (let i = from; i < from + n; i++) {
     const st = eng.createMatch({ fixtureId: "f" + i, seed: 1000 + i, kickoffAt: 0, home: team(i % 16), away: team((i * 7 + 3) % 16), timing: eng.buildTiming(1000, 1) });
     out.push(eng.advanceTo(st, 1e12));
   }
@@ -353,7 +354,7 @@ describe("highlight scenes agree with the simulation", () => {
 
   it("result badges are concrete: blocks flash BLOCKED, wide misses WIDE, high ones OVER; in-match and shootout alike", () => {
     const flashes = new Map<string, Set<string>>();
-    for (const e of all) {
+    for (const e of [...all, ...events(20, 120).flat()]) {
       const s = sceneFor(e, [70, 32], 15000);
       if (!s?.flash) continue;
       if (!flashes.has(e.t)) flashes.set(e.t, new Set());
@@ -367,7 +368,7 @@ describe("highlight scenes agree with the simulation", () => {
     expect(so.has("goal") && so.has("save") && so.has("miss")).toBe(true);
     for (const f of so) expect(["goal", "save", "miss", "over", "wood"]).toContain(f);
     for (const e of all.filter((e) => e.t === "miss")) expect(sceneFor(e, [70, 32], 15000)!.flash).toBe((e as MatchEvent & { high?: number }).high ? "over" : "miss");
-  });
+  }, 30_000);
 
   it("failed attacks resolve possession on screen: the blocker ends on the loose ball, the keeper ends with a save or a woodwork rebound", () => {
     let n = 0;
@@ -428,6 +429,7 @@ describe("highlight scenes agree with the simulation", () => {
     const d = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
     for (const e of all) {
       if (e.t !== "tackle" && e.t !== "interception") continue;
+      if (e.stop === "claim" || e.stop === "clear") continue; // #218: a keeper claim or clearance is its own scene (finalThirdStops.test.ts); a last-ditch tackle is a contest
       const s = sceneFor(e, e.from as Pt, 15000)!;
       const lost = s.actors.find((a) => a.id === "lost")!;
       const win = s.actors.find((a) => a.id === "win")!;

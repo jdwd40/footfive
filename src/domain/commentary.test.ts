@@ -184,7 +184,8 @@ const render = (events: Ev[]) => events.map((_, i) => line(events, i));
 const summary = (st: State, events: Ev[]) => ({ score: st.score, winner: st.winner, by: st.by, so: st.so, stats: st.stats, rc: st.rc, last: events.at(-1)?.st.x, goals: events.filter((e) => e.t === "goal" || e.t === "penalty_goal").map((e) => [e.seq, e.side, e.p]) });
 /** Engine at the parent of this change (no engine file is touched by #84): score, winner, how, shootout, stats, RNG counter, published stats and scorers of all 200 seeds. */
 // #217 re-pin (408d73e7… → 0e9d0171…): the more-shots balance tuning intentionally changes seeded outcomes; see docs/balance-217.md.
-const BASELINE = "0e9d017182972a3d21829ee2bee2406dc545385504547adb32fae91b9a602677";
+// #218 re-pin (0e9d0171… → b6e1cb08…): final-third turnovers add RNG draws and so change seeded outcomes; see docs/balance-218.md.
+const BASELINE = "b6e1cb087bf209214928285e4ebfa135bc2a00a01725bce40a14d4f828a293f5";
 
 describe("seeded matches (issue #84)", () => {
   it("outcomes, scorelines and official stats are the pre-change engine's", () => {

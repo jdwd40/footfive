@@ -425,7 +425,10 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
   // Issue #217 re-pin (2d0870bf… → 32359e37…): more attacks (seqBase 0.36) with lower conversion
   // (onTargetBase 0.44, saveBase 0.54) intentionally changes seeded outcomes. Same 200 seeds, 8s snapshot and
   // projection; no RNG implementation/call-site changes. Old/new pins and calibration: docs/balance-217.md.
-  const BASE_SHA256 = "32359e3717fd564731f85cbcc81eb8911f93280cc21c1eddc903a4eeb6b336df";
+  // Issue #218 re-pin (32359e37… → 8bd5c427…): about half the failed attacks now reach the final third first, which adds rnd(st)
+  // draws (a progression and its stop) and so shifts the stream; outcome rates are unchanged. Same 200 seeds, 8s snapshot and
+  // projection; no RNG implementation change. Old/new pins and calibration: docs/balance-218.md.
+  const BASE_SHA256 = "8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81";
   const liveTiming = eng.buildTiming(8000, 1);
   type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
   // Issue #73 transport projection: cosmetic rows (`cos: 1`) are dropped and the real rows' integer transport `seq` is
@@ -442,7 +445,7 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
     const manifest = [];
     for (let seed = 1000; seed < 1200; seed++) manifest.push(run(seed));
     const digest = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
-    expect(digest, "200-seed authoritative outcome manifest differs from the #217 balance baseline").toBe(BASE_SHA256);
+    expect(digest, "200-seed authoritative outcome manifest differs from the #218 balance baseline").toBe(BASE_SHA256);
   });
 });
 

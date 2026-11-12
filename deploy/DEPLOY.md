@@ -85,6 +85,9 @@ Weak bootstrap passwords force `must_change_password=true`.
 - #217 intentionally changes outcomes: `seqBase = 0.36`, `onTargetBase = 0.44`, `saveBase = 0.54`
   give more shots at the same goal rate (docs/balance-217.md). Deploy between rounds the same way:
   a live match reads these constants as it plays, and a fixture's `model_json` is rebuilt at kickoff.
+- #218 intentionally changes outcomes: `deepTurnoverRate = 0.5` takes half the failed attacks into the final third
+  before a tackle, clearance or keeper claim (docs/balance-218.md). Same outcome rates, so `model_json` is unchanged;
+  deploy between rounds the same way, since a live match reads the constant as it plays.
 
 ### App admin account
 
