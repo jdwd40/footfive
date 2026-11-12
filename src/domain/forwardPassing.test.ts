@@ -275,20 +275,32 @@ describe("real engine passes, both sides (FF-69)", () => {
   type Row = { e: MatchEvent; s: Scene; prev: Pt; before: Scene | null; lineups: Lineups };
   const backward: Row[] = [];
   const forward: Row[] = [];
+  const real: Row[] = [];
   for (const { events, scenes, prevs, lineups } of found) {
     events.forEach((e, k) => {
       const s = scenes[k];
       if (e.t !== "pass" || !s || e.turn) return;
       const row = { e, s, prev: prevs[k], before: scenes[k - 1] ?? null, lineups };
+      real.push(row);
       if (layoffOf(s)) backward.push(row);
       else forward.push(row);
+      // #213: a midfield pass now goes on from the ball (at most 3 back), so a new match draws hardly any lay-offs of its own.
+      // Matches stored before it still replay theirs, so a real pass that went clearly forward is also sent back as far, about
+      // its start: the same players, `from`, previous scene and chain (not a keeper's distribution from his own box).
+      const from = e.from as Pt;
+      const ball = e.ball as Pt;
+      if (!e.chain && along(e.side as Side, from) > 20 && along(e.side as Side, ball) - along(e.side as Side, from) > 6) {
+        const back: MatchEvent = { ...e, ball: [2 * from[0] - ball[0], ball[1]] };
+        backward.push({ ...row, e: back, s: sceneFor(back, prevs[k], 15000, events[k + 1])! });
+      }
     });
   }
 
   it("lays off every clearly backward open-play midfield pass, on both sides; leaves the rest as they were", () => {
     expect(backward.filter((x) => x.e.side === "home").length).toBeGreaterThanOrEqual(100);
     expect(backward.filter((x) => x.e.side === "away").length).toBeGreaterThanOrEqual(100);
-    for (const { e, s, prev } of [...backward, ...forward]) {
+    for (const { s } of backward) expect(layoffOf(s)).toBeTruthy();
+    for (const { e, s, prev } of [...real, ...backward]) {
       const back = along(e.side as Side, e.ball as Pt) - along(e.side as Side, e.from as Pt);
       if (!layoffOf(s)) {
         expect(s, `#${e.seq}`).toEqual(ordinary(e, prev));

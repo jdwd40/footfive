@@ -110,6 +110,52 @@ describe("incremental, server-authoritative engine", () => {
   });
 });
 
+describe("midfield play goes on from the ball (#213)", () => {
+  type Pass = Ev & { min: number; chain?: number; from: [number, number]; ball: [number, number]; side: "home" | "away" };
+  const along = (side: string, p: [number, number]) => (side === "home" ? p[0] : 100 - p[0]);
+  const passes: Pass[] = [];
+  for (let seed = 1; seed <= 60; seed++) for (const e of full(seed, seed % 16, (seed * 7 + 3) % 16) as Pass[]) if (e.t === "pass" && !e.chain) passes.push(e);
+
+  it("each pass lands a little ahead of where the ball was, never more than a few units back, in either direction of play", () => {
+    expect(passes.length).toBeGreaterThan(3000);
+    let back = 0;
+    let forward = 0;
+    for (const side of ["home", "away"]) {
+      const own = passes.filter((e) => e.side === side);
+      expect(own.length).toBeGreaterThan(1000);
+      for (const e of own) {
+        const from = along(side, e.from);
+        const to = along(side, e.ball);
+        expect(to, `#${e.seq}`).toBeGreaterThanOrEqual(22 - 0.5); // midfield: out of his own box, short of the final third
+        expect(to, `#${e.seq}`).toBeLessThanOrEqual(66 + 0.5);
+        // From anywhere in midfield it moves on from the ball's spot: at most 3 back and at most 13 on.
+        if (from >= 25 && from <= 63) expect(to - from, `#${e.seq} ${side} ${from} -> ${to}`).toBeGreaterThanOrEqual(-3.5);
+        if (from >= 22) expect(to - from, `#${e.seq} ${side} ${from} -> ${to}`).toBeLessThanOrEqual(13.5);
+        if (to - from < -3) back++;
+        forward += to - from;
+      }
+    }
+    // The old placement ignored the ball: about half of these went backwards, by 3.4 units on average.
+    expect(back / passes.length).toBeLessThan(0.1);
+    expect(forward / passes.length).toBeGreaterThan(2);
+  });
+
+  it("possession carries the ball up the pitch: a run of passes ends further up than it started", () => {
+    // Consecutive midfield passes by the same side (no tackle in between) keep going forward rather than shuttling about.
+    let runs = 0;
+    let up = 0;
+    for (let i = 1; i < passes.length; i++) {
+      const a = passes[i - 1];
+      const b = passes[i];
+      if (a.side !== b.side || b.seq !== a.seq + 1 || along(a.side, a.from) > 50) continue;
+      runs++;
+      if (along(b.side, b.ball) > along(a.side, a.from)) up++;
+    }
+    expect(runs).toBeGreaterThan(500);
+    expect(up / runs).toBeGreaterThan(0.85);
+  });
+});
+
 describe("legacy persisted-state compatibility", () => {
   type St = {
     fx: string;

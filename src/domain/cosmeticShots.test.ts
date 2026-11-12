@@ -35,14 +35,19 @@ const { defaultStarters } = lib("tournament.js");
  * Issue #195 re-pins for intentional goal-rate tuning: pin ea5b06fd… → 2d0870bf…,
  * full 318ca545… → b0c4a004…, steps 617b66e6… → ccee40cd…. Same inputs, pace,
  * projection and assertions; cosmetic generation/RNG unchanged. See docs/balance-195.md.
+ * Issue #213 re-pins full b0c4a004… → 343a28cd… and steps ccee40cd… → fabe50b2…: midfield passes are placed from the ball's
+ * spot, so pass `ball`/`from` and the state's `ball` move, and the cosmetic rate rises. Same draws: `pin` (tuples, scores, RNG
+ * count) is unchanged, and `unplaced` — the full payload and final state without those positions — is main's at 72e459c.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
   pin: "2d0870bfb62a6539a7119bc42088cddf863c1161e62a108fc2ba6c03e8f9da80",
   /** Every field of every event plus the whole final state. */
-  full: "b0c4a0049e34b0efed664c369944db95012815119a6c7c21dce74a126423398c",
+  full: "343a28cd0f2119308d4adf15ccd936c4e5a2b7aa5bc508c02bf11e4aa1b5180f",
+  /** `full` without the ball's positions (`ball`, `from`, `target` on events, `ball` in the final state): unchanged by #213. */
+  unplaced: "fabfbf9191dab0346a8fc31e6ac3c8da78163132db3fb3b344896e02a2fd4a11",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "ccee40cdb59cbcf17e9b775bb61f33fbb090841ac40a121c7ee5990e08c4ce9d",
+  steps: "fabe50b285cb352304d44d810d8f49b52a150f40c54d6f920a2886bac522037b",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
@@ -92,12 +97,15 @@ describe("cosmetic attempts never change the real match (issue #73)", () => {
   it("200 seeds at an 8s snapshot: every real payload and final state match the pinned authoritative baseline", () => {
     const pin = [];
     const full = [];
+    const unplaced = [];
     for (const { st, events } of runs) {
       const { out, final } = project(events, st);
       pin.push({ tuples: out.map((x) => [x.seq, x.at, x.t, x.p, x.p2, x.st.sc, x.st.so]), final: { score: st.score, winner: st.winner, by: st.by, so: st.so, rc: st.rc } });
       full.push({ ev: out, final });
+      unplaced.push({ ev: out.map(({ ball: _b, from: _f, target: _t, ...rest }) => rest), final: { ...final, ball: undefined } });
     }
     expect(sha(pin), "engine.test.ts pin").toBe(ORIGINAL.pin);
+    expect(sha(unplaced), "real payload + final state without the ball's positions").toBe(ORIGINAL.unplaced);
     expect(sha(full), "full real payload + final state").toBe(ORIGINAL.full);
   });
 
@@ -234,12 +242,13 @@ describe("cosmetic rows (issue #73)", () => {
     }
   });
 
-  it("spectacle stays moderate: two or three extra attempts a match at the live pace (real shots: about 16); none at a 1 s test pace", () => {
+  it("spectacle stays moderate: five to ten extra attempts a match at the live pace (real shots: about 16); none at a 1 s test pace", () => {
+    // #213: midfield play now reaches the opposition half, where attempts are allowed, and the rate is 0.5 (was 0.3; 2–4 a match).
     const per = all.map((events) => events.filter((e) => cosmetic(e) && e.t === "shot").length);
     const mean = per.reduce((a, b) => a + b, 0) / per.length;
-    expect(mean).toBeGreaterThan(2);
-    expect(mean).toBeLessThan(4);
-    expect(Math.max(...per)).toBeLessThanOrEqual(15);
+    expect(mean).toBeGreaterThan(5);
+    expect(mean).toBeLessThan(10);
+    expect(Math.max(...per)).toBeLessThanOrEqual(18);
     for (let seed = 1000; seed < 1050; seed++) expect((eng.advanceTo(match(seed, eng.buildTiming(1000, 1)), 1e13) as Ev[]).some(cosmetic)).toBe(false);
   });
 });
