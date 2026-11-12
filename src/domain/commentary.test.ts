@@ -185,7 +185,8 @@ const summary = (st: State, events: Ev[]) => ({ score: st.score, winner: st.winn
 /** Engine at the parent of this change (no engine file is touched by #84): score, winner, how, shootout, stats, RNG counter, published stats and scorers of all 200 seeds. */
 // #217 re-pin (408d73e7… → 0e9d0171…): the more-shots balance tuning intentionally changes seeded outcomes; see docs/balance-217.md.
 // #218 re-pin (0e9d0171… → b6e1cb08…): final-third turnovers add RNG draws and so change seeded outcomes; see docs/balance-218.md.
-const BASELINE = "b6e1cb087bf209214928285e4ebfa135bc2a00a01725bce40a14d4f828a293f5";
+// #219 re-pin (b6e1cb08… → 1437a038…): late urgency, counter-attacks and rebounds change seeded outcomes; see docs/balance-219.md.
+const BASELINE = "1437a0386ef55a889c5db63d3a79ecb0fad9e813f2526cb8d51d3b7e0a143a29";
 
 describe("seeded matches (issue #84)", () => {
   it("outcomes, scorelines and official stats are the pre-change engine's", () => {

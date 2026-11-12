@@ -428,7 +428,10 @@ describe("authoritative outcomes are pinned to a fixed engine baseline", () => {
   // Issue #218 re-pin (32359e37… → 8bd5c427…): about half the failed attacks now reach the final third first, which adds rnd(st)
   // draws (a progression and its stop) and so shifts the stream; outcome rates are unchanged. Same 200 seeds, 8s snapshot and
   // projection; no RNG implementation change. Old/new pins and calibration: docs/balance-218.md.
-  const BASE_SHA256 = "8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81";
+  // Issue #219 re-pin (8bd5c427… → daf66a03…): game state (urgency for a trailing side from 70', counter-attacks, rebound
+  // shots, saveBase 0.59) adds rnd(st) draws and changes outcomes deliberately. Same 200 seeds, 8s snapshot and projection; no
+  // RNG implementation change. Old/new pins and calibration: docs/balance-219.md.
+  const BASE_SHA256 = "daf66a03be69ba61ef446c362bb09a04681015b6681ccf064f401765de6fb9a8";
   const liveTiming = eng.buildTiming(8000, 1);
   type Final = { score: [number, number]; winner: string | null; by: string | null; so: unknown; rc: number };
   // Issue #73 transport projection: cosmetic rows (`cos: 1`) are dropped and the real rows' integer transport `seq` is

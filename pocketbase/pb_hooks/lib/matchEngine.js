@@ -226,16 +226,33 @@ function defender(st, side) {
   });
 }
 
-/** Per-minute probabilities for an attacking side. */
-function chanceModel(st, side) {
+/** #219: is `side` trailing late (from urgencyMinute, extra time included) at the start of the current minute? */
+function urgent(st, side) {
+  var mine = st.score[side === "home" ? 0 : 1];
+  var theirs = st.score[side === "home" ? 1 : 0];
+  return st.minute >= M.urgencyMinute && mine < theirs;
+}
+
+/** Per-minute probabilities for an attacking side. `urg` (#219): it is trailing late, so it attacks in more minutes. */
+function chanceModel(st, side, urg) {
   var e = edge(st, side);
   return {
     e: e,
-    pSeq: clamp(M.seqBase * Math.exp(M.seqK * e), 0.08, 0.6),
+    pSeq: clamp(M.seqBase * Math.exp(M.seqK * e), 0.08, 0.6) * (urg ? M.urgencySeq : 1),
     pShot: clamp(M.shotBase * Math.exp(M.shotK * e), 0.2, 0.85),
     pOn: clamp(M.onTargetBase * Math.exp(M.onTargetK * e), 0.25, 0.75),
     pPen: clamp(M.penBase + M.penK * Math.max(0, e), 0, 0.05),
   };
+}
+
+/** #219: a counter-attack's chances: the same move, with fewer defenders back. */
+function counterModel(c) {
+  return { e: c.e, pSeq: c.pSeq, pShot: clamp(c.pShot * M.counterShot, 0.2, 0.9), pOn: c.pOn, pPen: c.pPen };
+}
+
+/** #219: chance that `side`, which won the ball last minute and has it again, breaks at once. Higher when the loser trails late. */
+function counterChance(urgLoser) {
+  return clamp(M.counterRate * (urgLoser ? M.counterRisk : 1), 0, 1);
 }
 
 function saveChance(st, shooter, defSide) {
@@ -243,31 +260,126 @@ function saveChance(st, shooter, defSide) {
   return clamp(M.saveBase + ((gk.defence || 60) - (shooter.attack || 60)) * M.saveK, 0.3, 0.8);
 }
 
-function homePossession(st) {
+/** `urg` (#219): { home, away } trailing late; such a side has a little more of the ball. */
+function homePossession(st, counter, urg) {
   var h = strength(st, "home");
   var a = strength(st, "away");
   var p = 0.5 + ((h.atk + h.def) / 2 - (a.atk + a.def) / 2) * M.possK;
-  if (st.counter === "home") p += 0.15;
-  if (st.counter === "away") p -= 0.15;
+  if (counter === "home") p += 0.15;
+  if (counter === "away") p -= 0.15;
+  if (urg && urg.home) p += M.urgencyPoss;
+  if (urg && urg.away) p -= M.urgencyPoss;
   return clamp(p, 0.25, 0.75);
 }
 
-/** Expected goals per match minute for each side — the odds model uses this. */
-function goalRates(st) {
-  var out = {};
-  var saved = st.counter;
-  st.counter = null;
-  var ph = homePossession(st);
-  st.counter = saved;
+/** #219: the expected attack rating of `side`'s shooter, picked as attacker() picks him (weight attack + 10). Was a fixed 72. */
+function shooterAttack(st, side) {
+  var list = outfield(st, side);
+  var w = 0;
+  var sum = 0;
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i].attack || 50;
+    w += a + 10;
+    sum += a * (a + 10);
+  }
+  return w ? sum / w : 72;
+}
+
+/** homePossession from `me`'s side, computed in the same order, so goalRates is mirror-exact. */
+function possession(st, me, counter, urg) {
+  var a = strength(st, me);
+  var b = strength(st, OTHER[me]);
+  var p = 0.5 + ((a.atk + a.def) / 2 - (b.atk + b.def) / 2) * M.possK;
+  if (counter === me) p += 0.15;
+  if (counter === OTHER[me]) p -= 0.15;
+  if (urg && urg[me]) p += M.urgencyPoss;
+  if (urg && urg[OTHER[me]]) p -= M.urgencyPoss;
+  return clamp(p, 0.25, 0.75);
+}
+
+/** #219: chance that a rebound (second) shot scores, and that it leaves the ball with the defenders for a counter. */
+function reboundModel(c, save) {
+  var on = (1 - M.blockRate) * c.pOn * M.reboundOn;
+  var sv = clamp(save - M.reboundSaveDrop, 0.2, 0.8);
+  return { goal: on * (1 - sv), counter: on * sv * 0.3 };
+}
+
+/**
+ * One attack's chances of a goal and of handing the defenders a counter (st.counter), as attack() plays it: a penalty, a shot
+ * (blocked, on target, wide or the woodwork; a long shot is saved more often) with its #219 rebound off a parried save or a
+ * block, or a tackle / interception.
+ */
+function attackModel(c, save, ctr) {
+  var sv = clamp(save + (ctr ? 0 : M.longShotRate * M.longShotSaveBonus), 0, 0.95); // a counter never shoots from range
+  var rb = reboundModel(c, save);
+  var on = (1 - M.blockRate) * c.pOn;
+  var rebShots = on * sv * M.reboundSave + M.blockRate * M.reboundBlock;
+  var shotGoal = on * (1 - sv) + rebShots * rb.goal;
+  var shotCounter = on * sv * (1 - M.reboundSave) * 0.3 + rebShots * rb.counter;
+  return {
+    goal: c.pPen * M.penScore + (1 - c.pPen) * c.pShot * shotGoal,
+    counter: c.pPen * (1 - M.penScore) + (1 - c.pPen) * ((1 - c.pShot) + c.pShot * shotCounter),
+  };
+}
+
+/**
+ * Expected goals per match minute for each side — the odds model uses this. `sit` (#219, optional): { stance: { home, away },
+ * urg: { home, away } } plays the match in that game state (the stances the teams would take, who is trailing late);
+ * without it, the teams' current stances and no urgency. Counters are a Markov chain over the flag a minute starts with
+ * (st.counter: none / home / away), solved for its stationary mix (sideRate), so possession swings, counter-attacks and the counter risk
+ * of a committed side are all priced in. A minute holds at most one attack, so these are also per-minute goal probabilities.
+ */
+function goalRates(st, sit) {
+  var saved = { home: st.teams.home.stance, away: st.teams.away.stance };
+  if (sit && sit.stance) {
+    st.teams.home.stance = sit.stance.home;
+    st.teams.away.stance = sit.stance.away;
+  }
+  var urg = (sit && sit.urg) || { home: false, away: false };
+  var per = {};
   ["home", "away"].forEach(function (side) {
-    var c = chanceModel(st, side);
-    var save = saveChance(st, { attack: 72 }, OTHER[side]);
-    var poss = side === "home" ? ph : 1 - ph;
-    out[side] =
-      poss *
-      c.pSeq *
-      ((1 - c.pPen) * c.pShot * (1 - M.blockRate) * c.pOn * (1 - save) + c.pPen * M.penScore);
+    var c = chanceModel(st, side, urg[side]);
+    var save = saveChance(st, { attack: shooterAttack(st, side) }, OTHER[side]);
+    var n = attackModel(c, save);
+    var k = attackModel(counterModel(c), save, true);
+    var plain = { goal: c.pSeq * n.goal, counter: c.pSeq * n.counter + (1 - c.pSeq) * 0.4 }; // midfield(): a tackle 40% of the time
+    var kc = counterChance(urg[OTHER[side]]);
+    per[side] = {
+      plain: plain,
+      ctr: { goal: kc * k.goal + (1 - kc) * plain.goal, counter: kc * k.counter + (1 - kc) * plain.counter },
+    };
   });
+  st.teams.home.stance = saved.home;
+  st.teams.away.stance = saved.away;
+  return { home: sideRate(st, "home", per, urg), away: sideRate(st, "away", per, urg) };
+}
+
+/**
+ * goalRates' counter chain from `me`'s side (so identical teams get bit-identical rates): the flag a minute starts with is
+ * none, mine (I won the ball last minute) or theirs; solve for its stationary mix and sum my goals.
+ */
+function sideRate(st, me, per, urg) {
+  var them = OTHER[me];
+  var flags = [null, me, them];
+  var mine = flags.map(function (f) {
+    return possession(st, me, f, urg);
+  });
+  var pi = [1, 0, 0];
+  for (var it = 0; it < 200; it++) {
+    var nx = [0, 0, 0];
+    for (var i = 0; i < 3; i++) {
+      var a = flags[i] === me ? per[me].ctr : per[me].plain;
+      var b = flags[i] === them ? per[them].ctr : per[them].plain;
+      var toThem = mine[i] * a.counter; // I lose it
+      var toMe = (1 - mine[i]) * b.counter;
+      nx[0] += pi[i] * (1 - toThem - toMe);
+      nx[1] += pi[i] * toMe;
+      nx[2] += pi[i] * toThem;
+    }
+    pi = nx;
+  }
+  var out = 0;
+  for (var j = 0; j < 3; j++) out += pi[j] * mine[j] * (flags[j] === me ? per[me].ctr : per[me].plain).goal;
   return out;
 }
 
@@ -369,14 +481,52 @@ function applyStance(st, out, t, s, side, stance, by) {
   });
 }
 
+/** AI stance thresholds (minutes). The in-play odds model (inPlayModel, odds.js) follows the same policy. */
+var AI = { chase: 70, protect: 78, settle: 100 };
+
+function aiStanceFor(m, mine, theirs) {
+  if (m >= AI.chase && mine < theirs) return "attack";
+  if (m >= AI.settle && mine === theirs) return "attack";
+  if (m >= AI.protect && mine === theirs + 1) return "defend";
+  return "balanced";
+}
+
 function aiStance(st, side) {
   var mine = st.score[side === "home" ? 0 : 1];
   var theirs = st.score[side === "home" ? 1 : 0];
-  var m = st.minute + 1; // called before the minute starts
-  if (m >= 70 && mine < theirs) return "attack";
-  if (m >= 100 && mine === theirs) return "attack";
-  if (m >= 78 && mine === theirs + 1) return "defend";
-  return "balanced";
+  return aiStanceFor(st.minute + 1, mine, theirs); // called before the minute starts
+}
+
+/**
+ * #219: the kickoff odds model. `lh`/`la` are goalRates at the teams' kickoff stances (as before; pre-#219 consumers and the
+ * round-first market read only these). `s` holds the per-minute rates in each late game state the AI policy and urgency
+ * produce, [home, away], with the minutes they start (`at`): odds.js walks the remaining minutes through them. A side that
+ * is not AI-run keeps its kickoff stance in every state (its manager's later choices are not known), but urgency still
+ * applies. Rates are rounded to 1e-6 as pairModel always did.
+ */
+function inPlayModel(st) {
+  var H = st.teams.home;
+  var A = st.teams.away;
+  var r6 = function (x) {
+    return Math.round(x * 1e6) / 1e6;
+  };
+  var pair = function (hs, as, uh, ua) {
+    var r = goalRates(st, { stance: { home: H.ai ? hs : H.stance, away: A.ai ? as : A.stance }, urg: { home: uh, away: ua } });
+    return [r6(r.home), r6(r.away)];
+  };
+  var base = goalRates(st);
+  return {
+    lh: r6(base.home),
+    la: r6(base.away),
+    at: { chase: AI.chase, protect: AI.protect, settle: AI.settle }, // urgency starts with the chase (balance.js urgencyMinute)
+    s: {
+      hT: pair("attack", "balanced", true, false), // home trailing late (by 2+, or by 1 before `protect`)
+      hT1: pair("attack", "defend", true, false), // home trailing by 1 from `protect`: away sits deep
+      aT: pair("balanced", "attack", false, true),
+      aT1: pair("defend", "attack", false, true),
+      L: pair("attack", "attack", false, false), // level from `settle` (extra time)
+    },
+  };
 }
 
 function wear(st) {
@@ -421,16 +571,25 @@ function playMinute(st, out) {
   st.minute = ctx.m;
 
   wear(st);
-  var side = rnd(st) < homePossession(st) ? "home" : "away";
+  var urg = { home: urgent(st, "home"), away: urgent(st, "away") };
+  var won = st.counter; // the side that won the ball last minute (#219: read before it is cleared)
+  var side = rnd(st) < homePossession(st, won, urg) ? "home" : "away";
   st.counter = null;
   st.possMin[side === "home" ? 0 : 1] += 1;
 
   var foulMul = (coachingMod(st.teams.home.stance).foul + coachingMod(st.teams.away.stance).foul) / 2;
   if (rnd(st) < M.foulRate * foulMul) foulEvent(st, out, ctx, OTHER[side]);
 
-  var c = chanceModel(st, side);
-  if (rnd(st) < c.pSeq) attack(st, out, ctx, side, c);
+  var c = chanceModel(st, side, urg[side]);
+  // #219: a side that won the ball and keeps it breaks at once, more often when the side that lost it is trailing late.
+  if (won === side && rnd(st) < counterChance(urg[OTHER[side]])) attack(st, out, ctx, side, counterModel(c), true);
+  else if (rnd(st) < c.pSeq) attack(st, out, ctx, side, c);
   else midfield(st, out, ctx, side);
+
+  // #219: a rebound can carry a move past the minute's end; the next minute waits for its last row's scene (0.1 of a minute),
+  // so nothing that follows is published on top of it. Minutes that end in time are unchanged.
+  var minAt = st.lastAt + Math.round(0.1 * ctx.dur);
+  if (out.length > first && minAt > ctx.t0 + ctx.dur + ctx.pause) ctx.pause = minAt - ctx.t0 - ctx.dur;
 
   cosmetic(st, out, ctx, first);
   st.nextAt = ctx.t0 + ctx.dur + ctx.pause;
@@ -526,8 +685,11 @@ function foulEvent(st, out, ctx, side) {
  * One coherent attacking sequence:
  * build-up → passes → progression (through ball / dribble / cross) → outcome.
  * The outcome is decided first so every narrated step agrees with it.
+ * `ctr` (#219): a counter-attack. The side won the ball last minute and breaks from where it won it: the build-up carries
+ * `ctr: 1`, one or two long forward passes, then always a progression into the final third (no shot from range; a failed
+ * counter dies there, as #218's deep turnovers do). c is counterModel's, with its better shot chance.
  */
-function attack(st, out, ctx, side, c) {
+function attack(st, out, ctx, side, c, ctr) {
   var def = OTHER[side];
   var outcome;
   if (rnd(st) < c.pPen) outcome = "penalty";
@@ -539,14 +701,22 @@ function attack(st, out, ctx, side, c) {
 
   // An occasional shot comes from range, without final-third progression.
   var isShot = outcome === "block" || outcome === "on_target" || outcome === "woodwork" || outcome === "miss";
-  var long = isShot && rnd(st) < M.longShotRate;
+  var long = isShot && !ctr && rnd(st) < M.longShotRate; // #219: a counter always runs into the final third
 
   var chain = st.seq + 1;
   var f = 0.12 + rnd(st) * 0.08;
   var STEP = 0.11;
   var passer = attacker(st, side);
-  var x = st.counter === side ? 48 : 20 + rnd(st) * 18;
-  var y = 12 + rnd(st) * 40;
+  var x, y;
+  if (ctr) {
+    // From where the ball was won, a touch on; a keeper who has it throws it straight out.
+    var won = px(side, st.ball[0]);
+    x = won < 15 ? 22 + rnd(st) * 10 : clamp(won + 3 + rnd(st) * 5, 12, 60);
+    y = clamp(st.ball[1] + (rnd(st) - 0.5) * 8, 8, 56);
+  } else {
+    x = 20 + rnd(st) * 18;
+    y = 12 + rnd(st) * 40;
+  }
   var ball = pos(side, x, y);
   var turn = takeBall(st, side);
   emit(st, out, ctx.at(f), "build_up", {
@@ -556,22 +726,22 @@ function attack(st, out, ctx, side, c) {
     from: st.ball,
     ball: ball,
     turn: turn || undefined,
-    text:
-      st.counter === side
-        ? tname(st, side) + " break quickly through " + passer.name
-        : turn
+    ctr: ctr ? 1 : undefined,
+    text: ctr
+      ? pick(st, [tname(st, side) + " break quickly through " + passer.name, "Counter-attack! " + passer.name + " carries it forward", passer.name + " springs the break for " + abbr(st, side)])
+      : turn
           ? pick(st, [tname(st, side) + " win it back through " + passer.name, passer.name + " collects for " + abbr(st, side), tname(st, side) + " come away with it"])
           : pick(st, [tname(st, side) + " build from the back", passer.name + " collects for " + abbr(st, side), tname(st, side) + " work it forward"]),
     clk: ctx.clk(f),
   });
 
   var last = passer;
-  var passes = 2 + Math.floor(rnd(st) * 3);
+  var passes = ctr ? 1 + (rnd(st) < 0.5 ? 1 : 0) : 2 + Math.floor(rnd(st) * 3);
   for (var i = 0; i < passes; i++) {
     f += STEP;
-    var back = i > 0 && rnd(st) < 0.4 && passer.name !== last.name;
+    var back = !ctr && i > 0 && rnd(st) < 0.4 && passer.name !== last.name;
     var recv = back ? passer : attacker(st, side, last);
-    x = Math.min(x + 8 + rnd(st) * 9, 68);
+    x = ctr ? Math.min(x + 12 + rnd(st) * 7, 70) : Math.min(x + 8 + rnd(st) * 9, 68);
     y = clamp(y + (rnd(st) - 0.5) * 28, 6, 58);
     var from = ball;
     ball = pos(side, x, y);
@@ -593,7 +763,7 @@ function attack(st, out, ctx, side, c) {
   // #218: about half of the failed attacks get into the final third first — a progression shaped like the shot path's — and die
   // there: a last-ditch tackle or a clearance after a dribble or through ball, a keeper claim or a clearance after a cross or
   // through ball. Markets suspend with the progression and reopen with the turnover, as for a shot and its result.
-  if ((outcome === "tackle" || outcome === "interception") && rnd(st) < M.deepTurnoverRate) return deepTurnover(st, out, ctx, side, outcome, chain, f, last, x, y, ball);
+  if ((outcome === "tackle" || outcome === "interception") && (ctr || rnd(st) < M.deepTurnoverRate)) return deepTurnover(st, out, ctx, side, outcome, chain, f, last, x, y, ball);
 
   if (outcome === "tackle" || outcome === "interception") {
     f += STEP;
@@ -678,31 +848,58 @@ function attack(st, out, ctx, side, c) {
           : pick(st, [shooter.name + " shoots!", shooter.name + " lets fly!", shooter.name + " goes for goal"]),
     clk: ctx.clk(f),
   });
+  shotResult(st, out, ctx, f + 0.08, side, chain, shooter, shotFrom, gy, outcome, c, false);
+}
 
-  f += 0.08;
+/**
+ * The published result of a real shot at fraction f (its outcome already decided). #219: unless this is already the second
+ * shot (`reb`), a save can be parried loose (reboundSave) or a block drop (reboundBlock) to an attacker. That result row
+ * carries `loose: 1` and leaves the ball on the spot; markets stay suspended (d stays 1) and rebound() plays the second shot
+ * in the same chain. All randomness via rnd(st).
+ */
+function shotResult(st, out, ctx, f, side, chain, shooter, shotFrom, gy, outcome, c, reb) {
+  var def = OTHER[side];
   var gk = keeper(st, def);
   if (outcome === "goal") {
     goal(st, out, ctx, f, side, shooter, gk, chain, [px(side, 100), gy], null);
     return;
   }
+  var loose = false;
   var res = { chain: chain, from: shotFrom, clk: ctx.clk(f) };
   if (outcome === "save") {
     st.stats[side].sot += 1;
     st.stats[def].sv += 1;
+    loose = !reb && rnd(st) < M.reboundSave;
     res.side = def;
     res.p = gk.name;
     res.p2 = shooter.name;
     res.target = [px(side, 100), gy];
-    res.ball = [px(side, 96), Math.round(gy)];
-    res.text = pick(st, [gk.name + " saves from " + shooter.name, "Brilliant stop by " + gk.name + "!", gk.name + " gets down to deny " + shooter.name]);
-    st.counter = rnd(st) < 0.3 ? def : null;
+    if (loose) {
+      // Parried out in front of goal, where an attacker can get to it first.
+      res.ball = pos(side, 87 + rnd(st) * 4, clamp(gy + (gy < 32 ? -1 : 1) * (4 + rnd(st) * 5), 18, 46));
+      res.loose = 1;
+      res.text = pick(st, [gk.name + " parries " + shooter.name + "'s shot — it's loose!", gk.name + " can only push it out!", "Saved by " + gk.name + ", but he can't hold it!"]);
+    } else {
+      res.ball = [px(side, 96), Math.round(gy)];
+      res.text = pick(st, [gk.name + " saves from " + shooter.name, "Brilliant stop by " + gk.name + "!", gk.name + " gets down to deny " + shooter.name]);
+      st.counter = rnd(st) < 0.3 ? def : null;
+    }
   } else if (outcome === "block") {
     var blocker = defender(st, def);
+    loose = !reb && rnd(st) < M.reboundBlock;
     res.side = def;
     res.p = blocker.name;
     res.p2 = shooter.name;
-    res.ball = pos(side, Math.min(px(side, shotFrom[0]) + 5, 93), shotFrom[1]);
-    res.text = blocker.name + " blocks " + shooter.name + "'s shot";
+    if (loose) {
+      // It comes back off him and drops to an attacker.
+      var along = px(side, shotFrom[0]);
+      res.ball = pos(side, clamp(along - 1 - rnd(st) * 3, 62, 86), clamp(shotFrom[1] + (rnd(st) - 0.5) * 8, 12, 52));
+      res.loose = 1;
+      res.text = pick(st, [blocker.name + " blocks — it drops loose!", blocker.name + " charges it down, the ball spins back out", blocker.name + " gets in the way, but it's not cleared!"]);
+    } else {
+      res.ball = pos(side, Math.min(px(side, shotFrom[0]) + 5, 93), shotFrom[1]);
+      res.text = blocker.name + " blocks " + shooter.name + "'s shot";
+    }
   } else if (outcome === "woodwork") {
     var bar = rnd(st) < 0.35;
     res.side = side;
@@ -724,6 +921,13 @@ function attack(st, out, ctx, side, c) {
       ? pick(st, [shooter.name + " fires over the bar", shooter.name + " can't keep it down"])
       : pick(st, [shooter.name + " drags it wide", shooter.name + " pulls it wide of the post"]);
   }
+  if (loose) {
+    // The danger is not over: markets stay suspended through the second shot, and the attacking side has the ball.
+    emit(st, out, ctx.at(f), outcome, res);
+    st.ball = res.ball;
+    st.bs = side;
+    return rebound(st, out, ctx, f, side, chain, outcome === "save" ? REBOUND_GAP.save : REBOUND_GAP.block, c);
+  }
   st.danger = false; // the outcome is public with this event, so markets reopen
   emit(st, out, ctx.at(f), outcome, res);
   // save/miss/woodwork hold so the client can show them (shifts the rest of the minute); a block bounces straight back into play
@@ -732,6 +936,41 @@ function attack(st, out, ctx, side, c) {
   st.bs = def; // keeper / blocker / defender on the loose ball
   // No corners/throw-ins in FootFive: the ball rebounds off the boards and play continues. A miss always leaves the pitch.
   if (outcome === "miss" || (outcome === "block" && rnd(st) < 0.45)) bounce(st, out, ctx, f + 0.06, def, chain);
+}
+
+/** #219: minute fractions between a loose save / block and the second shot: its scene plays out first (at 6 s and 15 s minutes). */
+var REBOUND_GAP = { save: 0.18, block: 0.13 };
+
+/**
+ * #219: the second shot after a parried save or a loose block, from where the ball dropped (st.ball), in the same chain. The
+ * gap is inserted into the minute (ctx.pause), so the rest of the minute shifts as for a result hold. Its outcome is decided
+ * first: blocked, on target (reboundOn) and then saved (the scrambling keeper: save chance − reboundSaveDrop) or scored, else
+ * wide or the woodwork. It never produces a third shot.
+ */
+function rebound(st, out, ctx, f, side, chain, gap, c) {
+  var def = OTHER[side];
+  ctx.pause += Math.round(gap * ctx.dur);
+  var spot = st.ball;
+  var shooter = attacker(st, side);
+  var outcome;
+  if (rnd(st) < M.blockRate) outcome = "block";
+  else if (rnd(st) < c.pOn * M.reboundOn) outcome = rnd(st) < clamp(saveChance(st, shooter, def) - M.reboundSaveDrop, 0.2, 0.8) ? "save" : "goal";
+  else outcome = rnd(st) < M.woodworkRate ? "woodwork" : "miss";
+  st.stats[side].sh += 1;
+  var gy = 28.5 + rnd(st) * 7;
+  emit(st, out, ctx.at(f), "shot", {
+    side: side,
+    chain: chain,
+    p: shooter.name,
+    from: null,
+    ball: [spot[0], spot[1]],
+    header: 0,
+    long: 0,
+    reb: 1,
+    text: pick(st, [shooter.name + " follows up!", shooter.name + " pounces on the rebound!", "Second chance — " + shooter.name + " shoots!", shooter.name + " is first to the loose ball!"]),
+    clk: ctx.clk(f),
+  });
+  shotResult(st, out, ctx, f + 0.08, side, chain, shooter, [spot[0], spot[1]], gy, outcome, c, true);
 }
 
 /**
@@ -1171,6 +1410,7 @@ function resume(st, out, type, phase, s, text) {
   st.phase = phase;
   st.ball = [50, 32]; // kick-off from the centre: the first move of the period starts there, not where the last one died
   st.bs = null;
+  st.counter = null; // #219: nobody breaks from a kick-off
   emit(st, out, st.nextAt, type, { text: text, clk: { s: s, run: 1 } });
   st.nextAt += st.timing.kickoffHoldMs; // announcement + walk-on before the first play
 }
@@ -1383,6 +1623,7 @@ if (typeof module !== "undefined") {
     queueStance: queueStance,
     buildTiming: buildTiming,
     goalRates: goalRates,
+    inPlayModel: inPlayModel,
     shootoutDecided: shootoutDecided,
     hashSeed: hashSeed,
     mulberry32: mulberry32,

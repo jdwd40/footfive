@@ -43,14 +43,17 @@ const { defaultStarters } = lib("tournament.js");
  * generation/RNG unchanged. See docs/balance-218.md.
  * #218 review: a through-ball keeper claim is now gathered inside the area (x 86–92, same single draw), which moves ball
  * positions only: full 1cfad7d3… → 4143b324…, steps 0cf460db… → b874c167…; pin unchanged. See docs/balance-218.md.
+ * Issue #219 re-pins for game state (late urgency, counter-attacks, rebounds, saveBase 0.59): pin 8bd5c427… → daf66a03…, full
+ * 4143b324… → 9af045ea…, steps b874c167… → ec15ee3c…. Same inputs, pace, projection and assertions; cosmetic generation/RNG
+ * unchanged. See docs/balance-219.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
-  pin: "8bd5c4273a106ad61fb0bf92373e10431ca78cc7f13bcf362dbd53e9a9840b81",
+  pin: "daf66a03be69ba61ef446c362bb09a04681015b6681ccf064f401765de6fb9a8",
   /** Every field of every event plus the whole final state. */
-  full: "4143b324ba836466981ea53fc864594729bb070b14c041904bb6176c7a76f7d7",
+  full: "9af045ea9b5dd535845a27f431cd5d80e3295c3a845db04d66c2aaa877198a01",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "b874c167e744da1de29debf440822a180a1d219507e90bf08f547e4433b2af22",
+  steps: "ec15ee3cdb841300b010e19d4f0cab9f108107e3fa644f2ae5f560b36bd7845f",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
