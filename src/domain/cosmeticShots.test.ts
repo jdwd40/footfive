@@ -35,14 +35,17 @@ const { defaultStarters } = lib("tournament.js");
  * Issue #195 re-pins for intentional goal-rate tuning: pin ea5b06fd… → 2d0870bf…,
  * full 318ca545… → b0c4a004…, steps 617b66e6… → ccee40cd…. Same inputs, pace,
  * projection and assertions; cosmetic generation/RNG unchanged. See docs/balance-195.md.
+ * Issue #217 re-pins for the more-shots tuning: pin 2d0870bf… → 32359e37…, full b0c4a004… → 969d5225…,
+ * steps ccee40cd… → c0dceaf4…. Same inputs, pace, projection and assertions; cosmetic generation/RNG unchanged.
+ * See docs/balance-217.md.
  */
 const ORIGINAL = {
   /** engine.test.ts pin: event tuples + final score/winner/by/shootout/rc. Same constant, same projection. */
-  pin: "2d0870bfb62a6539a7119bc42088cddf863c1161e62a108fc2ba6c03e8f9da80",
+  pin: "32359e3717fd564731f85cbcc81eb8911f93280cc21c1eddc903a4eeb6b336df",
   /** Every field of every event plus the whole final state. */
-  full: "b0c4a0049e34b0efed664c369944db95012815119a6c7c21dce74a126423398c",
+  full: "969d52256f8d9f8dfb3d4ec2e71e6b8ea654425f33e350095a9d434d5e3a2fe1",
   /** The whole match state after every step, saved and reloaded between steps, without `seq` and `lastAt`. */
-  steps: "ccee40cdb59cbcf17e9b775bb61f33fbb090841ac40a121c7ee5990e08c4ce9d",
+  steps: "c0dceaf40a4b8ad414b96b90ef66b3e1a82b3ce324bd6db94822fe6c5dce30c1",
 };
 
 type Ev = MatchEvent & { long?: number; high?: number };
@@ -234,10 +237,11 @@ describe("cosmetic rows (issue #73)", () => {
     }
   });
 
-  it("spectacle stays moderate: two or three extra attempts a match at the live pace (real shots: about 16); none at a 1 s test pace", () => {
+  // #217: more real attacking minutes leave fewer minutes with spare time, so the 8 s mean over these 200 seeds fell from 2.28 to 1.84.
+  it("spectacle stays moderate: about two extra attempts a match at the live pace (real shots: about 21); none at a 1 s test pace", () => {
     const per = all.map((events) => events.filter((e) => cosmetic(e) && e.t === "shot").length);
     const mean = per.reduce((a, b) => a + b, 0) / per.length;
-    expect(mean).toBeGreaterThan(2);
+    expect(mean).toBeGreaterThan(1.5);
     expect(mean).toBeLessThan(4);
     expect(Math.max(...per)).toBeLessThanOrEqual(15);
     for (let seed = 1000; seed < 1050; seed++) expect((eng.advanceTo(match(seed, eng.buildTiming(1000, 1)), 1e13) as Ev[]).some(cosmetic)).toBe(false);

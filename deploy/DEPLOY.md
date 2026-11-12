@@ -82,6 +82,9 @@ Weak bootstrap passwords force `must_change_password=true`.
 - #195 intentionally changes outcomes: `onTargetBase = 0.50`, `saveBase = 0.48` target
   about 3 goals per 90′. Deploy between rounds with at least 45 minutes until kickoff
   so main CI and the automatic backup/deploy finish before the next round starts.
+- #217 intentionally changes outcomes: `seqBase = 0.36`, `onTargetBase = 0.44`, `saveBase = 0.54`
+  give more shots at the same goal rate (docs/balance-217.md). Deploy between rounds the same way:
+  a live match reads these constants as it plays, and a fixture's `model_json` is rebuilt at kickoff.
 
 ### App admin account
 
