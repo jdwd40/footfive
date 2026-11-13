@@ -18,6 +18,9 @@ Teams start with treasury **2500**. UK-style grouping in UI (`en-GB`).
 
 ## Quick start
 
+For repository selection, isolated dev/test data, ports and process lifecycle, see
+[the local development guide](docs/local-development.md).
+
 ```bash
 npm install && npm run setup:local
 cd pocketbase && ./pocketbase superuser upsert admin@example.com 'pass' && cd ..
