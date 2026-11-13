@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sample, sceneFor, touchStyle, type Pt } from "./scenes";
+import { BUILD_UP_MS, sample, sceneFor, touchStyle, type Pt } from "./scenes";
 import { frameAt, smooth, type Lineups } from "./sim";
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
 
@@ -86,7 +86,7 @@ describe("#105 fast and slow phases of play", () => {
     const bu = sceneFor(ev(41, "build_up", "home", [30, 30], [36, 30]), [30, 30], 15000)!;
     expect(tk.tempo).toBe("fast");
     expect(bu.tempo).toBe("slow");
-    expect(bu.ms).toBe(1500);
+    expect(bu.ms).toBe(BUILD_UP_MS); // #214: a build-up's own length, whatever its tempo
     const tempos = new Set(Array.from({ length: 30 }, (_, i) => sceneFor(ev(50 + i, "pass", "home", [40, 30], [52, 36]), [40, 30], 15000)!.tempo));
     expect(tempos.size).toBeGreaterThan(1);
   });

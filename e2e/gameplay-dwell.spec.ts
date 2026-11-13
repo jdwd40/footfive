@@ -79,7 +79,8 @@ test("long carrier dwell stays moving and bounded, then enters midfield continuo
   }
   await testInfo.attach("dwell-samples", { body: JSON.stringify(dwell), contentType: "application/json" });
   await page.screenshot({ path: testInfo.outputPath("long-dwell.png") });
-  expect(Math.max(...dwell.map(([x]) => x)), "routine dwell must not enter the attacking box").toBeLessThanOrEqual(71);
+  // #214: a side already in the opposition half is carried on up to x76, short of the D (from x81) and the box (x85).
+  expect(Math.max(...dwell.map(([x]) => x)), "routine dwell must not enter the attacking box").toBeLessThanOrEqual(77);
   expect(Math.max(...dwell.map(([, y]) => y)) - Math.min(...dwell.map(([, y]) => y)), "long dwell must keep circulating").toBeGreaterThan(1);
 
   // The next scene becomes current at START+8500 (published at +7000, 1500ms playback lag).

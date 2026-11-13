@@ -3,7 +3,7 @@
  * at formation anchors drifted toward the ball, so all 10 players are always on the pitch.
  */
 import type { LineupPlayer, MatchEvent, Side } from "../lib/pocketbase";
-import { goalX, sample, sampleN, short, type Actor, type Pt, type Scene } from "./scenes";
+import { goalX, sample, sampleN, seqHash, short, type Actor, type Pt, type Scene } from "./scenes";
 import { crossBend, keeperPose, moveFx, type Fx, type KeeperPose } from "./moves";
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
@@ -87,10 +87,15 @@ function fromStart(scene: Scene, start: Pt): Scene {
   const dx = start[0] - x0;
   const dy = start[1] - y0;
   if (!dx && !dy) return scene;
+  const layoff = scene.actors.some((a) => a.id === "l");
   const blend = (path: Pt[]): Pt[] => {
+    // #214: a backward pass's lay-off man (FF-69) keeps his touch a hold however far the dwell left the ball (a switch of play: the
+    // far wing): the held keyframes take the weight of the last of them, so the offset goes in the leg to him, the release unchanged.
     const n = path.length - 1;
+    const last = path.map((_, i) => i);
+    if (layoff) for (let i = n - 1; i >= 1; i--) if (path[i][0] === path[i + 1][0] && path[i][1] === path[i + 1][1]) last[i] = last[i + 1];
     return path.map(([x, y], i) => {
-      const w = n ? 1 - i / n : 1;
+      const w = n ? 1 - last[i] / n : 1;
       return [clamp(x + dx * w, Math.min(0, x), Math.max(100, x)), clamp(y + dy * w, Math.min(0, y), Math.max(64, y))];
     });
   };
@@ -134,19 +139,132 @@ function transientFlash(scene: Scene): boolean {
   return !!scene.flash && (scene.type === "shootout_kick" || LINGERING.has(scene.flash));
 }
 
-/** Dwell choreography: the carrier jogs on and lays the ball off to a mate every cycle, so a wait between events reads as passing, not a long solo carry. */
-const DWELL_SPEED = 4.5; // units per second as the dwell starts (≈ a jog on a 40 m pitch), easing off as the advance runs out
-const DWELL_CYCLE = 3000; // ms between lay-offs
-const DWELL_PASS = 450; // ms the lay-off takes
-/** #189: lateral gap between the two lanes (was 6: the pair crowded the ball), and how far in front the closing marker stands. */
+/**
+ * Dwell choreography (#214): between engine events routine play drives on. The carrier jogs forward and every DWELL_CYCLE lays it off
+ * diagonally forward — to the other lane, now and then to a wide man overlapping him on the outside, occasionally switching play to
+ * the far wing — and the receiver carries on. The team's shape moves up with the ball. Positions are a pure function of the dwell
+ * clock (the schedule is replayed from the start each frame), so a frame never depends on the one before it.
+ */
+export const DWELL_SPEED = 5.5; // units per second carried (≈ a jog on a 40 m pitch); a slow phase (×0.7) still makes visible ground
+export const DWELL_CARRY = 1500; // ms the holder carries it before each lay-off
+export const DWELL_PASS = 650; // ms a lay-off takes: a rolled pass (≈ 30 units/s at its quickest), not a flick, so one cut short by the next event leaves the ball nearly still
+const DWELL_SWITCH_MS = 1800; // ms a switch of play to the far wing hangs in the air (a long, lifted ball)
+export const DWELL_CYCLE = DWELL_CARRY + DWELL_PASS;
+/** Forward ground a lay-off gains (a switch of play gains a little more): every lay-off goes diagonally forward, never square. */
+export const DWELL_LAYOFF = 4;
+const DWELL_SWITCH_GAIN = 6;
+/** #189: lateral gap between the two lanes, and how far in front the closing marker stands. */
 export const DWELL_LANE = 12;
 export const DWELL_MARK = 6;
-/** The next event starts where this scene left the ball, so whatever ground the dwell gains is given back at the transition.
- * The advance is therefore bounded, not timed: at most DWELL_ADVANCE (approached, never passed) and never beyond the attacking
- * side's DWELL_LINE (x70 for home, x30 for away), so nobody runs into the box ahead of a midfield or build-up event. After that the
- * two lanes keep laying the ball off where they are, however late the next event is: a long gap circulates, it neither shuttles nor freezes. */
-export const DWELL_ADVANCE = 8;
+/** An overlapping run goes this far outside the carrier's lane. */
+export const DWELL_OVERLAP = 8;
+/** A switch of play lands on the far wing at this y (y < 12 or > 52). */
+export const DWELL_WING: readonly [number, number] = [8, 56];
+/** The next event starts where this scene left the ball, so whatever ground the dwell gains is given back at the transition (the
+ * next scene is re-routed from the drawn ball into its own destination: no snap). The advance is therefore bounded, not timed: at
+ * most DWELL_ADVANCE (approached smoothly, never passed) and never beyond the attacking side's DWELL_LINE (x70 for home, x30 for
+ * away) — DWELL_LINE_ATT (x76, short of the D and the box at x85) for a side whose ball is already in the opposition half — so nobody
+ * runs into the box ahead of a midfield or build-up event. After that the lay-offs go on where they are, however late the next event. */
+export const DWELL_ADVANCE = 14;
 export const DWELL_LINE = 70;
+export const DWELL_LINE_ATT = 76;
+/** ms over which a player leaving a dwell role (or a scene's actor once it ends) eases back into the team's shape. */
+const DWELL_RELEASE = 1200;
+/** Ground made of the dwell's distance budget `d`, within `room`: full pace to three quarters of it, then easing to a stop at `room`. */
+function dwellGain(d: number, room: number) {
+  if (room <= 0) return 0;
+  const u = d / room;
+  return room * (u <= 0.75 ? u : u >= 1.25 ? 1 : 0.75 + (u - 0.75) - (u - 0.75) ** 2);
+}
+const easeIO = (f: number) => (f <= 0 ? 0 : f >= 1 ? 1 : f * f * (3 - 2 * f));
+const lerpPt = (a: Pt, b: Pt, f: number): Pt => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+type LayOff = "diag" | "overlap" | "switch";
+type DwellCycle = { t0: number; carryEnd: number; end: number; d0: number; dCarry: number; dEnd: number; kind: LayOff | null; holder: string; y0: number; recv: string | null; y1: number; marker: string | null; markerSince: number };
+const shapeMap = (ps: Player[]) => new Map(ps.map((p): [string, Pt] => [p.side + ":" + p.no, [p.x, p.y]]));
+/**
+ * The dwell's schedule up to `over` (dwell-clock ms): who holds it, each lay-off's kind, lanes and receiver, the closing marker, and
+ * where the ball is. `players` is the frame as the scene ended (its actors on their end spots). Receivers and markers are picked
+ * from where the players stood then, moved on with the ball — so a pick never depends on the frame being drawn.
+ */
+function dwell(scene: Scene, b: Pt, over: number, players: Player[]) {
+  const side = scene.side!;
+  const dir = side === "home" ? 1 : -1;
+  const a0 = dir > 0 ? b[0] : 100 - b[0];
+  const room = clamp((a0 >= 50 ? DWELL_LINE_ATT : DWELL_LINE) - a0, 0, DWELL_ADVANCE); // a ball already past the line is carried neither on nor back
+  const xAt = (dist: number) => b[0] + dir * dwellGain(dist, room);
+  const key = (p: Player) => p.side + ":" + p.no;
+  const ref = shapeMap(players);
+  const mates = players.filter((p) => p.side === side && !p.gk).map(key);
+  const opps = players.filter((p) => p.side !== side && !p.gk).map(key);
+  const released = new Map<string, { at: number; spot: Pt }>();
+  for (const p of players) if (p.hot) released.set(key(p), { at: 0, spot: [p.x, p.y] });
+  const guess = (k: string, tau: number, shift: number): Pt => {
+    const r = ref.get(k)!;
+    const home: Pt = [r[0] + shift, r[1]];
+    const rel = released.get(k);
+    return rel ? lerpPt(rel.spot, home, easeIO((tau - rel.at) / DWELL_RELEASE)) : home;
+  };
+  const nearest = (cands: string[], to: Pt, tau: number, shift: number) => {
+    let best: string | null = null;
+    let bd = Infinity;
+    for (const k of cands) {
+      const [x, y] = guess(k, tau, shift);
+      const dd = Math.hypot(x - to[0], y - to[1]);
+      if (dd < bd) [best, bd] = [k, dd];
+    }
+    return best;
+  };
+  let holder = nearest(mates, b, 0, 0) ?? "";
+  let t0 = 0;
+  let d0 = 0;
+  let y0 = b[1];
+  let prevKind: LayOff | null = null;
+  let marker: string | null = null;
+  let markerSince = 0;
+  let cy: DwellCycle;
+  for (let k = 0; ; k++) {
+    const carryEnd = t0 + DWELL_CARRY;
+    const dCarry = d0 + (DWELL_SPEED * DWELL_CARRY) / 1000;
+    const shift = xAt(d0) - b[0];
+    const out = y0 > 32 ? 1 : -1; // towards the nearer touchline
+    const wing = y0 > 32 ? DWELL_WING[0] : DWELL_WING[1];
+    const h = seqHash(scene.seq, 214 + k);
+    // Mostly a lay-off to the other lane; often an overlap round the outside when there is room; now and then a switch of play.
+    const others = mates.filter((m) => m !== holder);
+    const behind = others.filter((m) => dir * (guess(m, t0, shift)[0] - xAt(d0)) < -2); // an overlap comes from behind the carrier
+    const kind: LayOff = h < 0.18 && prevKind !== "switch" && Math.abs(wing - y0) >= 30 ? "switch" : h < 0.5 && behind.length && Math.abs(y0 + out * DWELL_OVERLAP - 32) <= 28 ? "overlap" : "diag";
+    const y1: number = kind === "switch" ? wing : kind === "overlap" ? y0 + out * DWELL_OVERLAP : clamp(y0 + (Math.abs(y0 + out * DWELL_LANE - 32) <= 28 ? out : -out) * DWELL_LANE, 2, 62);
+    const dEnd: number = dCarry + (kind === "switch" ? DWELL_SWITCH_GAIN : DWELL_LAYOFF);
+    const look: Pt = kind === "overlap" ? [xAt(d0) - dir * 6, y0 + out * (DWELL_OVERLAP + 2)] : [xAt(dEnd), y1];
+    const recv = nearest(kind === "overlap" ? behind : others, look, t0, shift);
+    const mk = nearest(opps, [xAt(d0), y0], t0, shift);
+    if (mk !== marker) {
+      if (marker) released.set(marker, { at: t0, spot: [xAt(d0) + dir * DWELL_MARK, y0] });
+      [marker, markerSince] = [mk, t0];
+    }
+    const end: number = recv ? carryEnd + (kind === "switch" ? DWELL_SWITCH_MS : DWELL_PASS) : Infinity; // nobody to lay it off to: he carries on
+    cy = { t0, carryEnd, end, d0, dCarry, dEnd, kind: recv ? kind : null, holder, y0, recv, y1: recv ? y1 : y0, marker, markerSince };
+    if (over < end) break;
+    released.set(holder, { at: carryEnd, spot: [xAt(dCarry) - dir * 0.8, y0] });
+    released.delete(recv!);
+    [holder, t0, d0, y0, prevKind] = [recv!, end, dEnd, y1, kind];
+  }
+  const inPass = !!cy.kind && over >= cy.carryEnd;
+  let ball: Pt;
+  let lift: number | null = null;
+  if (!inPass) {
+    const u = (over - cy.t0) / DWELL_CARRY;
+    ball = [xAt(cy.d0 + (DWELL_SPEED * (over - cy.t0)) / 1000), cy.y0 + (cy.y0 > 32 ? -1 : 1) * 1.2 * Math.sin(Math.PI * u)]; // a gentle weave in from the line
+  } else {
+    released.set(cy.holder, { at: cy.carryEnd, spot: [xAt(cy.dCarry) - dir * 0.8, cy.y0] });
+    const f = (over - cy.carryEnd) / (cy.end - cy.carryEnd);
+    const e = f * (1.5 - 0.5 * f); // struck, then rolling on into the receiver's stride (still moving at about his carrying pace)
+    ball = [xAt(cy.dCarry + (cy.dEnd - cy.dCarry) * e), cy.y0 + (cy.y1 - cy.y0) * e];
+    if (cy.kind === "switch") lift = 0.6 * Math.sin(Math.PI * f);
+  }
+  ball = [clamp(ball[0], 0, 100), clamp(ball[1], 2, 62)];
+  return { ball, ballT0: [xAt(cy.d0), cy.y0] as Pt, lift, cy, inPass, dir, released, xAt, reception: [xAt(cy.dEnd) - dir * 0.8, cy.y1] as Pt };
+}
 /** Idle drift: amplitude (units) and time constant (ms per radian); peak speed IDLE_AMP / IDLE_TAU ≈ 0.6 units/s. */
 export const IDLE_AMP = 0.6;
 export const IDLE_TAU = 1000;
@@ -207,42 +325,54 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   let carrier = owner ? owner.side + ":" + owner.no : null;
   const pinned = new Set<Player>(); // #184: the dwell's own movers, kept out of the spacing like the scene's actors
   const rawOver = Math.max(0, t - 1) * scene.ms;
+  let dwellLift: number | null = null;
   if (rawOver > 0 && !scene.flash && scene.side && DWELL.has(scene.type)) {
     // #105: a fast phase keeps running and moves it on quicker, a slow one jogs and keeps it longer (same bounded advance).
     const over = rawOver * dwellRate(scene.tempo);
-    // Dwell: two lanes jog on from the scene end at DWELL_SPEED, easing to a stop within the bounded advance (never turning
-    // back, never past the line). The ball is laid off between the lanes every DWELL_CYCLE, so the carrier and a teammate keep
-    // passing instead of one of them carrying forever; the nearest opponent closes to DWELL_MARK in front of whoever has it.
-    const dir = scene.side === "home" ? 1 : -1;
-    const room = clamp(DWELL_LINE - (dir > 0 ? b[0] : 100 - b[0]), 0, DWELL_ADVANCE); // a ball already past the line is carried neither on nor back
-    const x = b[0] + (room ? dir * room * (1 - Math.exp(-(DWELL_SPEED * over) / 1000 / room)) : 0);
-    const mdir = dir; // the way they face: the advance only ever goes forward
-    // #189: the second lane is out towards the nearer touchline when it fits, so a move in a channel goes wide; on the touchline it
-    // comes inside.
-    const out = b[1] > 32 ? 1 : -1;
-    const laneY = clamp(b[1] + (Math.abs(b[1] + out * DWELL_LANE - 32) <= 28 ? out : -out) * DWELL_LANE, 2, 62);
-    const cyc = over % DWELL_CYCLE;
-    const n = Math.floor(over / DWELL_CYCLE);
-    const s0 = n % 2; // lane holding the ball at the start of this cycle
-    const s = cyc < DWELL_CYCLE - DWELL_PASS ? s0 : s0 + (1 - 2 * s0) * ((cyc - (DWELL_CYCLE - DWELL_PASS)) / DWELL_PASS); // 0 = first lane, 1 = second; eases across during the lay-off
-    ball[0] = x + mdir * (s - 0.5) * 2 * 0.6; // the receiver is a touch ahead, so the lay-off goes forward
-    ball[1] = clamp(b[1] + (laneY - b[1]) * s + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
-    const [a, ...rest] = players.filter((p) => p.side === scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - b[0], p.y - b[1]) - Math.hypot(q.x - b[0], q.y - b[1]));
-    // #189: the lay-off goes to whoever is nearest the second lane, not the next man to the ball, so nobody leaves his run for it.
-    const m = rest.sort((p, q) => Math.hypot(p.x - b[0], p.y - laneY) - Math.hypot(q.x - b[0], q.y - laneY))[0];
-    const onA = s < 0.5;
-    const weaveY = clamp(b[1] + 1.2 * Math.sin((2 * Math.PI * over) / 1600), 2, 62);
-    if (a) Object.assign(a, { x: clamp(onA ? ball[0] - mdir * 0.8 : x - mdir * 2.5, 0, 100), y: onA ? ball[1] : weaveY, hot: onA });
-    if (m) Object.assign(m, { x: clamp(onA ? x + mdir * 2 : ball[0] - mdir * 0.8, 0, 100), y: onA ? laneY : ball[1], hot: !onA });
-    const holder = onA ? a : m;
-    carrier = cyc < DWELL_CYCLE - DWELL_PASS && holder ? holder.side + ":" + holder.no : null;
-    const marker = players.filter((p) => p.side !== scene.side && !p.gk).sort((p, q) => Math.hypot(p.x - ball[0], p.y - ball[1]) - Math.hypot(q.x - ball[0], q.y - ball[1]))[0];
-    if (marker) {
-      const k = Math.min(1, over / 1500); // closes down over the first 1.5 s, then tracks DWELL_MARK in front of the ball
-      marker.x = clamp(marker.x + (ball[0] + mdir * DWELL_MARK - marker.x) * k, 0, 100);
-      marker.y = clamp(marker.y + (ball[1] - marker.y) * k, 0, 64);
+    const d = dwell(scene, b, over, players);
+    [ball[0], ball[1]] = d.ball;
+    dwellLift = d.lift;
+    // The block moves up with the ball (#102 shape keyed on the dwell's ball, not the scene's end); the scene's actors and anyone
+    // leaving a dwell role ease back into it from where they were.
+    // The two supporting defenders of the side on the ball keep the lateral spot they had as the scene ended: their #103 rule (out of
+    // the carrier's lane) jumps them 18 across whenever the ball crosses their line, and the dwell's lay-offs cross it all the time.
+    const holdY = new Map([...shapeMap(layout(routed, t, lineups, sentOff, b).players)].filter(([k]) => k.startsWith(scene.side + ":")).filter((_, i) => i === 1 || i === 2));
+    const shapeFor = (at: Pt) => {
+      const m = shapeMap(layout(routed, t, lineups, sentOff, at).players);
+      for (const [k, [, y]] of holdY) m.set(k, [m.get(k)![0], y]);
+      return m;
+    };
+    const shapeNow = shapeFor(d.ball);
+    const shapeT0 = shapeFor(d.ballT0);
+    const base = (k: string, tau: number, shape: Map<string, Pt>): Pt => {
+      const home = shape.get(k)!;
+      const rel = d.released.get(k);
+      return rel ? lerpPt(rel.spot, home, easeIO((tau - rel.at) / DWELL_RELEASE)) : home;
+    };
+    const byKey = new Map(players.map((p) => [p.side + ":" + p.no, p]));
+    for (const [k, p] of byKey) if (shapeNow.has(k)) [p.x, p.y] = base(k, over, shapeNow);
+    const { cy, inPass, dir } = d;
+    const holder = byKey.get(cy.holder);
+    const recv = cy.recv ? byKey.get(cy.recv) : undefined;
+    const marker = cy.marker ? byKey.get(cy.marker) : undefined;
+    if (holder && !inPass) Object.assign(holder, { x: clamp(ball[0] - dir * 0.8, 0, 100), y: ball[1], hot: true });
+    if (holder && inPass) holder.hot = false;
+    if (recv) {
+      const start = base(cy.recv!, cy.t0, shapeT0);
+      const u = (over - cy.t0) / DWELL_CARRY;
+      // The overlap: from behind the carrier, round him on the outside, onto the ball ahead of him.
+      const path: Pt[] = cy.kind === "overlap" ? [start, [d.xAt(cy.d0 + (DWELL_SPEED * DWELL_CARRY) / 2000) - dir * 2.5, cy.y1], d.reception] : [start, d.reception];
+      const [x, y] = inPass ? d.reception : sample(path, u);
+      Object.assign(recv, { x: clamp(x, 0, 100), y: clamp(y, 0, 64), hot: inPass });
     }
-    for (const p of [a, m, marker]) if (p) pinned.add(p);
+    if (marker) {
+      // The nearest opponent as the holder gets it closes down over 1.2 s, then tracks DWELL_MARK in front of the ball.
+      const [mx, my] = lerpPt([marker.x, marker.y], [ball[0] + dir * DWELL_MARK, ball[1]], easeIO((over - cy.markerSince) / 1200));
+      marker.x = clamp(mx, 0, 100);
+      marker.y = clamp(my, 0, 64);
+    }
+    carrier = holder && !inPass ? cy.holder : null;
+    for (const p of [holder, recv, marker]) if (p) pinned.add(p);
   } else if (t >= 1 && nowMs) {
     // Idle drift (#106): scene over, nothing newer yet — players ease slowly about their spot (a 6 s cycle, never an on-the-spot
     // wobble), the ball stays where it was, so the frame never looks frozen and nothing jitters.
@@ -311,7 +441,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPose = "point";
     refAim = scene.impact; // the actual penalty spot, including the mirrored away end
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}) };
+  return { ball, lift: dwellLift ?? sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}) };
 }
 
 /** #189: scenes whose receiver/runner (`r`, a cross's `h`) and marker (`m`) run from where they were drawn. Turnover contests (`lost`) and
@@ -366,8 +496,8 @@ function runIn(path: Pt[], from: Pt, ball: Pt[], raceMs = 0): Pt[] {
 }
 
 /** Formation players drifted toward the ball, named actors placed; unlabelled actors returned for binding. */
-function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>) {
-  const ball = sample(scene.ball, t);
+function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, at?: Pt) {
+  const ball = at ?? sample(scene.ball, t); // `at`: the bare shape round that ball instead (no actors, no set piece) — the dwell's
   // After a goal the defending side backs off to the centre for the restart while the scorer celebrates.
   const backOff = scene.flash === "goal" && (scene.type === "celebration" || t > 0.5) ? other(scene.side) : null;
   const players: Player[] = [];
@@ -390,6 +520,7 @@ function layout(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<
       players.push({ side, name: p.name, no: p.no, gk, x, y, hot: false });
     });
   }
+  if (at) return { ball, players, unlabelled: [] as Actor[], ref: undefined };
   // Penalty: everyone who isn't taking or saving lines the edge of the D, home and away alternating.
   if (scene.cam && PEN_ARC.has(scene.type)) {
     const x = scene.cam[0] + scene.cam[2] / 2 > 50 ? 80 : 20; // which end the set-piece window is at
