@@ -132,7 +132,7 @@ describe("MatchPage timeline player", () => {
         v.fixture = { ...v.fixture, minuteMs: 60000 };
         return v;
       };
-      // The HUD runs on the lagged pitch clock: LAG_MS (1.5 s) is 1.5 match seconds at this pace.
+      // The scoreboard follows the lagged pitch clock. LAG_MS (1.5 s) is 1.5 match seconds at this pace.
       const clock = () => screen.getByLabelText("Match clock").textContent;
       const { footfiveApi } = await import("../lib/pocketbase");
       vi.mocked(footfiveApi.match).mockReset();
@@ -155,7 +155,7 @@ describe("MatchPage timeline player", () => {
     }
   }, 10000);
 
-  it("keeps the display floor while a late batch rewinds the playhead and while the HUD is absent", async () => {
+  it("keeps the display floor through a playhead rewind and a gap in the scoreboard clock", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const live = await import("../lib/live");
     const serverClock = vi.spyOn(live, "serverNow").mockImplementation(() => Date.now());
@@ -254,7 +254,7 @@ describe("MatchPage timeline player", () => {
       await act(async () => { release(v); });
       expect(screen.getByLabelText("Match clock").textContent).toBe("00:28");
       vi.setSystemTime(now + 1000);
-      // A step under a second is played through by the pitch clock (fast-forward), which the HUD follows.
+      // A step under a second is played through by the pitch clock, which the scoreboard follows.
       await act(() => new Promise((r) => setTimeout(r, 500)));
       expect(screen.getByLabelText("Match clock").textContent).toBe("00:29");
     } finally {
@@ -285,7 +285,7 @@ describe("MatchPage timeline player", () => {
       return v;
     };
     const clock = () => (screen.getByLabelText("Match clock").textContent ?? "").replace("ET", "");
-    /** Puts the lagged pitch playhead at R + ms (a jump over 1 s snaps the pitch clock) and reads the HUD clock. */
+    /** Puts the lagged pitch playhead at R + ms (a jump over 1 s snaps the pitch clock) and reads the scoreboard clock. */
     const sampleAt = async (ms: number) => {
       vi.setSystemTime(R + ms + LAG);
       await act(() => new Promise((r) => setTimeout(r, 40)));

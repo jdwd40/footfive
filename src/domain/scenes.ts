@@ -39,7 +39,7 @@ export type Scene = {
   impact?: Pt; // where the result happens (net, keeper's hands, post, out point); result scenes only
   tempo?: Tempo; // #105: phase-of-play pace for the movement around this event (never its timing)
   touch?: Touch; // plain pass: how the passer plays it (#104)
-  won?: number; // challenge scenes: progress at which the winner (`side`) has the ball — a WON IT cue, not a result (no reveal gate, no hold)
+  won?: number; // scene progress at which possession passes to the challenge winner
   move?: Move; // #205: the kind of ball movement, for its on-pitch signature (pass line, cross arc, through ball, long strike)
   keeper?: KeeperMove; // #205: result scenes only — the keeper's dive or claim. Never on a shot: a shot cannot show its outcome
 };
@@ -260,7 +260,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
       const rLabel = collector ? short(e.p) : short(e.p2);
       const markerStart = clampPt([recv[0] + toward(atk, 6) + jit(s, 2, 3), recv[1] + jit(s, 3, 7)]);
       // A turnover (`turn`: the other side had the ball) is a contest for it, never a clearance: their player is on the ball where
-      // the engine left it and the named player wins it (`won`: WON IT), then moves it on to the engine's spot. An outfielder is
+      // the engine left it and the named player wins it at `won`, then moves it on to the engine's spot. An outfielder is
       // challenged where he stands; a keeper (or blocker) holding it deep in his box after a failed attack plays it out and the
       // pass is cut out in midfield. Same engine positions, no teleport, no attacker in the keeper's hands.
       if (e.turn && (e.t === "pass" || e.t === "build_up")) {
@@ -449,7 +449,7 @@ function build(e: MatchEvent, prevBall: Pt, minuteMs: number, next?: MatchEvent)
     case "tackle":
     case "interception": {
       // A visible challenge: the loser has the ball at `from` and takes it on (tackle) or plays it (interception) towards `ball`;
-      // the winner closes from goal-side and has it there halfway through (`won`: WON IT), then keeps it. Engine spots unchanged.
+      // the winner closes from goal-side and takes possession halfway through, at `won`.
       const at = from;
       const end = ball;
       const lat = at[1] > GOAL_Y ? -1 : 1; // towards the middle of the pitch

@@ -142,20 +142,13 @@ describe("Pitch kits and numbers", () => {
     for (const type of ["tackle", "interception", "pass", "build_up"]) {
       for (const side of ["home", "away"] as const) {
         for (const flash of [null, "save", "wood", "block"] as const) {
-          rerender(<Pitch frame={frame({ type, side, won: side, flash })} home={home} away={away} revealed replay={replay} />);
+          rerender(<Pitch frame={frame({ type, side, flash })} home={home} away={away} revealed replay={replay} />);
           expect(screen.queryByTestId("won-badge")).toBeNull();
           expect(screen.queryByText("WON IT")).toBeNull();
           if (flash) expect(screen.getByText({ save: "SAVED!", wood: "WOODWORK", block: "BLOCKED" }[flash])).toBeTruthy();
         }
       }
     }
-  });
-  it("pins the HUD to the pitch's top-left corner and keeps the replay chip out of its way", () => {
-    render(<Pitch frame={frame({ players })} home={home} away={away} revealed replay hud={<span>HOM 1–0 AWY</span>} />);
-    const hud = screen.getByTestId("pitch-hud");
-    expect(hud.textContent).toBe("HOM 1–0 AWY");
-    expect(hud.className).toContain("left-2");
-    expect(screen.getByText("Replay").className).toContain("right-2");
   });
 });
 

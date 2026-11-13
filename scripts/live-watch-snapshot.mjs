@@ -1,6 +1,6 @@
 /**
  * Page-side snapshot for scripts/live-watch.mjs: runs inside the browser via page.evaluate, so it must be
- * self-contained (no imports, no closures). Reads the numeric scoreboard, the on-pitch HUD, banners and badges.
+ * self-contained (no imports, no closures).
  */
 export function snapshot() {
   const q = (id) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() ?? null;
@@ -9,7 +9,6 @@ export function snapshot() {
   const sb = document.querySelector('[data-testid="match-scoreboard"]')?.getBoundingClientRect();
   return {
     score: q("match-score"),
-    hud: q("pitch-hud"),
     clock: document.querySelector('[aria-label="Match clock"]')?.textContent?.trim() ?? null,
     pens: q("match-shootout-score"),
     soTotal: q("shootout-total"),

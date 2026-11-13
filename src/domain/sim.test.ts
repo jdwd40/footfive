@@ -1004,7 +1004,7 @@ describe("#189: role slots, width, the dwell's lanes and runs from where players
             continue;
           }
           const { players: pa, runs } = a;
-          expect({ ...a, players: [], runs: undefined }, `#${s.seq} @${t}`).toEqual({ ...b, players: [] }); // ball, lift, carrier, WON IT, ref, caption, flash, timings
+          expect({ ...a, players: [], runs: undefined }, `#${s.seq} @${t}`).toEqual({ ...b, players: [] });
           if (t > 1) expect(runs).toBeUndefined();
           if (t >= 1) for (const p of pa) expect(near([p.x, p.y], [at(b, p.side + ":" + p.no).x, at(b, p.side + ":" + p.no).y]), `#${s.seq} @${t} ${p.side}:${p.no}`).toBeLessThan(0.05);
           for (const k of runs ?? []) expect(k.startsWith(s.side + ":"), `#${s.seq}: only attackers sprint`).toBe(true);
