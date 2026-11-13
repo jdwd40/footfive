@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { expect, test } from "@playwright/test";
 import { commentaryLine } from "../src/domain/commentary";
+import { DWELL_ADVANCE, DWELL_LANE, DWELL_SPEED } from "../src/domain/sim";
 import type { FixtureCard, LineupPlayer, LiveView, MatchEvent, MatchView, TeamPublic } from "../src/lib/pocketbase";
 import { injectAuth } from "./helpers";
 
@@ -191,7 +192,11 @@ for (const key of KEYS) {
         if (d.players.some((p) => p.side === shooting && p.ring)) opposingRingDuringResult = true;
       }
       if (caption.includes(line(cBounce))) {
-        const back = Math.hypot(d.ball[0] - origin[0], d.ball[1] - origin[1]) <= 2.5;
+        // #214: the collector no longer waits on the spot, he drives on at DWELL_SPEED. At normal speed the drawn ball is still at his
+        // feet within 1.5 of the spot. These rows are published late (the poll is longer than the pitch lag), so MatchPage often plays
+        // them at its 4x catch-up: he is then off at four times the pace while the smoothed ball trails, and it reaches his feet up to
+        // about 4.2 from the spot. sim.test.ts checks the bounce's own last frame is on the spot with the same side.
+        const back = Math.hypot(d.ball[0] - origin[0], d.ball[1] - origin[1]) <= 2.5 + DWELL_SPEED * 0.5;
         const ours = d.players.some((p) => p.side === shooting && p.ring);
         if (back && ours && !returned) { returned = true; await page.screenshot({ path: testInfo.outputPath("cosmetic-return.png") }); }
         if (returned && d.players.some((p) => p.side !== shooting && p.ring)) opposingRingDuringReturn = true;
@@ -224,7 +229,10 @@ for (const key of KEYS) {
     expect(returned, "ball back on the original spot with the side that had it").toBe(true);
     expect(opposingRingDuringReturn, "possession never passes to the other side on the way back").toBe(false);
     expect(handover, "the next real event starts near where real play left the ball").not.toBeNull();
-    expect(handover!, "handover within the bounded dwell").toBeLessThanOrEqual(12);
+    // #214: the dwell's bound is DWELL_ADVANCE up the pitch and one lay-off lane across. That assumes no switch of play (it would be
+    // up to the far wing, about 50). The lay-off kind is seqHash(seq, 214 + k) on the mocked seqs 1-5 above, and none of these four
+    // runs draws a switch: re-check this bound if rows are added before the bounce or the gap to the next event grows.
+    expect(handover!, "handover within the bounded dwell").toBeLessThanOrEqual(Math.hypot(DWELL_ADVANCE, DWELL_LANE) + 1);
 
     // Spectacle in the feed, nothing in the ticker; official numbers then follow the next real event only.
     await expect(page.getByTestId("event-feed")).toContainText(cShot.text);

@@ -1223,3 +1223,27 @@ describe("#189: role slots, width, the dwell's lanes and runs from where players
     });
   });
 });
+
+describe("cosmetic bounce (#73, #214)", () => {
+  it("ends with the ball on the spot real play left it, at the feet of the side that shot, before the dwell drives on", () => {
+    let n = 0;
+    for (const m of matches(10, 6000)) {
+      let prev: Pt = [50, 32];
+      m.events.forEach((e, i) => {
+        const s = sceneFor(e, prev, 6000, m.events[i + 1]) ?? idle(e, prev);
+        prev = s.ball[s.ball.length - 1];
+        if (!e.cos || e.t !== "bounce") return;
+        n++;
+        const shot = m.events.slice(0, i).reverse().find((x) => x.cos && x.t === "shot")!;
+        const f = frameAt(s, 1, m.lineups);
+        const where = `seq ${e.seq}`;
+        expect(Math.hypot(f.ball[0] - e.ball![0], f.ball[1] - e.ball![1]), where).toBeLessThanOrEqual(0.5);
+        expect(f.carrier?.split(":")[0], where).toBe(shot.side);
+        // The dwell then takes it on from there, with the same side.
+        const on = frameAt(s, 1 + 300 / s.ms, m.lineups);
+        expect(on.carrier?.split(":")[0], where).toBe(shot.side);
+      });
+    }
+    expect(n).toBeGreaterThan(10);
+  });
+});
