@@ -273,7 +273,7 @@ describe("frameAt", () => {
         let most = -Infinity;
         for (let t = 0; t <= 20000; t += 100) most = Math.max(most, along(frameAt(s, 1 + t / s.ms, m.lineups)));
         expect(most, `${side} from ${a0}`).toBeCloseTo(top, 2);
-        if (a0 < 77) expect(most).toBeLessThan(77); // the D starts at x77, the box at x85
+        if (a0 < 77) expect(most).toBeLessThan(77); // DWELL_LINE_ATT is x76: short of the D (from x81) and the box (x85)
       }
   });
 
