@@ -166,7 +166,6 @@ const Field = memo(function Field() {
   );
 });
 
-/** Where the drawn ball was about TRAIL_MS ago, from this component's own recent samples (presentation only). */
 /** #205: a claim's come-off-the-line offset (pitch units), eased in over CLAIM_EASE_MS of real time from the first frame it is drawn
  * (the reveal), so he steps out rather than jumps. `frame` is null while the result is held back. */
 const CLAIM_EASE_MS = 220;

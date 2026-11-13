@@ -155,7 +155,6 @@ export default function MatchPage() {
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
   const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set() }));
 
-  // Reset when switching fixtures.
   useEffect(() => {
     setView(null);
     setEvents([]);
@@ -476,7 +475,6 @@ export default function MatchPage() {
               <h2 className="panel-title">Match events</h2>
               <span className="text-xs text-muted">Match minutes</span>
             </div>
-            {/* The feed lists FEED_TYPES only; routine play is on the pitch and in the stats (#181). */}
             <p className="mb-2 text-[11px] leading-snug text-muted" data-testid="feed-note">
               Key moments: every shot and its result, plus goals, cards and penalties. Passes, tackles and fouls are left out, so quiet spells are normal. Statistics are match totals.
             </p>

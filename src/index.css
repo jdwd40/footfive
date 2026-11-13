@@ -297,8 +297,7 @@ h3,
 .btn-odds[data-reserved] { opacity: 0.4; border-style: dashed; }
 @media (min-width: 1024px) {
   .match-top { flex-direction: row; align-items: center; gap: 8px; }
-  /* The strip takes the room its chips need (a round's eight fixtures fit at 1280 px), up to 72%; the ticker has the rest. A chip
-     never changes width (its score has a fixed slot), so a goal elsewhere never moves the ticker. */
+  /* Fixed-width score slots keep goals elsewhere from shifting the ticker. */
   .match-top > .match-others { flex: 0 1 auto; max-width: 76%; min-width: 0; gap: 4px; }
   .match-others [data-testid="other-match"] { padding-inline: 4px; gap: 2px; }
   .match-others [data-testid="other-match"] abbr { min-width: 2.25rem; padding-inline: 3px; }

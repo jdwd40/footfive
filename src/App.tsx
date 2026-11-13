@@ -24,7 +24,6 @@ function Fallback() {
   );
 }
 
-/** Signed-in area. */
 function RequireAuth() {
   const { user, loading, mustChangePassword } = useAuth();
   if (loading) {
