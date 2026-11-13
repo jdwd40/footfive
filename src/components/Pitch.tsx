@@ -15,7 +15,6 @@ type Props = {
   away: TeamPublic;
   replay?: boolean;
   revealed: boolean; // MatchPage decides when the result may show (flash moment + displayed ball at the impact point)
-  hud?: ReactNode; // compact score / clock / shootout strip pinned to the pitch's top-left corner
   minute?: number; // #206: the drawn event's match minute, for the goal screen
   replayed?: boolean; // #206: this goal's replay has already started: the live celebration keeps the GOAL! chip, no second big screen or cheer
   summary?: ReactNode; // #208: a break summary, under the break banner docked at the top of the pitch
@@ -166,7 +165,6 @@ const Field = memo(function Field() {
   );
 });
 
-/** Where the drawn ball was about TRAIL_MS ago, from this component's own recent samples (presentation only). */
 /** #205: a claim's come-off-the-line offset (pitch units), eased in over CLAIM_EASE_MS of real time from the first frame it is drawn
  * (the reveal), so he steps out rather than jumps. `frame` is null while the result is held back. */
 const CLAIM_EASE_MS = 220;
@@ -244,7 +242,7 @@ function MoveFx({ fx, players, projectX, revealed }: { fx: Fx | null; players: F
   );
 }
 
-export default function Pitch({ frame, home, away, replay, revealed, hud, minute, replayed, summary, overlay }: Props) {
+export default function Pitch({ frame, home, away, replay, revealed, minute, replayed, summary, overlay }: Props) {
   const hc = home.primary_color || "#00f0ff";
   const ac = away.primary_color || "#ff2d95";
   const kits = useMemo(() => kitsFor(home, away), [home, away]);
@@ -479,11 +477,6 @@ export default function Pitch({ frame, home, away, replay, revealed, hud, minute
         </div>
       ) : null}
       {overlay}
-      {hud ? (
-        <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-2 rounded-md bg-black/60 px-2 py-1 font-display text-[11px] font-bold tracking-wider text-white shadow-lg sm:text-xs" data-testid="pitch-hud">
-          {hud}
-        </div>
-      ) : null}
       {strip ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 py-0.5 text-center font-display text-[11px] font-bold tracking-widest text-white" data-testid="pen-strip">
           {strip}

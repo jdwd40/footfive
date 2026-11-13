@@ -72,7 +72,6 @@ export default function TournamentDetailPage() {
         </Link>
       </div>
 
-      {/* Mobile-first vertical bracket */}
       <div className="space-y-4">
         {[...ROUND_ORDER, ...otherRounds].map((rk) => {
           const list = rounds[rk] || [];

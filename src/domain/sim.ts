@@ -8,7 +8,7 @@ import { crossBend, keeperPose, moveFx, type Fx, type KeeperPose } from "./moves
 
 export type Player = { side: Side; name: string; no: number; gk: boolean; x: number; y: number; hot: boolean /* named in the event */ };
 export type RefPose = "run" | "whistle" | "point" | "card-yellow" | "card-red";
-export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; won?: Side | null /* WON IT cue: the challenge winner's side, for WON_MS from the moment he has the ball */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */; fx?: Fx /* #205: this move's signature (one at a time) */; keeper?: KeeperPose /* #205: a result scene's dive or claim */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
+export type Frame = { ball: Pt; lift: number; players: Player[]; carrier?: string | null /* side:no, candidate only: renderer also requires drawn contact */; ref: Pt /* referee: his actor path, else trailing play */; refPose?: RefPose; refAim?: Pt /* canonical target: offender, free-kick direction or penalty spot */; caption: string; flash: Scene["flash"]; type: string; seq: number; p: number; runs?: string[] /* #189: side:no of attackers running from where they were drawn: smooth gives them the cross's sprint */; fx?: Fx /* #205: this move's signature (one at a time) */; keeper?: KeeperPose /* #205: a result scene's dive or claim */ } & Pick<Scene, "ms" | "side" | "who" | "score" | "kick" | "pens" | "flashAt" | "by" | "phase" | "tempo">;
 export type Lineups = { home: LineupPlayer[]; away: LineupPlayer[] };
 /** #189: where each player (side:no) was drawn on a scene's first tick, so its runners start from there. */
 export type PlayerStarts = Readonly<Record<string, Pt>>;
@@ -115,8 +115,6 @@ function starters(list: LineupPlayer[], side: Side, sentOff?: Set<string>) {
 
 /** Result badges that outlive their scene: SAVED!, WOODWORK, WIDE/OVER/BLOCKED and every shootout reveal stay 2.5 s (real ms) after that scene ends, and only into a next scene that actually starts inside that window. Match goals have the banner, cards their own type-specific text. */
 export const LINGER_MS = 2500;
-/** WON IT stays this long (real ms, into the winner's dwell) from the moment the challenge winner has the ball. */
-export const WON_MS = 1500;
 const LINGERING = new Set(["save", "wood", "miss", "over", "block"]);
 function lingers(prev: Scene | undefined, scene: Scene, t: number) {
   return !!prev?.flash && !scene.flash && scene.ms > 0 && t * scene.ms < LINGER_MS && (prev.type === "shootout_kick" || LINGERING.has(prev.flash));
@@ -176,7 +174,7 @@ function carrierActor(scene: Scene, t: number): string | null {
 /**
  * `t` is progress through the scene; past 1 it keeps counting (1 + ms over / scene.ms) so the hold can evolve. `startBall`: where the
  * previous scene actually left the ball (dwell), re-routing this one from there. `prevScene`: its result badge lingers into this scene's first 2.5 s.
- * `elapsedMs`: real ms since the scene began, when `t` stops tracking it (reduced motion holds t = 1, a replay holds its last frame); WON IT times off it.
+ * `elapsedMs`: badge expiry uses real ms since the scene began because reduced motion and replay can hold `t` at 1.
  * `startPlayers`: where everyone was drawn as this scene began (#189): its receiver, runner and marker run from there.
  */
 export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOff?: Set<string>, nowMs = 0, startBall?: Pt, prevScene?: Scene, elapsedMs?: number, startPlayers?: PlayerStarts): Frame {
@@ -250,8 +248,6 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
   const ownMs = elapsedMs != null ? elapsedMs : t * scene.ms;
   const ownFlash = scene.flash && (!transientFlash(scene) || ownMs < scene.ms + LINGER_MS) ? scene.flash : null;
   const flash = lingers(prevScene, scene, t) ? prevScene!.flash! : ownFlash;
-  const sinceWon = scene.won !== undefined ? (elapsedMs ?? t * scene.ms) - scene.won * scene.ms : -1;
-  const won = scene.side && sinceWon >= 0 && sinceWon < WON_MS ? scene.side : null;
   // No ref actor: he trails play — ten behind the ball, and on the half of the pitch the ball is not on, sliding smoothly
   // through the middle (no side flip when the ball crosses the centre line) — so he is always on the pitch and only ever jogs (smooth) into a scene.
   const home: Pt = [clamp(ball[0] - (scene.side === "away" ? -10 : 10), 0, 100), clamp(32 + (32 - ball[1]) * 0.6, 0, 64)];
@@ -304,7 +300,7 @@ export function frameAt(scene: Scene, t: number, lineups: Lineups | null, sentOf
     refPose = "point";
     refAim = scene.impact; // the actual penalty spot, including the mirrored away end
   }
-  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, won, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}) };
+  return { ball, lift: sampleN(scene.ballHeight, t), players, carrier, ref: refPt, refPose, refAim, caption: scene.caption, flash, type: scene.type, seq: scene.seq, p: Math.min(1, t), ms: scene.ms, side: scene.side, who: scene.who, score: scene.score, kick: scene.kick, pens: scene.pens, flashAt: scene.flashAt, by: scene.by, phase: scene.phase, tempo: scene.tempo, ...runs, ...(fx ? { fx } : {}), ...(keeper ? { keeper } : {}) };
 }
 
 /** #189: scenes whose receiver/runner (`r`, a cross's `h`) and marker (`m`) run from where they were drawn. Turnover contests (`lost`) and

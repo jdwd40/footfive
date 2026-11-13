@@ -118,12 +118,12 @@ async function main() {
   let lastKey = "";
   while (Date.now() - t0 < SECONDS * 1000) {
     const snap = await page.evaluate(snapshot);
-    const key = JSON.stringify([snap.score, snap.hud, snap.pens, snap.soTotal, snap.commentary, snap.banner, snap.pen, snap.badge, snap.final]);
+    const key = JSON.stringify([snap.score, snap.pens, snap.soTotal, snap.commentary, snap.banner, snap.pen, snap.badge, snap.final]);
     const entry = { t: Date.now() - t0, ...snap };
     if (key !== lastKey) {
       log.push(entry);
       lastKey = key;
-      console.log(`${String(entry.t).padStart(6)}ms ${snap.clock ?? "--:--"} ${snap.score ?? "-"} ${snap.pens ?? ""} ${snap.hud ? "hud=" + JSON.stringify(snap.hud) + " " : ""}${snap.badge ? "[" + snap.badge + "] " : ""}${snap.banner ? "{" + snap.banner + "} " : ""}${snap.pen ? "<" + snap.pen + "> " : ""}${snap.commentary ?? ""}`);
+      console.log(`${String(entry.t).padStart(6)}ms ${snap.clock ?? "--:--"} ${snap.score ?? "-"} ${snap.pens ?? ""} ${snap.badge ? "[" + snap.badge + "] " : ""}${snap.banner ? "{" + snap.banner + "} " : ""}${snap.pen ? "<" + snap.pen + "> " : ""}${snap.commentary ?? ""}`);
     }
     if (i % Math.max(1, Math.round(EVERY / 500)) === 0) await page.screenshot({ path: path.join(OUT, `frame-${String(i).padStart(4, "0")}.png`) });
     i++;

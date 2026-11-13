@@ -51,7 +51,7 @@ function advanceClock(clock: number | null, target: number, prevTarget: number |
 }
 
 /** Period restarts are published running, but the engine holds the kick-off (walk-on) before the first play starts the minute.
- * The HUD clock stays on the restart's own time until that play rather than run on and then wait for it (#182). */
+ * The scoreboard clock holds at the restart time until the first play (#182). */
 const RESTARTS = new Set(["kickoff", "second_half", "extra_time", "et_second_half"]);
 
 /** Live caption lifetime from the first moment that event seq is actually shown. Dwell after this is an ellipsis. */
@@ -120,7 +120,7 @@ function idleScene(e: MatchEvent, ball: Pt): Scene {
 }
 
 /** What the animation loop committed last: server time it ran at, the frame it drew, whether its result may show (`revealed`: the drawn scene — live or replay; `liveRevealed`: the live playhead's), and where the drawn ball and players were when the current scene began. */
-type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; auto?: string | null /* #206: the automatic goal replay being drawn (its caption), else null */; replayed?: boolean /* #206: this goal's replay has started: its big screen and cheer are over */; behind?: boolean /* #208: the pitch clock is fast-forwarding a late batch */; wonSeen?: boolean /* WON IT latched for this scene: the drawn ball has reached the winning side */ };
+type Anim = { now: number; clock: number /* pitch playhead time: now − LAG_MS, or behind it while fast-forwarding a late batch */; frame: Frame | null; reached: boolean; revealed: boolean; liveSeq: number | null; liveRevealed: boolean; startBall: Pt | null; startPlayers: PlayerStarts | null /* #189: drawn player spots (side:no) as this scene began, held for its life */; src: number | null /* what drew `frame`: the replay's startedAt, or null for the live playhead */; sentOff: Set<string> /* as drawn: timed cards + seeded history */; liveSentOff: Set<string> /* as the live playhead has shown them: the line-ups' set, untouched by a replay */; auto?: string | null /* #206: the automatic goal replay being drawn (its caption), else null */; replayed?: boolean /* #206: this goal's replay has started: its big screen and cheer are over */; behind?: boolean /* #208: the pitch clock is fast-forwarding a late batch */ };
 
 /** #189: a copy of every drawn player's spot, keyed side:no (pitch units, before any camera projection). */
 function starts(frame: Frame): PlayerStarts {
@@ -149,13 +149,12 @@ export default function MatchPage() {
   const autoRef = useRef<ReplayMemo & { id: string }>({ id: fixtureId, plans: new Map(), skipped: new Set() });
   if (autoRef.current.id !== fixtureId) autoRef.current = { id: fixtureId, plans: new Map(), skipped: new Set() };
   const clockRef = useRef<{ clock: number | null; target: number | null; seq: number | null }>({ clock: null, target: null, seq: null });
-  // Display floor for this fixture visit. It outlives a HUD gap and is cleared only when the route fixture changes.
+  // The display floor survives gaps in the scoreboard clock and resets when the fixture changes.
   const clockHold = useRef<{ id: string; sec: number }>({ id: fixtureId, sec: 0 });
   if (clockHold.current.id !== fixtureId) clockHold.current = { id: fixtureId, sec: 0 };
   // Everything time-driven lives in one state written by the animation loop; render only reads it.
   const [anim, setAnim] = useState<Anim>(() => ({ now: serverNow(), clock: serverNow() - LAG_MS, frame: null, reached: false, revealed: true, liveSeq: null, liveRevealed: true, startBall: null, startPlayers: null, src: null, sentOff: new Set(), liveSentOff: new Set() }));
 
-  // Reset when switching fixtures.
   useEffect(() => {
     setView(null);
     setEvents([]);
@@ -316,9 +315,7 @@ export default function MatchPage() {
         const liveRevealed = replaying ? !liveScene || reveal(liveScene, liveP, frame.ball, true).revealed : gate.revealed;
         // The line-ups follow the live playhead: a replay of something older than a red card must not un-strike the player.
         const liveSentOff = replaying && liveScene ? dismissed(liveRevealed ? liveScene.seq : liveScene.seq - 1) : sentOff;
-        // WON IT waits for the drawn ball to be at a player of the winning side, then holds for its window (no flicker as he moves it on).
-        const wonSeen = !!frame.won && ((same && !!a.wonSeen) || (frame.lift < 0.05 && frame.players.some((q) => q.side === frame.won && Math.hypot(q.x - frame.ball[0], q.y - frame.ball[1]) <= 1.6)));
-        return { now, clock, frame: frame.won && !wonSeen ? { ...frame, won: null } : frame, wonSeen, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed, auto: autoCaption, replayed, behind };
+        return { now, clock, frame, startBall, startPlayers, src, sentOff, liveSentOff, ...gate, liveSeq: liveScene?.seq ?? null, liveRevealed, auto: autoCaption, replayed, behind };
       });
     };
     step();
@@ -378,7 +375,7 @@ export default function MatchPage() {
 
   const fx = view.fixture;
   const shown: MatchView = { ...view, fixture: { ...fx, st, at: ph?.cur.at ?? fx.at } };
-  // HUD clock and its floor run on the pitch playhead (lagged, fast-forwarding a late batch), so they match the play shown.
+  // The scoreboard clock and its display floor follow the pitch playhead, including during catch-up.
   // Never ahead of the synced lagged time: the first render after loading still holds the loading frame's clock.
   const clockEvent = ph ? (liveRevealed || !ph.prev ? ph.cur : ph.prev) : null;
   const clockNow = ph && clockEvent && RESTARTS.has(clockEvent.t) ? ph.cur.at : Math.min(anim.clock, serverNow() - LAG_MS);
@@ -443,7 +440,6 @@ export default function MatchPage() {
             {pref === "off" ? (
               <div className="grid h-40 place-items-center text-sm text-muted">Highlights off — commentary only.</div>
             ) : (
-              // #207: the score and clock live on the one scoreboard above the pitch; the pitch carries no score strip.
               <Pitch frame={frame} home={fx.home} away={fx.away} replay={replayCaption != null} replayed={!!anim.replayed} revealed={revealed} minute={frame ? minutes.get(frame.seq) : undefined} summary={breakPanel} overlay={preMatch} />
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
@@ -476,7 +472,6 @@ export default function MatchPage() {
               <h2 className="panel-title">Match events</h2>
               <span className="text-xs text-muted">Match minutes</span>
             </div>
-            {/* The feed lists FEED_TYPES only; routine play is on the pitch and in the stats (#181). */}
             <p className="mb-2 text-[11px] leading-snug text-muted" data-testid="feed-note">
               Key moments: every shot and its result, plus goals, cards and penalties. Passes, tackles and fouls are left out, so quiet spells are normal. Statistics are match totals.
             </p>

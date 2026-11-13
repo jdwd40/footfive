@@ -156,7 +156,7 @@ describe("through balls are a runner beating his marker into space (FF-70)", () 
     expect({ key: s.key, seq: s.seq, side: s.side, who: s.who, caption: s.caption, score: s.score, phase: s.phase }).toEqual({
       key: `${e.seq}`, seq: e.seq, side: e.side, who: e.p, caption: e.text, score: e.st.sc, phase: e.st.ph,
     });
-    // A through ball is not a result or a contest: no badge, impact, WON IT cue, focus or camera move.
+    // A through ball leaves possession with the passing side and has no result to reveal.
     expect(s.flash ?? null).toBeNull();
     for (const k of ["impact", "won", "focus", "cam"] as const) expect(s[k], k).toBeUndefined();
     // FF-190: quicker than an ordinary pass at both live and broadcast pace.
