@@ -50,18 +50,10 @@ try {
 }
 var toPbDate = util.toPbDate;
 var parsePbDate = util.parsePbDate;
-var parseJson = util.parseJson;
 
 
-/** Legacy-tolerant JSON field reader (goja may hand back byte arrays). */
-
-function readJson(rec, key, fallback) {
-  try {
-    var s = rec.getString(key);
-    if (s && s !== "null") return JSON.parse(s);
-  } catch (_) {}
-  return parseJson(rec.get(key), fallback);
-}
+/** JSON field reader at the record boundary (lossless; see util.readJson). */
+var readJson = util.readJson;
 
 function plain(v) {
   return JSON.parse(JSON.stringify(v));

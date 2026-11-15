@@ -15,7 +15,7 @@ try {
   util = require("./util.js");
 }
 var toPbDate = util.toPbDate;
-var parseJson = util.parseJson;
+var readJson = util.readJson;
 
 
 var PAGE_MESSAGE = "Page must be a whole number from 1";
@@ -118,12 +118,12 @@ function ensureMatchSummary($app, fixture, matchState, roundKey, tournamentId, e
   if (extra) events = extra.events || [];
   else {
     try {
-      events = parseJson(matchState.get("events_json"), []);
+      events = readJson(matchState, "events_json", []);
       if (!Array.isArray(events)) events = [];
     } catch (_) {}
   }
 
-  var state = extra ? {} : parseJson(matchState.get("state_json"), {});
+  var state = extra ? {} : readJson(matchState, "state_json", {});
   var home = $app.findRecordById("proball_teams", fixture.get("home_team"));
   var away = $app.findRecordById("proball_teams", fixture.get("away_team"));
 
@@ -430,12 +430,12 @@ function archiveItem(s) {
     winnerTeamId: s.get("winner_team"),
     wentExtraTime: !!s.get("went_extra_time"),
     wentShootout: !!s.get("went_shootout"),
-    goals: parseJson(s.get("goals_json"), []),
-    cards: parseJson(s.get("cards_json"), []),
-    shootoutKicks: parseJson(s.get("shootout_kicks_json"), []),
+    goals: readJson(s, "goals_json", []),
+    cards: readJson(s, "cards_json", []),
+    shootoutKicks: readJson(s, "shootout_kicks_json", []),
     eventsPurged: !!s.get("events_purged"),
     completedAt: s.get("completed_at"),
-    stats: parseJson(s.get("stats_json"), null),
+    stats: readJson(s, "stats_json", null),
   };
 }
 
@@ -520,8 +520,8 @@ function tournamentsPage($app, page, perPage) {
       totalGoals: t.get("total_goals"),
       extraTimeMatches: t.get("extra_time_matches"),
       shootoutMatches: t.get("shootout_matches"),
-      bracket: parseJson(t.get("bracket_json"), []),
-      highlights: parseJson(t.get("highlights_json"), {}),
+      bracket: readJson(t, "bracket_json", []),
+      highlights: readJson(t, "highlights_json", {}),
       completedAt: t.get("completed_at"),
     });
   }
@@ -536,8 +536,8 @@ function listTournaments($app) {
  * Upsert permanent player stats from a completed match (idempotent via fixture flag on summary).
  */
 function settlePlayerRecordsFromMatch($app, fixture, matchState, extra) {
-  var state = extra ? { homePlayers: extra.players.home, awayPlayers: extra.players.away } : parseJson(matchState.get("state_json"), {});
-  var events = extra ? extra.events : parseJson(matchState.get("events_json"), []);
+  var state = extra ? { homePlayers: extra.players.home, awayPlayers: extra.players.away } : readJson(matchState, "state_json", {});
+  var events = extra ? extra.events : readJson(matchState, "events_json", []);
   if (!Array.isArray(events)) events = [];
   var sides = [
     { teamId: fixture.get("home_team"), players: state.homePlayers || [] },
@@ -1008,7 +1008,7 @@ function tournamentDetail($app, tournamentId) {
       byRound.other.push(matches[i]);
     }
   }
-  var bracket = tSum ? parseJson(tSum.get("bracket_json"), []) : [];
+  var bracket = tSum ? readJson(tSum, "bracket_json", []) : [];
   if (!bracket.length) {
     for (var k in byRound) {
       if (!Object.prototype.hasOwnProperty.call(byRound, k)) continue;
@@ -1059,7 +1059,7 @@ function tournamentDetail($app, tournamentId) {
     totalGoals: tSum ? tSum.get("total_goals") : 0,
     extraTimeMatches: tSum ? tSum.get("extra_time_matches") : 0,
     shootoutMatches: tSum ? tSum.get("shootout_matches") : 0,
-    highlights: tSum ? parseJson(tSum.get("highlights_json"), {}) : {},
+    highlights: tSum ? readJson(tSum, "highlights_json", {}) : {},
     completedAt: tSum ? tSum.get("completed_at") : null,
     bracket: bracket,
     rounds: byRound,
@@ -1098,12 +1098,12 @@ function matchDetail($app, summaryOrFixtureId) {
       { f: fixtureId },
     );
     if (ms && ms.length) {
-      var raw = parseJson(ms[0].get("events_json"), []);
+      var raw = readJson(ms[0], "events_json", []);
       if (Array.isArray(raw) && raw.length) {
         events = raw;
         eventsPurged = false;
       }
-      var st = parseJson(ms[0].get("state_json"), {});
+      var st = readJson(ms[0], "state_json", {});
       lineups = {
         home: st.homePlayers || null,
         away: st.awayPlayers || null,
@@ -1112,8 +1112,8 @@ function matchDetail($app, summaryOrFixtureId) {
   } catch (_) {}
   try {
     var fx = $app.findRecordById("shared_fixtures", fixtureId);
-    if (!lineups.home) lineups.home = parseJson(fx.get("home_lineup_json"), null);
-    if (!lineups.away) lineups.away = parseJson(fx.get("away_lineup_json"), null);
+    if (!lineups.home) lineups.home = readJson(fx, "home_lineup_json", null);
+    if (!lineups.away) lineups.away = readJson(fx, "away_lineup_json", null);
   } catch (_) {}
 
   if (!sum) {
@@ -1142,11 +1142,11 @@ function matchDetail($app, summaryOrFixtureId) {
     winnerTeamId: sum.get("winner_team"),
     wentExtraTime: !!sum.get("went_extra_time"),
     wentShootout: !!sum.get("went_shootout"),
-    goals: parseJson(sum.get("goals_json"), []),
-    cards: parseJson(sum.get("cards_json"), []),
-    shootoutKicks: parseJson(sum.get("shootout_kicks_json"), []),
-    coaching: parseJson(sum.get("coaching_json"), {}),
-    stats: parseJson(sum.get("stats_json"), null),
+    goals: readJson(sum, "goals_json", []),
+    cards: readJson(sum, "cards_json", []),
+    shootoutKicks: readJson(sum, "shootout_kicks_json", []),
+    coaching: readJson(sum, "coaching_json", {}),
+    stats: readJson(sum, "stats_json", null),
     completedAt: sum.get("completed_at"),
     eventsPurged: eventsPurged || !!sum.get("events_purged"),
     events: eventsPurged ? [] : events.slice(0, 100),

@@ -62,6 +62,7 @@ node "$ROOT/scripts/e2e-seed.mjs"
 if [[ "$API_ONLY" == "1" ]]; then
   # Account-security runs last: its 429 checks exhaust the login rate-limit bucket.
   node "$ROOT/tests/integration/e2e-api.mjs"
+  node "$ROOT/tests/integration/json-fields.mjs"
   node "$ROOT/tests/integration/account-security.mjs"
   echo "E2E API OK"
   exit 0
