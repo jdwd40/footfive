@@ -42,39 +42,18 @@ var BRACKET = tourneyMod.BRACKET;
 
 // ------------------------------------------------------------------ helpers
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
+var parsePbDate = util.parsePbDate;
+var parseJson = util.parseJson;
 
-function parsePbDate(v) {
-  if (v == null || v === "") return NaN;
-  var s = String(v).trim().replace(" ", "T");
-  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
-  return new Date(s).getTime();
-}
 
 /** Legacy-tolerant JSON field reader (goja may hand back byte arrays). */
-function parseJson(val, fallback) {
-  if (val == null || val === "") return fallback;
-  if (typeof val === "string") {
-    try {
-      return JSON.parse(val);
-    } catch (_) {
-      return fallback;
-    }
-  }
-  if (Array.isArray(val) && val.length > 2 && typeof val[0] === "number") {
-    try {
-      return JSON.parse(String.fromCharCode.apply(null, val));
-    } catch (_) {}
-  }
-  try {
-    return JSON.parse(JSON.stringify(val));
-  } catch (_) {
-    return fallback;
-  }
-}
 
 function readJson(rec, key, fallback) {
   try {

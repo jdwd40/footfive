@@ -8,26 +8,15 @@ try {
   tourneyMod = require("./tournament.js");
 }
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
+var parseJson = util.parseJson;
 
-function parseJson(v, fb) {
-  if (v == null || v === "") return fb;
-  if (typeof v === "string") {
-    try {
-      return JSON.parse(v);
-    } catch (_) {
-      return fb;
-    }
-  }
-  try {
-    return JSON.parse(JSON.stringify(v));
-  } catch (_) {
-    return v || fb;
-  }
-}
 
 var PAGE_MESSAGE = "Page must be a whole number from 1";
 var PER_PAGE_MESSAGE = "Page size must be a whole number from 1 to 200";

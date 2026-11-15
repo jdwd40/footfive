@@ -44,16 +44,13 @@ function shuffle(arr, rng) {
   return a;
 }
 
-function mulberry32(seed) {
-  var a = seed >>> 0;
-  return function () {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    var t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var mulberry32 = util.mulberry32;
 
 /**
  * Random R16 draw: 8 fixtures from 16 team ids.

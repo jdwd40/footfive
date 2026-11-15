@@ -39,10 +39,13 @@ var EXPIRED_SCAN =
   "tactical_scans.created = strftime('%Y-%m-%d %H:%M:%fZ', tactical_scans.created)" +
   " AND tactical_scans.created < {:cutoff}";
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
 
 function getRetentionDays($app) {
   try {

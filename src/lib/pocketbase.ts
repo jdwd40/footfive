@@ -612,6 +612,5 @@ export const footfiveApi = {
       method: "POST",
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
-  health: () => api<Record<string, unknown>>("/api/footfive/health"),
   adminHealth: () => api<Record<string, unknown>>("/api/footfive/admin/health"),
 };
