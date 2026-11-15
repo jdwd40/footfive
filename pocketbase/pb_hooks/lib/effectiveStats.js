@@ -9,9 +9,13 @@ try {
 }
 var BALANCE = balMod.BALANCE;
 
-function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, n));
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var clamp = util.clamp;
 
 /** Multiplier for a 0-100 energy or condition: 1 when full, 1 - impact when empty. */
 function fitnessFactor(value, impact) {

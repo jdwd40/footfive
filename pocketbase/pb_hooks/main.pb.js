@@ -546,16 +546,6 @@ routerAdd(
   $apis.requireAuth(),
 );
 
-routerAdd(
-  "GET",
-  "/api/footfive/admin/ping",
-  (e) => {
-    if (e.auth.get("role") !== "admin") throw new ForbiddenError("Admin only");
-    return e.json(200, { ok: true, admin: e.auth.id });
-  },
-  $apis.requireAuth(),
-);
-
 // --- Team modes ---
 routerAdd(
   "POST",
@@ -1525,23 +1515,6 @@ routerAdd(
     const recov = require(`${__hooks}/lib/recoveryService.js`);
     const r = recov.clearWorldLock($app);
     adm.audit($app, auth.id, "clear_world_lock", "world", "main", r.before, r.after, "clear lock", true);
-    return e.json(200, r);
-  },
-  $apis.requireAuth(),
-);
-
-routerAdd(
-  "POST",
-  "/api/footfive/admin/recovery/retry-match/{id}",
-  (e) => {
-    const auth = e.auth;
-    if (!auth || !auth.id) throw new UnauthorizedError("Authentication required");
-    const adm = require(`${__hooks}/lib/adminService.js`);
-    adm.requireAdmin(auth);
-    const recov = require(`${__hooks}/lib/recoveryService.js`);
-    const id = e.request.pathValue("id");
-    const r = recov.retryMatch($app, id);
-    adm.audit($app, auth.id, "retry_match", "fixture", id, null, r, "retry match", true);
     return e.json(200, r);
   },
   $apis.requireAuth(),

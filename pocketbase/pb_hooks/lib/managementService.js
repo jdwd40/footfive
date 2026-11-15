@@ -23,18 +23,15 @@ var materialiseCommandCharge = effMod.materialiseCommandCharge;
 var clamp = effMod.clamp;
 var defaultStarters = tourneyMod.defaultStarters;
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
+var parsePbDate = util.parsePbDate;
 
-function parsePbDate(v) {
-  if (v == null || v === "") return NaN;
-  if (Object.prototype.toString.call(v) === "[object Date]") return v.getTime();
-  var s = String(v).trim().replace(" ", "T");
-  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
-  return new Date(s).getTime();
-}
 
 function requireManagerTeam($app, userId) {
   var rows = $app.findRecordsByFilter(
@@ -116,9 +113,9 @@ function adjustTreasury($app, team, delta, type, description, meta) {
 function getPace($app) {
   try {
     var rows = $app.findRecordsByFilter("world", "key = 'main'", "", 1, 0);
-    if (rows && rows.length) return rows[0].get("pace") || "dev";
+    if (rows && rows.length) return rows[0].get("pace") || "normal";
   } catch (_) {}
-  return "dev";
+  return "normal";
 }
 
 /**

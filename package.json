@@ -17,6 +17,7 @@
     "test:e2e": "bash scripts/e2e-run.sh",
     "test:e2e:all": "E2E_ALL=1 bash scripts/e2e-run.sh",
     "test:e2e:api": "node tests/integration/e2e-api.mjs",
+    "test:json-fields": "node tests/integration/json-fields.mjs",
     "test:scoreboard": "node tests/integration/public-scoreboard.mjs",
     "test:bootstrap": "node tests/integration/bootstrap-clean.mjs",
     "test:security": "vitest run src/domain/collectionGuards.test.ts src/domain/httpErrors.test.ts src/domain/adminMutations.test.ts",

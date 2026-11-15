@@ -26,9 +26,7 @@ var BALANCE = {
   maxMatchMinuteSeconds: 60,
 
   roundIntervalMs: 10 * 60 * 1000,
-  tournamentIntervalMs: 10 * 60 * 1000,
   devRoundIntervalMs: 25 * 1000,
-  devTournamentIntervalMs: 20 * 1000,
   firstKickoffDelayMs: 15000,
   devFirstKickoffDelayMs: 4000,
 
@@ -241,9 +239,6 @@ function getTiming(pace, matchMinuteRealMsOverride) {
       ? BALANCE.devPenaltySequenceStepMs
       : BALANCE.penaltySequenceStepMs,
     roundIntervalMs: dev ? BALANCE.devRoundIntervalMs : BALANCE.roundIntervalMs,
-    tournamentIntervalMs: dev
-      ? BALANCE.devTournamentIntervalMs
-      : BALANCE.tournamentIntervalMs,
     firstKickoffDelayMs: dev ? BALANCE.devFirstKickoffDelayMs : BALANCE.firstKickoffDelayMs,
     segmentMatchMinutes: dev
       ? BALANCE.devSegmentMatchMinutes

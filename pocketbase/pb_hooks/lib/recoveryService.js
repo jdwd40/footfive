@@ -9,18 +9,15 @@ function loadWorldMod() {
   }
 }
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
+var parsePbDate = util.parsePbDate;
 
-function parsePbDate(v) {
-  if (v == null || v === "") return NaN;
-  if (Object.prototype.toString.call(v) === "[object Date]") return v.getTime();
-  var s = String(v).trim().replace(" ", "T");
-  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
-  return new Date(s).getTime();
-}
 
 function getThreshold($app) {
   try {
@@ -247,24 +244,11 @@ function clearWorldLock($app) {
   return { ok: true, before: before, after: "idle" };
 }
 
-function retryMatch($app, fixtureId) {
-  // Safe: invoke catch-up which advances due segments only
-  var r = loadWorldMod().catchUpWorld($app);
-  return { ok: true, fixtureId: fixtureId, catchUp: r };
-}
-
-function retryRound($app, roundId) {
-  var r = loadWorldMod().catchUpWorld($app);
-  return { ok: true, roundId: roundId, catchUp: r };
-}
-
 if (typeof module !== "undefined") {
   module.exports = {
     detectStalls: detectStalls,
     recoverAll: recoverAll,
     clearWorldLock: clearWorldLock,
-    retryMatch: retryMatch,
-    retryRound: retryRound,
     getThreshold: getThreshold,
   };
 }

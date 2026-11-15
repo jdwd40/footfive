@@ -8,10 +8,13 @@ try {
   recoveryMod = require("./recoveryService.js");
 }
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
 
 function publicHealth($app) {
   var ok = true;

@@ -18,10 +18,13 @@ function uniq() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function toPbDate(d) {
-  var x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().replace("T", " ").replace("Z", "") + "Z";
+var util;
+try {
+  util = require(__hooks + "/lib/util.js");
+} catch (e) {
+  util = require("./util.js");
 }
+var toPbDate = util.toPbDate;
 
 function audit($app, adminId, action, targetType, targetId, before, after, reason, ok) {
   try {
@@ -603,14 +606,20 @@ function patchWorldSettings($app, adminId, body, reason) {
     pace: world.get("pace"),
     retention_days: world.get("retention_days"),
     round_interval_ms: world.get("round_interval_ms"),
-    tournament_interval_ms: world.get("tournament_interval_ms"),
     between_round_minutes: world.get("between_round_minutes"),
     match_minute_real_seconds: world.get("match_minute_real_seconds"),
     match_minute_real_ms: world.get("match_minute_real_ms"),
     ai_progression_enabled: world.get("ai_progression_enabled"),
     progression_paused: world.get("progression_paused"),
   };
-  if (body.pace) world.set("pace", body.pace);
+  if (body.tournament_interval_ms != null) {
+    // Superseded by championship_gap_minutes; nothing reads it (review B12).
+    throw new BadRequestError("tournament_interval_ms is no longer used; set championship_gap_minutes");
+  }
+  if (body.pace != null) {
+    if (["normal", "dev"].indexOf(body.pace) < 0) throw new BadRequestError("pace must be normal|dev");
+    world.set("pace", body.pace);
+  }
   if (body.retention_days != null) {
     var d = parseInt(body.retention_days, 10);
     // 0 = never
@@ -639,8 +648,6 @@ function patchWorldSettings($app, adminId, body, reason) {
     world.set("round_interval_ms", rms);
     world.set("between_round_minutes", Math.max(1, Math.round(rms / 60000)));
   }
-  if (body.tournament_interval_ms != null)
-    world.set("tournament_interval_ms", parseInt(body.tournament_interval_ms, 10));
   if (body.championship_gap_minutes != null || body.fixtures_window_minutes != null) {
     var gap = parseInt(body.championship_gap_minutes != null ? body.championship_gap_minutes : world.get("championship_gap_minutes") || 10, 10);
     var win = parseInt(body.fixtures_window_minutes != null ? body.fixtures_window_minutes : world.get("fixtures_window_minutes") || 5, 10);
